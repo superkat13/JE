@@ -12,14 +12,37 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Extract JE project
+      - name: Locate JE project
         run: |
-          unzip JE_GITHUB_ACTIONS_AUTO_BUILD.zip -d extracted
-          PROJECT_DIR=$(find extracted -name settings.gradle.kts | head -1 | xargs dirname)
+          echo "Repo files:"
+          ls -la
+
+          if [ -f "settings.gradle.kts" ] && [ -d "app" ]; then
+            echo "PROJECT_DIR=$PWD" >> $GITHUB_ENV
+            exit 0
+          fi
+
+          ZIP_FILE=$(find . -maxdepth 1 -name "*.zip" | head -1)
+
+          if [ -z "$ZIP_FILE" ]; then
+            echo "No Android project or zip found."
+            echo "Upload the JE project zip into the repo root."
+            exit 1
+          fi
+
+          echo "Using zip: $ZIP_FILE"
+          unzip "$ZIP_FILE" -d extracted
+
+          PROJECT_DIR=$(find extracted -name "settings.gradle.kts" | head -1 | xargs dirname)
+
+          if [ -z "$PROJECT_DIR" ]; then
+            echo "No settings.gradle.kts found inside zip."
+            find extracted -maxdepth 4 -type f
+            exit 1
+          fi
+
           echo "PROJECT_DIR=$PROJECT_DIR" >> $GITHUB_ENV
-          echo "Using project: $PROJECT_DIR"
-          ls "$PROJECT_DIR"
-          ls "$PROJECT_DIR/app"
+          echo "Found project at: $PROJECT_DIR"
 
       - uses: actions/setup-java@v4
         with:
@@ -38,7 +61,7 @@ jobs:
             "ndk;25.2.9519653" \
             "cmake;3.22.1"
 
-      - name: Build Release APK
+      - name: Build APK
         run: |
           cd "$PROJECT_DIR"
           chmod +x gradlew
