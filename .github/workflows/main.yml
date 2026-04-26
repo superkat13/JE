@@ -1,8 +1,6 @@
-autname: Build JE APK
+name: Build JE APK
 
 on:
-  push:
-    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
@@ -10,38 +8,39 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout repo
-      uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-    - name: Set up JDK 17
-      uses: actions/setup-java@v4
-      with:
-        distribution: 'temurin'
-        java-version: '17'
+      - name: List files (debug)
+        run: ls -R
 
-    - name: Install Android SDK
-      uses: android-actions/setup-android@v3
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
 
-    - name: Accept licenses
-      run: yes | sdkmanager --licenses
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
 
-    - name: Install SDK packages
-      run: |
-        sdkmanager \
-        "platform-tools" \
-        "platforms;android-34" \
-        "build-tools;34.0.0" \
-        "ndk;25.2.9519653" \
-        "cmake;3.22.1"
+      - name: Install SDK packages
+        run: |
+          yes | sdkmanager --licenses
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            "ndk;25.2.9519653" \
+            "cmake;3.22.1"
 
-    - name: Make gradlew executable
-      run: chmod +x gradlew
+      - name: Make Gradle executable
+        run: chmod +x gradlew
 
-    - name: Build APK
-      run: ./gradlew assembleRelease
+      - name: Build APK
+        run: ./gradlew assembleRelease
 
-    - name: Upload APK
-      uses: actions/upload-artifact@v4
-      with:
-        name: JE-production-release-apk
-        path: app/build/outputs/apk/release/app-release.apko-buildet
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: JE-production-release-apk
+          path: app/build/outputs/apk/release/*.apk
