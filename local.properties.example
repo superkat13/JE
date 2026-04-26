@@ -1,0 +1,3 @@
+## Copy this file to local.properties if Android Studio does not auto-create one.
+## Update sdk.dir to your actual Android SDK path.
+sdk.dir=/ABSOLUTE/PATH/TO/Android/Sdk
