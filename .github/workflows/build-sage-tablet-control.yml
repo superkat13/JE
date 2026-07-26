@@ -26,12 +26,31 @@ jobs:
           patch -d sage_build -p1 < sage_patches/result_click_v1_1.patch
           patch -d sage_build -p1 < sage_patches/voice_redqueen_v1_2.patch
 
-      - name: Upload current Sage Java source
-        uses: actions/upload-artifact@v4
-        with:
-          name: Sage-current-java-source
-          path: sage_build/app/src/main/java/com/pineapple/sage/*.java
-          if-no-files-found: error
+      - name: Give Sage a clean package ID
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          choices = [Path('sage_build/app/build.gradle.kts'), Path('sage_build/app/build.gradle')]
+          for path in choices:
+              if not path.exists():
+                  continue
+              text = path.read_text()
+              updated, count = re.subn(
+                  r'applicationId\s*(?:=\s*)?["\'][^"\']+["\']',
+                  'applicationId = "com.pineapple.sagecommander.v13"',
+                  text,
+                  count=1,
+              )
+              if count == 0:
+                  raise SystemExit(f'Could not find applicationId in {path}')
+              path.write_text(updated)
+              print(f'Updated package ID in {path}')
+              break
+          else:
+              raise SystemExit('No app Gradle file found')
+          PY
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -57,6 +76,6 @@ jobs:
       - name: Upload Sage APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Tablet-Control-debug-apk
+          name: Sage-Tablet-Control-v1.3-install-fix
           path: sage_build/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
