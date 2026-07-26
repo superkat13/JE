@@ -1,0 +1,53 @@
+name: Build Sage Tablet Control APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - sage-tablet-control-v1
+      - main
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rebuild Sage source archive
+        run: |
+          mkdir -p sage_build
+          cat sage_package/part_*.b64 | tr -d '\n\r ' | base64 --decode > Sage_Tablet_Control_v1_source.zip
+          echo "9d23d8566cd30a81818b99f7f032a823b89d98221da029b31c6d4838d5a07d91  Sage_Tablet_Control_v1_source.zip" | sha256sum --check
+          unzip -q Sage_Tablet_Control_v1_source.zip -d sage_build
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK 35
+        run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build debug APK
+        working-directory: sage_build
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload Sage APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Tablet-Control-debug-apk
+          path: sage_build/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
