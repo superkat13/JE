@@ -25,6 +25,13 @@ jobs:
           unzip -q Sage_Tablet_Control_v1_source.zip -d sage_build
           patch -d sage_build -p1 < sage_patches/result_click_v1_1.patch
 
+      - name: Upload current Sage Java source
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-current-java-source
+          path: sage_build/app/src/main/java/com/pineapple/sage/*.java
+          if-no-files-found: error
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
