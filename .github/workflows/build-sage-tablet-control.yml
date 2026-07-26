@@ -7,6 +7,7 @@ on:
     branches:
       - sage-tablet-control-v1
       - main
+      - 'agent/**'
 
 jobs:
   build:
@@ -32,8 +33,9 @@ jobs:
           base64 --decode sage_patches/wake_learn_click_v1_7.patch.gz.b64 | gunzip > /tmp/wake_learn_click_v1_7.patch
           echo "c5d5ee8681c03f393a77ff7da9b8afc0d6c2ff7f7d0d54ea4687e1144bab77dc  /tmp/wake_learn_click_v1_7.patch" | sha256sum --check
           patch -d sage_build -p1 < /tmp/wake_learn_click_v1_7.patch
+          patch -d sage_build -p1 < sage_patches/native_speech_v1_9.patch
 
-      - name: Give Sage 1.8 permanent update identity
+      - name: Give Sage 1.9 permanent update identity
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -52,13 +54,13 @@ jobs:
               )
               text, code_count = re.subn(
                   r'versionCode\s*(?:=\s*)?\d+',
-                  'versionCode = 18',
+                  'versionCode = 19',
                   text,
                   count=1,
               )
               text, name_count = re.subn(
                   r'versionName\s*(?:=\s*)?["\'][^"\']+["\']',
-                  'versionName = "1.8"',
+                  'versionName = "1.9"',
                   text,
                   count=1,
               )
@@ -85,43 +87,41 @@ jobs:
 
               if 'sagePermanentSigning' not in text:
                   if path.suffix == '.kts':
-                      signing = '''
-
-android {
-    signingConfigs {
-        create("sagePermanentSigning") {
-            storeFile = rootProject.file(System.getProperty("user.home") + "/.android/debug.keystore")
-            storePassword = "android"
-            keyAlias = "androiddebugkey"
-            keyPassword = "android"
-        }
-    }
-    buildTypes {
-        getByName("debug") {
-            signingConfig = signingConfigs.getByName("sagePermanentSigning")
-        }
-    }
-}
-'''
+                      signing = (
+                          '\n\nandroid {\n'
+                          '    signingConfigs {\n'
+                          '        create("sagePermanentSigning") {\n'
+                          '            storeFile = rootProject.file(System.getProperty("user.home") + "/.android/debug.keystore")\n'
+                          '            storePassword = "android"\n'
+                          '            keyAlias = "androiddebugkey"\n'
+                          '            keyPassword = "android"\n'
+                          '        }\n'
+                          '    }\n'
+                          '    buildTypes {\n'
+                          '        getByName("debug") {\n'
+                          '            signingConfig = signingConfigs.getByName("sagePermanentSigning")\n'
+                          '        }\n'
+                          '    }\n'
+                          '}\n'
+                      )
                   else:
-                      signing = '''
-
-android {
-    signingConfigs {
-        sagePermanentSigning {
-            storeFile rootProject.file(System.getProperty('user.home') + '/.android/debug.keystore')
-            storePassword 'android'
-            keyAlias 'androiddebugkey'
-            keyPassword 'android'
-        }
-    }
-    buildTypes {
-        debug {
-            signingConfig signingConfigs.sagePermanentSigning
-        }
-    }
-}
-'''
+                      signing = (
+                          '\n\nandroid {\n'
+                          '    signingConfigs {\n'
+                          '        sagePermanentSigning {\n'
+                          "            storeFile rootProject.file(System.getProperty('user.home') + '/.android/debug.keystore')\n"
+                          "            storePassword 'android'\n"
+                          "            keyAlias 'androiddebugkey'\n"
+                          "            keyPassword 'android'\n"
+                          '        }\n'
+                          '    }\n'
+                          '    buildTypes {\n'
+                          '        debug {\n'
+                          '            signingConfig signingConfigs.sagePermanentSigning\n'
+                          '        }\n'
+                          '    }\n'
+                          '}\n'
+                      )
                   text = text.rstrip() + signing
 
               path.write_text(text)
@@ -144,7 +144,7 @@ android {
 
           for xml in Path('sage_build/app/src/main').rglob('*.xml'):
               text = xml.read_text()
-              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.8', text)
+              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.9', text)
               if updated != text:
                   xml.write_text(updated)
           PY
@@ -195,6 +195,6 @@ android {
       - name: Upload Sage APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Tablet-Control-v1.8-permanent-signing-fix
+          name: Sage-Tablet-Control-v1.9-native-speech-fix
           path: sage_build/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
