@@ -34,8 +34,9 @@ jobs:
           echo "c5d5ee8681c03f393a77ff7da9b8afc0d6c2ff7f7d0d54ea4687e1144bab77dc  /tmp/wake_learn_click_v1_7.patch" | sha256sum --check
           patch -d sage_build -p1 < /tmp/wake_learn_click_v1_7.patch
           patch -d sage_build -p1 < sage_patches/native_speech_v1_9.patch
+          patch -d sage_build -p1 < sage_patches/voice_accuracy_v1_10.patch
 
-      - name: Give Sage 1.9 permanent update identity
+      - name: Give Sage 1.10 permanent update identity
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -54,13 +55,13 @@ jobs:
               )
               text, code_count = re.subn(
                   r'versionCode\s*(?:=\s*)?\d+',
-                  'versionCode = 19',
+                  'versionCode = 20',
                   text,
                   count=1,
               )
               text, name_count = re.subn(
                   r'versionName\s*(?:=\s*)?["\'][^"\']+["\']',
-                  'versionName = "1.9"',
+                  'versionName = "1.10"',
                   text,
                   count=1,
               )
@@ -144,7 +145,7 @@ jobs:
 
           for xml in Path('sage_build/app/src/main').rglob('*.xml'):
               text = xml.read_text()
-              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.9', text)
+              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.10', text)
               if updated != text:
                   xml.write_text(updated)
           PY
@@ -195,6 +196,6 @@ jobs:
       - name: Upload Sage APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Tablet-Control-v1.9-native-speech-fix
+          name: Sage-Tablet-Control-v1.10-voice-accuracy-fix
           path: sage_build/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
