@@ -1,0 +1,146 @@
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-07-26 13:27:18.798027460 +0000
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-07-26 13:27:19.214027468 +0000
+@@ -8,8 +8,10 @@
+ import android.content.IntentFilter;
+ import android.content.pm.PackageManager;
+ import android.graphics.Color;
++import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
++import android.provider.OpenableColumns;
+ import android.provider.Settings;
+ import android.view.Gravity;
+ import android.view.View;
+@@ -21,13 +23,18 @@
+ import android.widget.TextView;
+ import android.widget.Toast;
+ 
++import android.database.Cursor;
++
+ public class MainActivity extends Activity {
+     private static final int MICROPHONE_PERMISSION = 41;
++    private static final int UPDATE_FILE_PICKER = 42;
++    private static final String APK_MIME = "application/vnd.android.package-archive";
+ 
+     private TextView statusText;
+     private TextView conversationText;
+     private Button listenButton;
+     private EditText typedCommand;
++    private Uri pendingUpdateUri;
+ 
+     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
+         @Override
+@@ -104,6 +111,17 @@
+         notifications.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
+         root.addView(notifications, spacedSmall());
+ 
++        Button installUpdate = makeButton("Install Sage update file");
++        installUpdate.setOnClickListener(v -> chooseUpdateFile());
++        root.addView(installUpdate, spacedSmall());
++
++        TextView updateHelp = new TextView(this);
++        updateHelp.setText("Pick the newer Sage APK from Downloads. Android will show one final Install screen.");
++        updateHelp.setTextSize(14);
++        updateHelp.setTextColor(Color.DKGRAY);
++        updateHelp.setPadding(8, 4, 8, 4);
++        root.addView(updateHelp, matchWrap());
++
+         typedCommand = new EditText(this);
+         typedCommand.setHint("Type a command for testing");
+         typedCommand.setSingleLine(false);
+@@ -159,6 +177,83 @@
+         refreshStatus("Starting");
+     }
+ 
++    private void chooseUpdateFile() {
++        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++        picker.addCategory(Intent.CATEGORY_OPENABLE);
++        picker.setType("*/*");
++        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
++        startActivityForResult(picker, UPDATE_FILE_PICKER);
++    }
++
++    private void installPendingUpdate() {
++        if (pendingUpdateUri == null) {
++            return;
++        }
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
++                && !getPackageManager().canRequestPackageInstalls()) {
++            Intent permission = new Intent(
++                    Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
++                    Uri.parse("package:" + getPackageName())
++            );
++            Toast.makeText(this, "Allow Sage to install updates, then come back.", Toast.LENGTH_LONG).show();
++            startActivity(permission);
++            return;
++        }
++
++        Intent installer = new Intent(Intent.ACTION_VIEW);
++        installer.setDataAndType(pendingUpdateUri, APK_MIME);
++        installer.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
++        try {
++            startActivity(installer);
++            pendingUpdateUri = null;
++        } catch (Exception error) {
++            Toast.makeText(this, "Android could not open that update file. Choose the APK file itself.", Toast.LENGTH_LONG).show();
++        }
++    }
++
++    private String getDisplayName(Uri uri) {
++        Cursor cursor = null;
++        try {
++            cursor = getContentResolver().query(uri, null, null, null, null);
++            if (cursor != null && cursor.moveToFirst()) {
++                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
++                if (index >= 0) {
++                    return cursor.getString(index);
++                }
++            }
++        } catch (Exception ignored) {
++        } finally {
++            if (cursor != null) {
++                cursor.close();
++            }
++        }
++        return "";
++    }
++
++    @Override
++    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
++        super.onActivityResult(requestCode, resultCode, data);
++        if (requestCode != UPDATE_FILE_PICKER || resultCode != RESULT_OK || data == null) {
++            return;
++        }
++        Uri uri = data.getData();
++        if (uri == null) {
++            return;
++        }
++        String name = getDisplayName(uri);
++        if (!name.isEmpty() && !name.toLowerCase().endsWith(".apk")) {
++            Toast.makeText(this, "That is not an APK update file.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        try {
++            int flags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
++            getContentResolver().takePersistableUriPermission(uri, flags);
++        } catch (Exception ignored) {
++        }
++        pendingUpdateUri = uri;
++        installPendingUpdate();
++    }
++
+     private void runTypedCommand() {
+         String command = typedCommand.getText().toString().trim();
+         if (command.isEmpty()) {
+@@ -247,6 +342,11 @@
+     protected void onResume() {
+         super.onResume();
+         refreshStatus(null);
++        if (pendingUpdateUri != null
++                && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
++                || getPackageManager().canRequestPackageInstalls())) {
++            installPendingUpdate();
++        }
+     }
+ 
+     @Override
