@@ -83,6 +83,47 @@ jobs:
                   else:
                       text = text.rstrip() + '\n\ndependencies {\n' + dependency_lines + '}\n'
 
+              if 'sagePermanentSigning' not in text:
+                  if path.suffix == '.kts':
+                      signing = '''
+
+android {
+    signingConfigs {
+        create("sagePermanentSigning") {
+            storeFile = rootProject.file(System.getProperty("user.home") + "/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+    buildTypes {
+        getByName("debug") {
+            signingConfig = signingConfigs.getByName("sagePermanentSigning")
+        }
+    }
+}
+'''
+                  else:
+                      signing = '''
+
+android {
+    signingConfigs {
+        sagePermanentSigning {
+            storeFile rootProject.file(System.getProperty('user.home') + '/.android/debug.keystore')
+            storePassword 'android'
+            keyAlias 'androiddebugkey'
+            keyPassword 'android'
+        }
+    }
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.sagePermanentSigning
+        }
+    }
+}
+'''
+                  text = text.rstrip() + signing
+
               path.write_text(text)
               print(path.read_text())
               break
@@ -108,12 +149,6 @@ jobs:
                   xml.write_text(updated)
           PY
 
-      - name: Install permanent Sage signing identity
-        run: |
-          mkdir -p "$HOME/.android"
-          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
-          chmod 600 "$HOME/.android/debug.keystore"
-
       - name: Add offline wake-word model
         run: |
           rm -rf sage_build/app/src/main/assets/model-en-us /tmp/vosk-model
@@ -135,6 +170,12 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
 
+      - name: Install permanent Sage signing identity
+        run: |
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
       - name: Install Android SDK 35
         run: sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0"
 
@@ -142,6 +183,10 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: 8.10.2
+
+      - name: Verify signing identity
+        working-directory: sage_build
+        run: gradle :app:signingReport
 
       - name: Build debug APK
         working-directory: sage_build
