@@ -23,6 +23,7 @@ jobs:
           cat sage_package/part_*.b64 | tr -d '\n\r ' | base64 --decode > Sage_Tablet_Control_v1_source.zip
           echo "9d23d8566cd30a81818b99f7f032a823b89d98221da029b31c6d4838d5a07d91  Sage_Tablet_Control_v1_source.zip" | sha256sum --check
           unzip -q Sage_Tablet_Control_v1_source.zip -d sage_build
+          patch -d sage_build -p1 < sage_patches/result_click_v1_1.patch
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
