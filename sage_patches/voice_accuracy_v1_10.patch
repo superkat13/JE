@@ -1,0 +1,171 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -28,0 +29 @@
++import java.util.LinkedHashSet;
+@@ -46,0 +48 @@
++    private static final Locale COMMAND_LOCALE = Locale.US;
+@@ -50 +52,3 @@
+-            "hey say age", "okay say age", "ok say age", "say age"
++            "hey say age", "okay say age", "ok say age", "say age",
++            "hey safe", "okay safe", "ok safe", "safe",
++            "hey save", "okay save", "ok save", "save"
+@@ -73,0 +78 @@
++    private boolean listenForCommandAfterSpeech;
+@@ -170 +175 @@
+-                Recognizer recognizer = new Recognizer(wakeModel, 16000.0f);
++                Recognizer recognizer = new Recognizer(wakeModel, 16000.0f, buildWakeGrammar());
+@@ -241 +246,4 @@
+-        String normalized = normalizeForEcho(text);
++        String normalized = normalizeForEcho(text)
++                .replaceAll("\\bunk\\b", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
+@@ -245 +253 @@
+-        latestWakeText = text.trim();
++        latestWakeText = normalized;
+@@ -262,3 +270,32 @@
+-            broadcastStatus("Awake. Say your command");
+-            updateNotification("Sage is awake for one command");
+-            startCommandRecognition(180);
++            listenForCommandAfterSpeech = true;
++            broadcastLine("Sage", "Yes?");
++            speak("Yes?");
++        }
++    }
++
++    private String buildWakeGrammar() {
++        LinkedHashSet<String> phrases = new LinkedHashSet<>();
++        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
++            phrases.add(prefix);
++        }
++        Set<String> aliases = preferences.getStringSet("wake_aliases", null);
++        if (aliases != null) {
++            for (String alias : aliases) {
++                String wake = normalizeForEcho(alias);
++                if (!wake.isEmpty()) {
++                    phrases.add(wake);
++                    phrases.add("hey " + wake);
++                    phrases.add("okay " + wake);
++                    phrases.add("ok " + wake);
++                }
++            }
++        }
++        StringBuilder grammar = new StringBuilder("[");
++        for (String phrase : phrases) {
++            if (grammar.length() > 1) {
++                grammar.append(", ");
++            }
++            grammar.append('"').append(phrase).append('"');
++        }
++        if (grammar.length() > 1) {
++            grammar.append(", ");
+@@ -265,0 +303,2 @@
++        grammar.append("\"[unk]\"]");
++        return grammar.toString();
+@@ -293 +332 @@
+-                return normalized.substring(prefix.length()).trim();
++                return cleanWakeRemainder(normalized.substring(prefix.length()));
+@@ -304 +343 @@
+-                    return normalized.substring(wake.length()).trim();
++                    return cleanWakeRemainder(normalized.substring(wake.length()));
+@@ -310,0 +350,9 @@
++    private String cleanWakeRemainder(String value) {
++        String remainder = normalizeForEcho(value);
++        if (remainder.equals("unk") || remainder.startsWith("unk ")
++                || remainder.endsWith(" unk") || remainder.contains(" unk ")) {
++            return "";
++        }
++        return remainder;
++    }
++
+@@ -346 +394,3 @@
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, COMMAND_LOCALE.toLanguageTag());
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, COMMAND_LOCALE.toLanguageTag());
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+@@ -447,3 +497,3 @@
+-                    ArrayList<String> allChoices = new ArrayList<>();
+-                    if (choices != null) {
+-                        allChoices.addAll(choices);
++                    String candidate = chooseBestCandidate(choices);
++                    if (candidate.isEmpty()) {
++                        candidate = chooseBestCandidate(new ArrayList<>(partialChoices));
+@@ -451,2 +500,0 @@
+-                    allChoices.addAll(partialChoices);
+-                    String candidate = chooseBestCandidate(allChoices);
+@@ -474,2 +522 @@
+-                    for (int index = partials.size() - 1; index >= 0; index--) {
+-                        String partial = partials.get(index);
++                    for (String partial : partials) {
+@@ -536 +583,11 @@
+-        for (String choice : choices) {
++        if (commandEngine != null && commandEngine.isAwaitingFollowUp()) {
++            for (String choice : choices) {
++                if (choice != null && !choice.trim().isEmpty() && !isLikelySelfEcho(choice)) {
++                    return choice.trim();
++                }
++            }
++        }
++        String best = "";
++        int bestScore = Integer.MIN_VALUE;
++        for (int index = 0; index < choices.size(); index++) {
++            String choice = choices.get(index);
+@@ -538 +595,5 @@
+-                return choice.trim();
++                int score = scoreCommandCandidate(choice, index);
++                if (score > bestScore) {
++                    best = choice.trim();
++                    bestScore = score;
++                }
+@@ -541 +602,33 @@
+-        return "";
++        return best;
++    }
++
++    private int scoreCommandCandidate(String choice, int index) {
++        String normalized = normalizeForEcho(choice);
++        int score = 100 - (index * 5);
++        if (containsCommandCue(normalized)) {
++            score += 40;
++        }
++        if (normalized.startsWith("sage ") || normalized.startsWith("hey sage ")) {
++            score += 15;
++        }
++        int wordCount = normalized.isEmpty() ? 0 : normalized.split(" ").length;
++        score += Math.min(12, wordCount * 2);
++        return score;
++    }
++
++    private boolean containsCommandCue(String normalized) {
++        String padded = " " + normalized + " ";
++        String[] cues = {
++                "open", "search", "find", "look", "youtube", "home", "back", "recent",
++                "scroll", "tap", "click", "press", "pick", "choose", "select", "type",
++                "write", "volume", "louder", "quieter", "mute", "pause", "play", "next",
++                "previous", "notification", "remember", "memory", "red", "queen", "sleep",
++                "help", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
++                "eighth", "ninth", "tenth", "video", "link", "result", "website", "settings"
++        };
++        for (String cue : cues) {
++            if (padded.contains(" " + cue + " ")) {
++                return true;
++            }
++        }
++        return false;
+@@ -600,0 +694,6 @@
++        } else if (listenForCommandAfterSpeech) {
++            listenForCommandAfterSpeech = false;
++            long delay = Math.max(700L, ignoreRecognitionUntilMs - System.currentTimeMillis());
++            broadcastStatus("Get ready to speak");
++            updateNotification("Getting ready for your command");
++            startCommandRecognition(delay);
+@@ -725,0 +825 @@
++        listenForCommandAfterSpeech = false;
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -88 +88 @@
+-        subtitle.setText("Offline wake word + natural tablet control");
++        subtitle.setText("Focused wake word + clearer US English commands");
+@@ -143 +143 @@
+-        conversationText.setText("Tap Talk to Sage and speak when the status says Listening for command.\n\nBackground mode also waits for: Sage, then your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
++        conversationText.setText("Tap Talk to Sage and speak when the status says Listening for command.\n\nBackground mode: say Sage by itself, wait for her to answer Yes, then speak your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
