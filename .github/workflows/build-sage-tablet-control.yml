@@ -66,24 +66,25 @@ jobs:
                   raise SystemExit(f'Could not update app identity/version in {path}')
 
               if 'com.alphacephei:vosk-android' not in text:
-                  marker = 'dependencies {'
-                  if marker not in text:
-                      raise SystemExit(f'Could not find dependencies block in {path}')
                   if path.suffix == '.kts':
-                      additions = (
-                          'dependencies {\n'
+                      dependency_lines = (
                           '    implementation("net.java.dev.jna:jna:5.18.1@aar")\n'
-                          '    implementation("com.alphacephei:vosk-android:0.3.75@aar")'
+                          '    implementation("com.alphacephei:vosk-android:0.3.75@aar")\n'
                       )
                   else:
-                      additions = (
-                          "dependencies {\n"
+                      dependency_lines = (
                           "    implementation 'net.java.dev.jna:jna:5.18.1@aar'\n"
-                          "    implementation 'com.alphacephei:vosk-android:0.3.75@aar'"
+                          "    implementation 'com.alphacephei:vosk-android:0.3.75@aar'\n"
                       )
-                  text = text.replace(marker, additions, 1)
+                  match = re.search(r'dependencies\s*\{', text)
+                  if match:
+                      insert_at = match.end()
+                      text = text[:insert_at] + '\n' + dependency_lines + text[insert_at:]
+                  else:
+                      text = text.rstrip() + '\n\ndependencies {\n' + dependency_lines + '}\n'
 
               path.write_text(text)
+              print(path.read_text())
               break
           else:
               raise SystemExit('No app Gradle file found')
