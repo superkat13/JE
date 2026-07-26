@@ -1,0 +1,208 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -49,6 +49,7 @@
+     // Ignore stale recognizer callbacks and Sage's own speaker audio.
+     private long ignoreRecognitionUntilMs;
+     private String lastSpokenForEcho = "";
++    private final ArrayList<String> partialChoices = new ArrayList<>();
+ 
+     public static boolean isRunning() {
+         return running;
+@@ -104,12 +105,15 @@
+         recognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+         recognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.getDefault());
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false);
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 10);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1400L);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
+ 
+         speechRecognizer.setRecognitionListener(new RecognitionListener() {
+             @Override
+             public void onReadyForSpeech(Bundle params) {
++                partialChoices.clear();
+                 listening = true;
+                 broadcastStatus("Listening");
+                 updateNotification("Sage is listening");
+@@ -150,8 +154,14 @@
+             public void onResults(Bundle results) {
+                 listening = false;
+                 ArrayList<String> choices = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+-                if (choices != null && !choices.isEmpty()) {
+-                    String candidate = choices.get(0);
++                ArrayList<String> allChoices = new ArrayList<>();
++                if (choices != null) {
++                    allChoices.addAll(choices);
++                }
++                allChoices.addAll(partialChoices);
++                partialChoices.clear();
++                String candidate = chooseBestCandidate(allChoices);
++                if (!candidate.isEmpty()) {
+                     if (isRecognitionBlocked() || isLikelySelfEcho(candidate)) {
+                         scheduleListeningAfterGuard();
+                     } else {
+@@ -164,6 +174,15 @@
+ 
+             @Override
+             public void onPartialResults(Bundle partialResults) {
++                ArrayList<String> partials = partialResults.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
++                if (partials == null) {
++                    return;
++                }
++                for (String partial : partials) {
++                    if (partial != null && !partial.trim().isEmpty() && !partialChoices.contains(partial)) {
++                        partialChoices.add(partial);
++                    }
++                }
+             }
+ 
+             @Override
+@@ -186,7 +205,13 @@
+     }
+ 
+     private void startListeningCycle() {
+-        if (stopRequested || speaking || speechRecognizer == null) {
++        if (stopRequested || speaking) {
++            return;
++        }
++        if (speechRecognizer == null) {
++            configureSpeechRecognizer();
++        }
++        if (speechRecognizer == null) {
+             return;
+         }
+         long remaining = ignoreRecognitionUntilMs - System.currentTimeMillis();
+@@ -225,10 +250,7 @@
+         lastSpokenForEcho = normalizeForEcho(message);
+         long estimatedSpeechMs = Math.max(2200L, Math.min(12000L, message.length() * 75L));
+         ignoreRecognitionUntilMs = System.currentTimeMillis() + estimatedSpeechMs;
+-        if (speechRecognizer != null) {
+-            speechRecognizer.stopListening();
+-            speechRecognizer.cancel();
+-        }
++        destroySpeechRecognizer();
+         listening = false;
+         speaking = true;
+         broadcastStatus("Speaking");
+@@ -243,7 +265,7 @@
+ 
+     private void afterSpeaking() {
+         speaking = false;
+-        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, System.currentTimeMillis() + 1800L);
++        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, System.currentTimeMillis() + 2600L);
+         if (stopRequested) {
+             stopSelf();
+         } else {
+@@ -253,6 +275,99 @@
+         }
+     }
+ 
++    private String chooseBestCandidate(ArrayList<String> choices) {
++        if (choices == null || choices.isEmpty()) {
++            return "";
++        }
++        for (String choice : choices) {
++            if (looksLikeRedQueenCommand(choice)) {
++                return "red queen mode";
++            }
++        }
++        for (String choice : choices) {
++            String normalized = normalizeForEcho(choice);
++            if (normalized.startsWith("sage ") || containsCommandWord(normalized)) {
++                return choice.trim();
++            }
++        }
++        String first = choices.get(0);
++        return first == null ? "" : first.trim();
++    }
++
++    private boolean looksLikeRedQueenCommand(String value) {
++        String heard = normalizeForEcho(value);
++        if (heard.isEmpty()) {
++            return false;
++        }
++        if (heard.startsWith("sage ")) {
++            heard = heard.substring(5).trim();
++        }
++        if (heard.contains("red queen")) {
++            return true;
++        }
++        String[] commonMishearings = {
++                "red green mode", "read queen mode", "red cream mode", "red clean mode",
++                "bread queen mode", "wreck queen mode", "red queen mood", "red queen moat",
++                "thanks", "thank", "things"
++        };
++        for (String phrase : commonMishearings) {
++            if (heard.equals(phrase)) {
++                return true;
++            }
++        }
++        return editDistance(heard, "red queen mode") <= 4;
++    }
++
++    private boolean containsCommandWord(String value) {
++        String[] words = {
++                "open", "search", "youtube", "home", "back", "recent", "scroll", "tap",
++                "click", "type", "write", "volume", "pause", "play", "next", "previous",
++                "notification", "remember", "red", "queen", "sleep", "help"
++        };
++        for (String word : words) {
++            if (value.equals(word) || value.startsWith(word + " ") || value.contains(" " + word + " ")) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private int editDistance(String left, String right) {
++        int[] previous = new int[right.length() + 1];
++        int[] current = new int[right.length() + 1];
++        for (int j = 0; j <= right.length(); j++) {
++            previous[j] = j;
++        }
++        for (int i = 1; i <= left.length(); i++) {
++            current[0] = i;
++            for (int j = 1; j <= right.length(); j++) {
++                int cost = left.charAt(i - 1) == right.charAt(j - 1) ? 0 : 1;
++                current[j] = Math.min(
++                        Math.min(current[j - 1] + 1, previous[j] + 1),
++                        previous[j - 1] + cost
++                );
++            }
++            int[] swap = previous;
++            previous = current;
++            current = swap;
++        }
++        return previous[right.length()];
++    }
++
++    private void destroySpeechRecognizer() {
++        if (speechRecognizer == null) {
++            return;
++        }
++        try {
++            speechRecognizer.cancel();
++        } catch (RuntimeException ignored) {
++        }
++        speechRecognizer.destroy();
++        speechRecognizer = null;
++        listening = false;
++        partialChoices.clear();
++    }
++
+     private boolean isRecognitionBlocked() {
+         return speaking || System.currentTimeMillis() < ignoreRecognitionUntilMs;
+     }
+@@ -389,9 +504,7 @@
+     public void onDestroy() {
+         stopRequested = true;
+         running = false;
+-        if (speechRecognizer != null) {
+-            speechRecognizer.destroy();
+-        }
++        destroySpeechRecognizer();
+         if (textToSpeech != null) {
+             textToSpeech.stop();
+             textToSpeech.shutdown();
