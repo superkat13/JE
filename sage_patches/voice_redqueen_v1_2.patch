@@ -1,0 +1,135 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -46,6 +46,10 @@
+     private boolean ttsReady;
+     private boolean stopRequested;
+ 
++    // Ignore stale recognizer callbacks and Sage's own speaker audio.
++    private long ignoreRecognitionUntilMs;
++    private String lastSpokenForEcho = "";
++
+     public static boolean isRunning() {
+         return running;
+     }
+@@ -113,6 +117,10 @@
+ 
+             @Override
+             public void onBeginningOfSpeech() {
++                if (isRecognitionBlocked()) {
++                    speechRecognizer.cancel();
++                    return;
++                }
+                 broadcastStatus("Hearing you");
+             }
+ 
+@@ -143,7 +151,12 @@
+                 listening = false;
+                 ArrayList<String> choices = results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+                 if (choices != null && !choices.isEmpty()) {
+-                    handleCommand(choices.get(0));
++                    String candidate = choices.get(0);
++                    if (isRecognitionBlocked() || isLikelySelfEcho(candidate)) {
++                        scheduleListeningAfterGuard();
++                    } else {
++                        handleCommand(candidate);
++                    }
+                 } else if (!stopRequested && !speaking) {
+                     handler.postDelayed(SageVoiceService.this::startListeningCycle, 450);
+                 }
+@@ -176,6 +189,11 @@
+         if (stopRequested || speaking || speechRecognizer == null) {
+             return;
+         }
++        long remaining = ignoreRecognitionUntilMs - System.currentTimeMillis();
++        if (remaining > 0) {
++            handler.postDelayed(this::startListeningCycle, remaining + 100);
++            return;
++        }
+         try {
+             speechRecognizer.cancel();
+             speechRecognizer.startListening(recognizerIntent);
+@@ -186,7 +204,8 @@
+ 
+     private void handleCommand(String command) {
+         String cleaned = command == null ? "" : command.trim();
+-        if (cleaned.isEmpty() || speaking || stopRequested) {
++        if (cleaned.isEmpty() || speaking || stopRequested || isRecognitionBlocked() || isLikelySelfEcho(cleaned)) {
++            scheduleListeningAfterGuard();
+             return;
+         }
+         broadcastLine("You", cleaned);
+@@ -203,7 +222,11 @@
+             afterSpeaking();
+             return;
+         }
++        lastSpokenForEcho = normalizeForEcho(message);
++        long estimatedSpeechMs = Math.max(2200L, Math.min(12000L, message.length() * 75L));
++        ignoreRecognitionUntilMs = System.currentTimeMillis() + estimatedSpeechMs;
+         if (speechRecognizer != null) {
++            speechRecognizer.stopListening();
+             speechRecognizer.cancel();
+         }
+         listening = false;
+@@ -220,13 +243,47 @@
+ 
+     private void afterSpeaking() {
+         speaking = false;
++        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, System.currentTimeMillis() + 1800L);
+         if (stopRequested) {
+             stopSelf();
+         } else {
+-            broadcastStatus("Listening");
+-            updateNotification("Sage is listening");
+-            handler.postDelayed(this::startListeningCycle, 700);
++            broadcastStatus("Cooling down");
++            updateNotification("Sage is waiting for her voice to clear");
++            scheduleListeningAfterGuard();
++        }
++    }
++
++    private boolean isRecognitionBlocked() {
++        return speaking || System.currentTimeMillis() < ignoreRecognitionUntilMs;
++    }
++
++    private void scheduleListeningAfterGuard() {
++        if (stopRequested || speaking) {
++            return;
++        }
++        long delay = Math.max(250L, ignoreRecognitionUntilMs - System.currentTimeMillis() + 100L);
++        handler.postDelayed(this::startListeningCycle, delay);
++    }
++
++    private boolean isLikelySelfEcho(String heard) {
++        String candidate = normalizeForEcho(heard);
++        String spoken = lastSpokenForEcho;
++        if (candidate.isEmpty() || spoken.isEmpty()) {
++            return false;
++        }
++        return candidate.equals(spoken)
++                || (candidate.length() >= 5 && spoken.contains(candidate))
++                || (spoken.length() >= 5 && candidate.contains(spoken));
++    }
++
++    private String normalizeForEcho(String value) {
++        if (value == null) {
++            return "";
+         }
++        return value.toLowerCase(Locale.US)
++                .replaceAll("[^a-z0-9 ]", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
+     }
+ 
+     @Override
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -97,6 +97,9 @@
+             }
+         }
+ 
++        if (isAny(lower, "red queen mode", "activate red queen mode", "red queen")) {
++            return new Result("You're all going to die down here.");
++        }
+         if (isAny(lower, "sleep", "go to sleep", "stop listening", "quiet")) {
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
