@@ -119,9 +119,39 @@ jobs:
         working-directory: sage_build
         run: gradle :app:compileDebugJavaWithJavac --stacktrace
 
-      - name: Run Android lint and unit-test tasks
+      - name: Run Android unit-test task
         working-directory: sage_build
-        run: gradle :app:lintDebug :app:testDebugUnitTest --stacktrace
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Run Android lint diagnostics
+        id: android_lint
+        continue-on-error: true
+        working-directory: sage_build
+        run: |
+          set +e
+          gradle :app:lintDebug --stacktrace 2>&1 | tee ../android-lint-console.txt
+          status=${PIPESTATUS[0]}
+          echo "$status" > ../android-lint-exit-code.txt
+          find app/build/reports -maxdepth 2 -type f -print 2>/dev/null | sort | tee ../android-lint-report-files.txt
+          exit "$status"
+
+      - name: Upload Android lint diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.21-android-lint-diagnostics
+          path: |
+            android-lint-console.txt
+            android-lint-exit-code.txt
+            android-lint-report-files.txt
+            sage_build/app/build/reports/lint-results-debug.*
+          if-no-files-found: warn
+
+      - name: Enforce Android lint gate
+        if: steps.android_lint.outcome != 'success'
+        run: |
+          echo "Android lint failed. Verified APK release remains blocked."
+          exit 1
 
       - name: Build signed permanent-update APK
         working-directory: sage_build
