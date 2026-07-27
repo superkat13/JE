@@ -1,0 +1,680 @@
+diff --git a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+index 6e7e79f..0503769 100644
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -76,6 +76,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private Intent wakeRecognizerIntent;
+     private TextToSpeech textToSpeech;
+     private SageCommandEngine commandEngine;
++    private SageTranslationManager translationManager;
+     private SharedPreferences preferences;
+ 
+     private Model wakeModel;
+@@ -100,6 +101,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private String lastSpokenForEcho = "";
+     private boolean conversationActive;
+     private long conversationExpiresAtMs;
++    private boolean translationInProgress;
++    private boolean restoreDefaultSpeechLanguage;
++    private Locale defaultSpeechLocale = Locale.getDefault();
+ 
+     public static boolean isRunning() {
+         return running;
+@@ -110,6 +114,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         super.onCreate();
+         running = true;
+         commandEngine = new SageCommandEngine(this);
++        translationManager = new SageTranslationManager();
+         preferences = getSharedPreferences("sage_state", Context.MODE_PRIVATE);
+         createNotificationChannel();
+         configureCommandRecognizerIntent();
+@@ -882,7 +887,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 "write", "volume", "louder", "quieter", "mute", "pause", "play", "next",
+                 "previous", "notification", "remember", "memory", "red", "queen", "sleep",
+                 "help", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+-                "eighth", "ninth", "tenth", "video", "link", "result", "website", "settings"
++                "eighth", "ninth", "tenth", "video", "link", "result", "website", "settings",
++                "translate", "language", "spanish", "french", "german", "japanese", "chinese"
+         };
+         for (String cue : cues) {
+             if (padded.contains(" " + cue + " ")) {
+@@ -898,6 +904,10 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             resumeConversationOrWake(500);
+             return;
+         }
++        if (translationInProgress) {
++            broadcastLine("Sage", "I am still preparing that translation.");
++            return;
++        }
+         preferences.edit().putString("last_heard", cleaned).apply();
+         broadcastLine("You", cleaned);
+         if (isConversationCloseCommand(cleaned)) {
+@@ -910,6 +920,16 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         if (isConversationOpen()) {
+             extendConversationWindow();
+         }
++        SageTranslationManager.Request translationRequest = translationManager.parse(cleaned);
++        if (translationRequest != null) {
++            if (translationRequest.isValid()) {
++                beginTranslation(translationRequest);
++            } else {
++                broadcastLine("Sage", translationRequest.errorMessage);
++                speak(translationRequest.errorMessage);
++            }
++            return;
++        }
+         SageCommandEngine.Result result = commandEngine.execute(cleaned);
+         broadcastLine("Sage", result.message);
+         if (result.stopListening) {
+@@ -923,6 +943,76 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         }
+     }
+ 
++    private void beginTranslation(SageTranslationManager.Request request) {
++        translationInProgress = true;
++        stopWakeListening();
++        destroyCommandRecognizer();
++        if (isConversationOpen()) {
++            extendConversationWindow();
++        }
++        broadcastStatus("Preparing translation");
++        updateNotification("Preparing " + request.target.displayName + " translation");
++        translationManager.translate(request, new SageTranslationManager.Callback() {
++            @Override
++            public void onStatus(String status) {
++                handler.post(() -> {
++                    if (stopRequested) {
++                        return;
++                    }
++                    broadcastStatus(status);
++                    updateNotification(status);
++                    if (isConversationOpen()) {
++                        extendConversationWindow();
++                    }
++                });
++            }
++
++            @Override
++            public void onSuccess(
++                    String translatedText,
++                    String targetSpeechTag,
++                    String targetLanguageName
++            ) {
++                handler.post(() -> {
++                    if (stopRequested) {
++                        return;
++                    }
++                    translationInProgress = false;
++                    preferences.edit()
++                            .putString("last_translation", translatedText)
++                            .putString("last_translation_language", targetLanguageName)
++                            .apply();
++                    broadcastLine(
++                            "Sage",
++                            targetLanguageName
++                                    + ": "
++                                    + translatedText
++                                    + "\nPowered by Google Translate"
++                    );
++                    if (isConversationOpen()) {
++                        extendConversationWindow();
++                    }
++                    speakTranslated(translatedText, targetSpeechTag, targetLanguageName);
++                });
++            }
++
++            @Override
++            public void onFailure(String message) {
++                handler.post(() -> {
++                    if (stopRequested) {
++                        return;
++                    }
++                    translationInProgress = false;
++                    broadcastLine("Sage", message);
++                    if (isConversationOpen()) {
++                        extendConversationWindow();
++                    }
++                    speak(message);
++                });
++            }
++        });
++    }
++
+     private void afterQuietCommand() {
+         speaking = false;
+         if (stopRequested) {
+@@ -963,6 +1053,39 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         textToSpeech.speak(message, TextToSpeech.QUEUE_FLUSH, null, UUID.randomUUID().toString());
+     }
+ 
++    private void speakTranslated(String message, String languageTag, String languageName) {
++        if (!ttsReady || textToSpeech == null) {
++            speak(message);
++            return;
++        }
++        int availability = textToSpeech.setLanguage(Locale.forLanguageTag(languageTag));
++        if (availability == TextToSpeech.LANG_MISSING_DATA
++                || availability == TextToSpeech.LANG_NOT_SUPPORTED) {
++            restoreDefaultSpeechVoice();
++            String explanation = "The translation is on screen, but Android needs the "
++                    + languageName
++                    + " voice installed before I can pronounce it.";
++            broadcastLine("Sage", explanation);
++            speak(explanation);
++            return;
++        }
++        restoreDefaultSpeechLanguage = true;
++        speak(message);
++    }
++
++    private void finishSpeaking() {
++        restoreDefaultSpeechVoice();
++        afterSpeaking();
++    }
++
++    private void restoreDefaultSpeechVoice() {
++        if (!restoreDefaultSpeechLanguage || textToSpeech == null) {
++            return;
++        }
++        restoreDefaultSpeechLanguage = false;
++        textToSpeech.setLanguage(defaultSpeechLocale);
++    }
++
+     private void afterSpeaking() {
+         speaking = false;
+         long now = System.currentTimeMillis();
+@@ -1031,6 +1154,10 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         if (!conversationActive || stopRequested) {
+             return;
+         }
++        if (translationInProgress) {
++            extendConversationWindow();
++            return;
++        }
+         long remaining = conversationExpiresAtMs - System.currentTimeMillis();
+         if (remaining > 0L) {
+             handler.postDelayed(conversationExpiryRunnable, remaining + 100L);
+@@ -1112,12 +1239,13 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             broadcastLine("Sage", "Text to speech could not start, but commands can still run.");
+             return;
+         }
+-        textToSpeech.setLanguage(Locale.getDefault());
++        defaultSpeechLocale = Locale.getDefault();
++        textToSpeech.setLanguage(defaultSpeechLocale);
+         textToSpeech.setSpeechRate(1.0f);
+         textToSpeech.setOnUtteranceProgressListener(new UtteranceProgressListener() {
+             @Override public void onStart(String utteranceId) { speaking = true; }
+-            @Override public void onDone(String utteranceId) { handler.post(SageVoiceService.this::afterSpeaking); }
+-            @Override public void onError(String utteranceId) { handler.post(SageVoiceService.this::afterSpeaking); }
++            @Override public void onDone(String utteranceId) { handler.post(SageVoiceService.this::finishSpeaking); }
++            @Override public void onError(String utteranceId) { handler.post(SageVoiceService.this::finishSpeaking); }
+         });
+     }
+ 
+@@ -1191,10 +1319,14 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         listenForCommandAfterSpeech = false;
+         conversationActive = false;
+         conversationExpiresAtMs = 0L;
++        translationInProgress = false;
+         nativeWakeListening = false;
+         handler.removeCallbacksAndMessages(null);
+         stopWakeListening();
+         destroyCommandRecognizer();
++        if (translationManager != null) {
++            translationManager.close();
++        }
+         if (textToSpeech != null) {
+             textToSpeech.stop();
+             textToSpeech.shutdown();
+diff --git a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+index dfd1777..43de2f7 100644
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -146,7 +146,7 @@ public class SageCommandEngine {
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I can wait for the word Sage, keep a conversation open after you wake me, understand natural tablet commands, number clickable things on the screen, learn your phrases, open apps and websites, search, scroll, type, control media, and read notifications.");
++            return new Result("I can wait for the word Sage, keep a conversation open after you wake me, translate and speak other languages, understand natural tablet commands, number clickable things on the screen, learn your phrases, open apps and websites, search, scroll, type, control media, and read notifications.");
+         }
+ 
+         if (isAny(lower, "show numbers", "number the screen", "put numbers on the screen", "label the screen", "number everything")) {
+diff --git a/app/src/main/java/com/pineapple/sage/MainActivity.java b/app/src/main/java/com/pineapple/sage/MainActivity.java
+index 19a8d1e..acae098 100644
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -93,7 +93,7 @@ public class MainActivity extends Activity {
+         root.addView(title, matchWrap());
+ 
+         TextView subtitle = new TextView(this);
+-        subtitle.setText("Wake once + a 30-second conversation window");
++        subtitle.setText("Conversation mode + spoken on-device translation");
+         subtitle.setTextSize(16);
+         subtitle.setTextColor(Color.DKGRAY);
+         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
+@@ -130,7 +130,7 @@ public class MainActivity extends Activity {
+         root.addView(voiceSettings, spacedSmall());
+ 
+         TextView voiceHelp = new TextView(this);
+-        voiceHelp.setText("Sage uses Android’s installed text-to-speech voice. Install a voice pack or engine, choose it here, then stop and restart Sage.");
++        voiceHelp.setText("Sage uses Android’s installed text-to-speech voices. Install the matching language voice if you want translated phrases pronounced aloud.");
+         voiceHelp.setTextSize(14);
+         voiceHelp.setTextColor(Color.DKGRAY);
+         voiceHelp.setPadding(8, 4, 8, 4);
+@@ -213,8 +213,28 @@ public class MainActivity extends Activity {
+         root.addView(teachingSummary, matchWrap());
+         refreshTeachingSummary();
+ 
++        Button translationCredit = makeButton("Powered by Google Translate");
++        translationCredit.setOnClickListener(v -> {
++            try {
++                startActivity(new Intent(
++                        Intent.ACTION_VIEW,
++                        Uri.parse("https://translate.google.com")
++                ));
++            } catch (Exception error) {
++                Toast.makeText(this, "Android could not open the Google Translate information page.", Toast.LENGTH_LONG).show();
++            }
++        });
++        root.addView(translationCredit, spaced());
++
++        TextView translationDisclaimer = new TextView(this);
++        translationDisclaimer.setText("Translations are automatic and may be inaccurate. Google does not guarantee their accuracy, reliability, merchantability, fitness for a particular purpose, or noninfringement.");
++        translationDisclaimer.setTextSize(12);
++        translationDisclaimer.setTextColor(Color.DKGRAY);
++        translationDisclaimer.setPadding(8, 2, 8, 4);
++        root.addView(translationDisclaimer, matchWrap());
++
+         conversationText = new TextView(this);
+-        conversationText.setText("Say Sage once and wait for Yes. After each reply, Conversation open means you can keep giving commands without saying Sage again. The window closes after 30 seconds of silence.\n\nSay “that’s all” to close it early. Ignored (not Sage) means she heard a sound but correctly rejected it.\n\nTry: Sage\nopen YouTube\nsearch for funny dogs\nopen the second video");
++        conversationText.setText("Say Sage once and wait for Yes. After each reply, Conversation open means you can keep giving commands without saying Sage again. The window closes after 30 seconds of silence.\n\nTranslation stays inside Sage. The first use of each language downloads its model over Wi-Fi; afterward that language works offline.\n\nTry:\ntranslate good morning to Spanish\nhow do you say thank you in Japanese\ntranslate buenos días from Spanish to English\n\nSay “that’s all” to close the conversation early.");
+         conversationText.setTextSize(17);
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+diff --git a/app/src/main/java/com/pineapple/sage/SageTranslationManager.java b/app/src/main/java/com/pineapple/sage/SageTranslationManager.java
+new file mode 100644
+index 0000000..f5cefe5
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageTranslationManager.java
+@@ -0,0 +1,380 @@
++package com.pineapple.sage;
++
++import com.google.mlkit.common.model.DownloadConditions;
++import com.google.mlkit.nl.languageid.LanguageIdentification;
++import com.google.mlkit.nl.languageid.LanguageIdentifier;
++import com.google.mlkit.nl.translate.TranslateLanguage;
++import com.google.mlkit.nl.translate.Translation;
++import com.google.mlkit.nl.translate.Translator;
++import com.google.mlkit.nl.translate.TranslatorOptions;
++
++import java.util.HashMap;
++import java.util.Locale;
++import java.util.Map;
++import java.util.regex.Matcher;
++import java.util.regex.Pattern;
++
++public final class SageTranslationManager {
++    public interface Callback {
++        void onStatus(String status);
++        void onSuccess(String translatedText, String targetSpeechTag, String targetLanguageName);
++        void onFailure(String message);
++    }
++
++    public static final class Request {
++        public final String text;
++        public final LanguageSpec source;
++        public final LanguageSpec target;
++        public final String errorMessage;
++
++        private Request(String text, LanguageSpec source, LanguageSpec target, String errorMessage) {
++            this.text = text;
++            this.source = source;
++            this.target = target;
++            this.errorMessage = errorMessage;
++        }
++
++        public boolean isValid() {
++            return errorMessage.isEmpty() && !text.isEmpty() && target != null;
++        }
++    }
++
++    public static final class LanguageSpec {
++        public final String translationTag;
++        public final String speechTag;
++        public final String displayName;
++
++        private LanguageSpec(String translationTag, String speechTag, String displayName) {
++            this.translationTag = translationTag;
++            this.speechTag = speechTag;
++            this.displayName = displayName;
++        }
++    }
++
++    private static final Pattern EXPLICIT_SOURCE = Pattern.compile(
++            "(?i)^translate\\s+(.+?)\\s+from\\s+(.+?)\\s+to\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Pattern TRANSLATE_TO = Pattern.compile(
++            "(?i)^translate\\s+(.+?)\\s+to\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Pattern SAY_IN = Pattern.compile(
++            "(?i)^say\\s+(.+?)\\s+in\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Pattern HOW_TO_SAY = Pattern.compile(
++            "(?i)^(?:tell\\s+me\\s+)?how\\s+do\\s+(?:i|you)\\s+say\\s+(.+?)\\s+in\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Pattern WHAT_DOES_MEAN = Pattern.compile(
++            "(?i)^what\\s+does\\s+(.+?)\\s+mean\\s+in\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Pattern WHAT_IS_IN = Pattern.compile(
++            "(?i)^what\\s+is\\s+(.+?)\\s+in\\s+(.+?)\\s*[?.!]*$"
++    );
++    private static final Map<String, LanguageSpec> LANGUAGES = buildLanguages();
++    private LanguageIdentifier activeIdentifier;
++    private Translator activeTranslator;
++
++    public Request parse(String command) {
++        String value = stripConversationPrefix(cleanText(command));
++        if (value.isEmpty()) {
++            return null;
++        }
++
++        Matcher explicit = EXPLICIT_SOURCE.matcher(value);
++        if (explicit.matches()) {
++            LanguageSpec source = resolveLanguage(explicit.group(2));
++            LanguageSpec target = resolveLanguage(explicit.group(3));
++            if (source == null) {
++                return error("I do not recognize the source language " + cleanText(explicit.group(2)) + ".");
++            }
++            if (target == null) {
++                return unsupportedTarget(explicit.group(3));
++            }
++            return request(explicit.group(1), source, target);
++        }
++
++        Request parsed = parseTwoPart(value, TRANSLATE_TO, true);
++        if (parsed != null) {
++            return parsed;
++        }
++        parsed = parseTwoPart(value, HOW_TO_SAY, true);
++        if (parsed != null) {
++            return parsed;
++        }
++        parsed = parseTwoPart(value, SAY_IN, true);
++        if (parsed != null) {
++            return parsed;
++        }
++        parsed = parseTwoPart(value, WHAT_DOES_MEAN, false);
++        if (parsed != null) {
++            return parsed;
++        }
++        parsed = parseTwoPart(value, WHAT_IS_IN, false);
++        if (parsed != null) {
++            return parsed;
++        }
++
++        String lower = value.toLowerCase(Locale.US);
++        if (lower.equals("translate") || lower.startsWith("translate ")
++                || lower.startsWith("how do i say ")
++                || lower.startsWith("how do you say ")) {
++            return error("Try saying, translate good morning to Spanish.");
++        }
++        return null;
++    }
++
++    public void translate(Request request, Callback callback) {
++        close();
++        if (request == null || !request.isValid()) {
++            callback.onFailure(request == null
++                    ? "I could not understand that translation request."
++                    : request.errorMessage);
++            return;
++        }
++        if (request.source != null) {
++            translateFrom(request, request.source.translationTag, callback);
++            return;
++        }
++
++        callback.onStatus("Identifying the language");
++        LanguageIdentifier identifier = LanguageIdentification.getClient();
++        activeIdentifier = identifier;
++        identifier.identifyLanguage(request.text)
++                .addOnSuccessListener(languageTag -> {
++                    identifier.close();
++                    if (activeIdentifier == identifier) {
++                        activeIdentifier = null;
++                    }
++                    String sourceTag = languageTag == null
++                            ? null
++                            : TranslateLanguage.fromLanguageTag(languageTag);
++                    if (sourceTag == null || "und".equals(languageTag)) {
++                        if (request.target.translationTag.equals(TranslateLanguage.ENGLISH)) {
++                            callback.onFailure("I could not identify that language. Try saying, translate the phrase from Spanish to English.");
++                            return;
++                        }
++                        sourceTag = TranslateLanguage.ENGLISH;
++                    }
++                    translateFrom(request, sourceTag, callback);
++                })
++                .addOnFailureListener(error -> {
++                    identifier.close();
++                    if (activeIdentifier == identifier) {
++                        activeIdentifier = null;
++                    }
++                    if (request.target.translationTag.equals(TranslateLanguage.ENGLISH)) {
++                        callback.onFailure("I could not identify the original language. Try naming it with, from Spanish to English.");
++                    } else {
++                        translateFrom(request, TranslateLanguage.ENGLISH, callback);
++                    }
++                });
++    }
++
++    private void translateFrom(Request request, String sourceTag, Callback callback) {
++        if (sourceTag.equals(request.target.translationTag)) {
++            callback.onSuccess(request.text, request.target.speechTag, request.target.displayName);
++            return;
++        }
++
++        TranslatorOptions options = new TranslatorOptions.Builder()
++                .setSourceLanguage(sourceTag)
++                .setTargetLanguage(request.target.translationTag)
++                .build();
++        Translator translator = Translation.getClient(options);
++        activeTranslator = translator;
++        DownloadConditions conditions = new DownloadConditions.Builder()
++                .requireWifi()
++                .build();
++
++        callback.onStatus("Preparing " + request.target.displayName + " language pack");
++        translator.downloadModelIfNeeded(conditions)
++                .addOnSuccessListener(unused -> translator.translate(request.text)
++                        .addOnSuccessListener(translatedText -> {
++                            translator.close();
++                            if (activeTranslator == translator) {
++                                activeTranslator = null;
++                            }
++                            callback.onSuccess(
++                                    translatedText,
++                                    request.target.speechTag,
++                                    request.target.displayName
++                            );
++                        })
++                        .addOnFailureListener(error -> {
++                            translator.close();
++                            if (activeTranslator == translator) {
++                                activeTranslator = null;
++                            }
++                            callback.onFailure("I could not translate that phrase.");
++                        }))
++                .addOnFailureListener(error -> {
++                    translator.close();
++                    if (activeTranslator == translator) {
++                        activeTranslator = null;
++                    }
++                    callback.onFailure(
++                            "I need Wi-Fi to download the "
++                                    + request.target.displayName
++                                    + " language pack the first time. After that it will work offline."
++                    );
++                });
++    }
++
++    public void close() {
++        if (activeIdentifier != null) {
++            activeIdentifier.close();
++            activeIdentifier = null;
++        }
++        if (activeTranslator != null) {
++            activeTranslator.close();
++            activeTranslator = null;
++        }
++    }
++
++    private Request parseTwoPart(String value, Pattern pattern, boolean reportUnknownTarget) {
++        Matcher matcher = pattern.matcher(value);
++        if (!matcher.matches()) {
++            return null;
++        }
++        LanguageSpec target = resolveLanguage(matcher.group(2));
++        if (target == null) {
++            return reportUnknownTarget ? unsupportedTarget(matcher.group(2)) : null;
++        }
++        return request(matcher.group(1), null, target);
++    }
++
++    private Request request(String text, LanguageSpec source, LanguageSpec target) {
++        String cleaned = cleanPhrase(text);
++        if (cleaned.isEmpty()) {
++            return error("Tell me what you want translated.");
++        }
++        return new Request(cleaned, source, target, "");
++    }
++
++    private Request error(String message) {
++        return new Request("", null, null, message);
++    }
++
++    private Request unsupportedTarget(String language) {
++        return error(
++                "I do not recognize the language "
++                        + cleanText(language)
++                        + ". Try Spanish, French, German, Japanese, Chinese, or another supported language."
++        );
++    }
++
++    private static LanguageSpec resolveLanguage(String spokenName) {
++        return LANGUAGES.get(normalizeLanguageName(spokenName));
++    }
++
++    private static Map<String, LanguageSpec> buildLanguages() {
++        Map<String, LanguageSpec> languages = new HashMap<>();
++        add(languages, "af", "af", "Afrikaans");
++        add(languages, "ar", "ar", "Arabic");
++        add(languages, "be", "be", "Belarusian");
++        add(languages, "bg", "bg", "Bulgarian");
++        add(languages, "bn", "bn", "Bengali");
++        add(languages, "ca", "ca", "Catalan");
++        add(languages, "cs", "cs", "Czech");
++        add(languages, "cy", "cy", "Welsh");
++        add(languages, "da", "da", "Danish");
++        add(languages, "de", "de", "German", "Deutsch");
++        add(languages, "el", "el", "Greek");
++        add(languages, "en", "en-US", "English", "American English", "US English");
++        add(languages, "eo", "eo", "Esperanto");
++        add(languages, "es", "es-ES", "Spanish", "Español", "Espanol");
++        add(languages, "et", "et", "Estonian");
++        add(languages, "fa", "fa", "Persian", "Farsi");
++        add(languages, "fi", "fi", "Finnish");
++        add(languages, "fr", "fr-FR", "French", "Français", "Francais");
++        add(languages, "ga", "ga", "Irish", "Irish Gaelic");
++        add(languages, "gl", "gl", "Galician");
++        add(languages, "gu", "gu", "Gujarati");
++        add(languages, "he", "he", "Hebrew");
++        add(languages, "hi", "hi-IN", "Hindi");
++        add(languages, "hr", "hr", "Croatian");
++        add(languages, "ht", "ht", "Haitian", "Haitian Creole");
++        add(languages, "hu", "hu", "Hungarian");
++        add(languages, "id", "id", "Indonesian", "Bahasa Indonesia");
++        add(languages, "is", "is", "Icelandic");
++        add(languages, "it", "it-IT", "Italian", "Italiano");
++        add(languages, "ja", "ja-JP", "Japanese");
++        add(languages, "ka", "ka", "Georgian");
++        add(languages, "kn", "kn", "Kannada");
++        add(languages, "ko", "ko-KR", "Korean");
++        add(languages, "lt", "lt", "Lithuanian");
++        add(languages, "lv", "lv", "Latvian");
++        add(languages, "mk", "mk", "Macedonian");
++        add(languages, "mr", "mr", "Marathi");
++        add(languages, "ms", "ms", "Malay");
++        add(languages, "mt", "mt", "Maltese");
++        add(languages, "nl", "nl-NL", "Dutch");
++        add(languages, "no", "nb-NO", "Norwegian");
++        add(languages, "pl", "pl", "Polish");
++        add(languages, "pt", "pt-BR", "Portuguese", "Brazilian Portuguese", "Portuguese Brazil");
++        add(languages, "ro", "ro", "Romanian");
++        add(languages, "ru", "ru-RU", "Russian");
++        add(languages, "sk", "sk", "Slovak");
++        add(languages, "sl", "sl", "Slovenian");
++        add(languages, "sq", "sq", "Albanian");
++        add(languages, "sv", "sv", "Swedish");
++        add(languages, "sw", "sw", "Swahili");
++        add(languages, "ta", "ta", "Tamil");
++        add(languages, "te", "te", "Telugu");
++        add(languages, "th", "th-TH", "Thai");
++        add(languages, "tl", "fil-PH", "Tagalog", "Filipino");
++        add(languages, "tr", "tr-TR", "Turkish");
++        add(languages, "uk", "uk", "Ukrainian");
++        add(languages, "ur", "ur", "Urdu");
++        add(languages, "vi", "vi-VN", "Vietnamese");
++        add(languages, "zh", "zh-CN", "Chinese", "Mandarin", "Mandarin Chinese", "Simplified Chinese");
++        return languages;
++    }
++
++    private static void add(
++            Map<String, LanguageSpec> languages,
++            String translationTag,
++            String speechTag,
++            String displayName,
++            String... aliases
++    ) {
++        LanguageSpec spec = new LanguageSpec(translationTag, speechTag, displayName);
++        languages.put(normalizeLanguageName(displayName), spec);
++        languages.put(normalizeLanguageName(translationTag), spec);
++        for (String alias : aliases) {
++            languages.put(normalizeLanguageName(alias), spec);
++        }
++    }
++
++    private static String normalizeLanguageName(String value) {
++        return cleanText(value)
++                .toLowerCase(Locale.US)
++                .replace(" language", "")
++                .replaceAll("[^a-z0-9 ]", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
++    }
++
++    private static String cleanPhrase(String value) {
++        String text = cleanText(value);
++        text = text.replaceFirst("^[\"'“”‘’]+", "");
++        text = text.replaceFirst("[\"'“”‘’]+$", "");
++        return cleanText(text);
++    }
++
++    private static String stripConversationPrefix(String value) {
++        String result = cleanText(value);
++        String previous;
++        do {
++            previous = result;
++            result = result.replaceFirst("(?i)^(hey\\s+)?sage[\\s,.:;-]+", "");
++            result = result.replaceFirst("(?i)^(can|could|would|will)\\s+you[\\s,.:;-]+", "");
++            result = result.replaceFirst("(?i)^please[\\s,.:;-]+", "");
++            result = cleanText(result);
++        } while (!result.equals(previous));
++        return result;
++    }
++
++    private static String cleanText(String value) {
++        return value == null ? "" : value.trim().replaceAll("\\s+", " ");
++    }
++}
+
