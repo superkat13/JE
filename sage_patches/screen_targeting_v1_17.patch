@@ -95,30 +95,30 @@
  
      public static boolean goBack() {
 -        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_BACK);
-+        return performGlobalAction(GLOBAL_ACTION_BACK);
++        return performGlobalActionAndClear(GLOBAL_ACTION_BACK);
      }
  
      public static boolean goHome() {
 -        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_HOME);
-+        return performGlobalAction(GLOBAL_ACTION_HOME);
++        return performGlobalActionAndClear(GLOBAL_ACTION_HOME);
      }
  
      public static boolean showRecents() {
 -        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_RECENTS);
-+        return performGlobalAction(GLOBAL_ACTION_RECENTS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_RECENTS);
      }
  
      public static boolean showNotifications() {
 -        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
-+        return performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_NOTIFICATIONS);
      }
  
      public static boolean showQuickSettings() {
 -        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
-+        return performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_QUICK_SETTINGS);
 +    }
 +
-+    private static boolean performGlobalAction(int action) {
++    private static boolean performGlobalActionAndClear(int action) {
 +        SageAccessibilityService service = instance;
 +        if (service == null) {
 +            return false;
@@ -539,4 +539,3 @@
                      for (String partial : partials) {
                          if (partial != null && !partial.trim().isEmpty()) {
                              String visible = partial.trim();
-
