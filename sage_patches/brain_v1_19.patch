@@ -1,0 +1,2185 @@
+diff --git a/README_SAGE_TABLET_CONTROL.md b/README_SAGE_TABLET_CONTROL.md
+index 5f49707..40e8351 100644
+--- a/README_SAGE_TABLET_CONTROL.md
++++ b/README_SAGE_TABLET_CONTROL.md
+@@ -1,4 +1,4 @@
+-# Sage Tablet Control v1
++# Sage Tablet Control v1.19
+ 
+ This branch combines the useful parts of two earlier builds:
+ 
+@@ -20,6 +20,9 @@ This branch combines the useful parts of two earlier builds:
+ - Read recent notifications
+ - Read a limited amount of visible screen text
+ - Save and recall simple notes
++- Optionally load an instruction-tuned GGUF model for private, on-device conversation
++- Route model-proposed actions back through Sage's deterministic command safety boundary
++- Show when the wake word was actually detected and acknowledge it with a short vibration
+ 
+ ## First-time setup on the tablet
+ 
+@@ -29,6 +32,18 @@ This branch combines the useful parts of two earlier builds:
+ 4. Return to Sage and tap **Notification access** if you want notification reading.
+ 5. Tap **Start listening** and grant microphone permission.
+ 
++## Optional local Sage Brain
++
++1. Under **Sage Brain**, tap **Download recommended Qwen brain**.
++2. Download `Qwen3-1.7B-Q8_0.gguf` from the official Qwen page.
++3. Return to Sage and tap **Choose downloaded GGUF model**.
++4. Keep Sage open while it copies, verifies, and loads the model.
++5. Delete the original download after Sage reports that its private copy is ready.
++
++Built-in commands always run first and do not wait for the model. Sage Brain handles open-ended
++conversation and unfamiliar wording. It cannot repair audio that Android's speech recognizer did
++not transcribe.
++
+ ## Example commands
+ 
+ - `Sage, open YouTube`
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 0ccf009..ff29dc9 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -5,6 +5,7 @@ plugins {
+ android {
+     namespace = "com.pineapple.sage"
+     compileSdk = 35
++    ndkVersion = "28.2.13676358"
+ 
+     defaultConfig {
+         applicationId = "com.pineapple.sage"
+@@ -12,6 +13,16 @@ android {
+         targetSdk = 35
+         versionCode = 1
+         versionName = "1.0.0"
++
++        ndk {
++            abiFilters += listOf("arm64-v8a")
++        }
++
++        externalNativeBuild {
++            cmake {
++                cppFlags += listOf("-std=c++17", "-O3")
++            }
++        }
+     }
+ 
+     buildTypes {
+@@ -28,4 +39,17 @@ android {
+         sourceCompatibility = JavaVersion.VERSION_17
+         targetCompatibility = JavaVersion.VERSION_17
+     }
++
++    externalNativeBuild {
++        cmake {
++            path = file("src/main/cpp/CMakeLists.txt")
++            version = "3.22.1"
++        }
++    }
++
++    packaging {
++        jniLibs {
++            useLegacyPackaging = false
++        }
++    }
+ }
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+index 7c71666..c333cf4 100644
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -4,6 +4,7 @@
+     <uses-permission android:name="android.permission.RECORD_AUDIO" />
+     <uses-permission android:name="android.permission.INTERNET" />
+     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
++    <uses-permission android:name="android.permission.VIBRATE" />
+     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+diff --git a/app/src/main/cpp/CMakeLists.txt b/app/src/main/cpp/CMakeLists.txt
+new file mode 100644
+index 0000000..be2c4c7
+--- /dev/null
++++ b/app/src/main/cpp/CMakeLists.txt
+@@ -0,0 +1,46 @@
++cmake_minimum_required(VERSION 3.22.1)
++project(sage_brain LANGUAGES C CXX)
++
++set(CMAKE_CXX_STANDARD 17)
++set(CMAKE_CXX_STANDARD_REQUIRED ON)
++set(CMAKE_POSITION_INDEPENDENT_CODE ON)
++
++set(LLAMA_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../../../../third_party/llama.cpp)
++
++if (NOT EXISTS ${LLAMA_DIR}/CMakeLists.txt)
++    message(FATAL_ERROR "Pinned llama.cpp source is required for Sage Brain")
++endif()
++
++set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
++set(LLAMA_BUILD_COMMON OFF CACHE BOOL "" FORCE)
++set(LLAMA_BUILD_TESTS OFF CACHE BOOL "" FORCE)
++set(LLAMA_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
++set(LLAMA_BUILD_SERVER OFF CACHE BOOL "" FORCE)
++set(LLAMA_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
++set(LLAMA_CURL OFF CACHE BOOL "" FORCE)
++set(GGML_OPENMP OFF CACHE BOOL "" FORCE)
++set(GGML_NATIVE OFF CACHE BOOL "" FORCE)
++set(GGML_LLAMAFILE OFF CACHE BOOL "" FORCE)
++set(GGML_CCACHE OFF CACHE BOOL "" FORCE)
++
++add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build)
++
++add_library(sage-brain SHARED
++    sage_brain.cpp
++)
++
++target_include_directories(sage-brain PRIVATE
++    ${LLAMA_DIR}/include
++    ${LLAMA_DIR}/ggml/include
++)
++
++target_compile_options(sage-brain PRIVATE
++    -O3
++    -fvisibility=hidden
++)
++
++target_link_libraries(sage-brain
++    llama
++    log
++    android
++)
+diff --git a/app/src/main/cpp/sage_brain.cpp b/app/src/main/cpp/sage_brain.cpp
+new file mode 100644
+index 0000000..12f3537
+--- /dev/null
++++ b/app/src/main/cpp/sage_brain.cpp
+@@ -0,0 +1,344 @@
++#include <jni.h>
++#include <android/log.h>
++
++#include <algorithm>
++#include <mutex>
++#include <string>
++#include <thread>
++#include <vector>
++
++#include "llama.h"
++
++#define LOG_TAG "SAGE-BRAIN"
++#define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
++#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
++
++namespace {
++
++llama_model * g_model = nullptr;
++llama_context * g_context = nullptr;
++std::mutex g_mutex;
++std::string g_last_error = "Model not loaded";
++bool g_backend_initialized = false;
++
++void set_error(const std::string & message) {
++    g_last_error = message;
++    LOGE("%s", message.c_str());
++}
++
++void release_model_locked() {
++    if (g_context != nullptr) {
++        llama_free(g_context);
++        g_context = nullptr;
++    }
++    if (g_model != nullptr) {
++        llama_model_free(g_model);
++        g_model = nullptr;
++    }
++}
++
++std::string from_java_string(JNIEnv * env, jstring value) {
++    if (value == nullptr) {
++        return {};
++    }
++    const char * raw = env->GetStringUTFChars(value, nullptr);
++    if (raw == nullptr) {
++        return {};
++    }
++    std::string result(raw);
++    env->ReleaseStringUTFChars(value, raw);
++    return result;
++}
++
++jstring to_java_string(JNIEnv * env, const std::string & value) {
++    jbyteArray bytes = env->NewByteArray(static_cast<jsize>(value.size()));
++    if (bytes == nullptr) {
++        return env->NewStringUTF("");
++    }
++    if (!value.empty()) {
++        env->SetByteArrayRegion(
++                bytes,
++                0,
++                static_cast<jsize>(value.size()),
++                reinterpret_cast<const jbyte *>(value.data())
++        );
++    }
++    jclass string_class = env->FindClass("java/lang/String");
++    jmethodID constructor = env->GetMethodID(
++            string_class,
++            "<init>",
++            "([BLjava/lang/String;)V"
++    );
++    jstring charset = env->NewStringUTF("UTF-8");
++    jstring result = static_cast<jstring>(
++            env->NewObject(string_class, constructor, bytes, charset)
++    );
++    env->DeleteLocalRef(charset);
++    env->DeleteLocalRef(bytes);
++    env->DeleteLocalRef(string_class);
++    return result;
++}
++
++std::string token_piece(const llama_vocab * vocab, llama_token token) {
++    std::string piece(64, '\0');
++    int count = llama_token_to_piece(
++            vocab,
++            token,
++            piece.data(),
++            static_cast<int>(piece.size()),
++            0,
++            true
++    );
++    if (count < 0) {
++        piece.resize(static_cast<size_t>(-count));
++        count = llama_token_to_piece(
++                vocab,
++                token,
++                piece.data(),
++                static_cast<int>(piece.size()),
++                0,
++                true
++        );
++    }
++    if (count <= 0) {
++        return {};
++    }
++    piece.resize(static_cast<size_t>(count));
++    return piece;
++}
++
++bool tokenize(
++        const llama_vocab * vocab,
++        const std::string & text,
++        std::vector<llama_token> & tokens
++) {
++    int count = -llama_tokenize(
++            vocab,
++            text.c_str(),
++            static_cast<int32_t>(text.size()),
++            nullptr,
++            0,
++            true,
++            true
++    );
++    if (count <= 0) {
++        set_error("Prompt tokenization failed");
++        return false;
++    }
++    tokens.resize(static_cast<size_t>(count));
++    int actual = llama_tokenize(
++            vocab,
++            text.c_str(),
++            static_cast<int32_t>(text.size()),
++            tokens.data(),
++            static_cast<int32_t>(tokens.size()),
++            true,
++            true
++    );
++    if (actual <= 0) {
++        set_error("Prompt tokenization returned no tokens");
++        return false;
++    }
++    tokens.resize(static_cast<size_t>(actual));
++    return true;
++}
++
++std::string format_chat_prompt(
++        const std::string & system_prompt,
++        const std::string & user_prompt
++) {
++    const char * chat_template = llama_model_chat_template(g_model, nullptr);
++    if (chat_template == nullptr) {
++        return system_prompt + "\n\nUser: " + user_prompt + "\nAssistant:";
++    }
++    llama_chat_message messages[] = {
++            {"system", system_prompt.c_str()},
++            {"user", user_prompt.c_str()}
++    };
++    int32_t required = llama_chat_apply_template(
++            chat_template,
++            messages,
++            2,
++            true,
++            nullptr,
++            0
++    );
++    if (required <= 0) {
++        return system_prompt + "\n\nUser: " + user_prompt + "\nAssistant:";
++    }
++    std::vector<char> buffer(static_cast<size_t>(required) + 1U, '\0');
++    int32_t written = llama_chat_apply_template(
++            chat_template,
++            messages,
++            2,
++            true,
++            buffer.data(),
++            static_cast<int32_t>(buffer.size())
++    );
++    if (written <= 0) {
++        return system_prompt + "\n\nUser: " + user_prompt + "\nAssistant:";
++    }
++    return std::string(buffer.data(), static_cast<size_t>(written));
++}
++
++}  // namespace
++
++extern "C"
++JNIEXPORT jboolean JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
++        JNIEnv * env,
++        jclass,
++        jstring path
++) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    std::string model_path = from_java_string(env, path);
++    if (model_path.empty()) {
++        set_error("Model path is empty");
++        return JNI_FALSE;
++    }
++
++    if (!g_backend_initialized) {
++        llama_log_set([](enum ggml_log_level level, const char * text, void *) {
++            if (level >= GGML_LOG_LEVEL_ERROR) {
++                LOGE("%s", text);
++            }
++        }, nullptr);
++        llama_backend_init();
++        g_backend_initialized = true;
++    }
++
++    release_model_locked();
++    llama_model_params model_params = llama_model_default_params();
++    model_params.n_gpu_layers = 0;
++
++    LOGI("Loading local model: %s", model_path.c_str());
++    g_model = llama_model_load_from_file(model_path.c_str(), model_params);
++    if (g_model == nullptr) {
++        set_error("llama.cpp could not load that GGUF model");
++        return JNI_FALSE;
++    }
++
++    llama_context_params context_params = llama_context_default_params();
++    context_params.n_ctx = 2048;
++    context_params.n_batch = 512;
++    context_params.n_ubatch = 256;
++    unsigned int hardware_threads = std::thread::hardware_concurrency();
++    int threads = static_cast<int>(std::max(2U, std::min(4U, hardware_threads)));
++    context_params.n_threads = threads;
++    context_params.n_threads_batch = threads;
++    context_params.no_perf = true;
++
++    g_context = llama_init_from_model(g_model, context_params);
++    if (g_context == nullptr) {
++        release_model_locked();
++        set_error("llama.cpp could not create a 2048-token context");
++        return JNI_FALSE;
++    }
++
++    g_last_error.clear();
++    LOGI("Local model ready with %d threads", threads);
++    return JNI_TRUE;
++}
++
++extern "C"
++JNIEXPORT jstring JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
++        JNIEnv * env,
++        jclass,
++        jstring system_prompt_value,
++        jstring user_prompt_value,
++        jint requested_tokens
++) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    if (g_model == nullptr || g_context == nullptr) {
++        set_error("Sage Brain was asked before its model loaded");
++        return to_java_string(env, "");
++    }
++
++    std::string system_prompt = from_java_string(env, system_prompt_value);
++    std::string user_prompt = from_java_string(env, user_prompt_value);
++    if (system_prompt.empty() || user_prompt.empty()) {
++        set_error("Brain prompt was empty");
++        return to_java_string(env, "");
++    }
++
++    std::string prompt = format_chat_prompt(system_prompt, user_prompt);
++    const llama_vocab * vocab = llama_model_get_vocab(g_model);
++    if (vocab == nullptr) {
++        set_error("Model vocabulary is unavailable");
++        return to_java_string(env, "");
++    }
++
++    std::vector<llama_token> prompt_tokens;
++    if (!tokenize(vocab, prompt, prompt_tokens)) {
++        return to_java_string(env, "");
++    }
++
++    int max_tokens = std::max(16, std::min(128, static_cast<int>(requested_tokens)));
++    if (prompt_tokens.size() + static_cast<size_t>(max_tokens) + 8U
++            > static_cast<size_t>(llama_n_ctx(g_context))) {
++        set_error("Brain prompt exceeded Sage's local context window");
++        return to_java_string(env, "");
++    }
++
++    llama_memory_clear(llama_get_memory(g_context), true);
++    llama_batch batch = llama_batch_get_one(
++            prompt_tokens.data(),
++            static_cast<int32_t>(prompt_tokens.size())
++    );
++
++    llama_sampler * sampler = llama_sampler_chain_init(
++            llama_sampler_chain_default_params()
++    );
++    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
++    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
++    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
++    llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
++
++    std::string output;
++    for (int generated = 0; generated < max_tokens; ++generated) {
++        int decode_result = llama_decode(g_context, batch);
++        if (decode_result != 0) {
++            set_error("llama_decode failed with code " + std::to_string(decode_result));
++            break;
++        }
++
++        llama_token token = llama_sampler_sample(sampler, g_context, -1);
++        if (llama_vocab_is_eog(vocab, token)) {
++            break;
++        }
++
++        std::string piece = token_piece(vocab, token);
++        if (!piece.empty()) {
++            output += piece;
++        }
++        batch = llama_batch_get_one(&token, 1);
++
++        if (output.size() > 1024U) {
++            break;
++        }
++    }
++
++    llama_sampler_free(sampler);
++    if (output.empty()) {
++        set_error("The local model generated no text");
++        return to_java_string(env, "");
++    }
++    g_last_error.clear();
++    return to_java_string(env, output);
++}
++
++extern "C"
++JNIEXPORT void JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(JNIEnv *, jclass) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    release_model_locked();
++    g_last_error = "Model unloaded";
++}
++
++extern "C"
++JNIEXPORT jstring JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeLastError(JNIEnv * env, jclass) {
++    std::lock_guard<std::mutex> lock(g_mutex);
++    return to_java_string(env, g_last_error);
++}
+diff --git a/app/src/main/java/com/pineapple/sage/MainActivity.java b/app/src/main/java/com/pineapple/sage/MainActivity.java
+index 42eb36a..fb4c565 100644
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -36,6 +36,7 @@ public class MainActivity extends Activity {
+     private static final int MICROPHONE_PERMISSION = 41;
+     private static final int UPDATE_FILE_PICKER = 42;
+     private static final int VOICE_RESPONSE_FILE_PICKER = 43;
++    private static final int BRAIN_MODEL_FILE_PICKER = 44;
+     private static final String APK_MIME = "application/vnd.android.package-archive";
+ 
+     private TextView statusText;
+@@ -43,6 +44,8 @@ public class MainActivity extends Activity {
+     private Button listenButton;
+     private Button wakeButton;
+     private Button conversationModeButton;
++    private Button brainToggleButton;
++    private TextView brainStatusText;
+     private TextView diagnosticsText;
+     private EditText typedCommand;
+     private EditText teachPhrase;
+@@ -55,6 +58,7 @@ public class MainActivity extends Activity {
+     private boolean talkAfterPermission;
+     private String pendingTypedCommand = "";
+     private String pendingVoiceResponsePhrase = "";
++    private SageBrainManager brainManager;
+ 
+     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
+         @Override
+@@ -68,8 +72,9 @@ public class MainActivity extends Activity {
+             if (speaker != null && text != null) {
+                 appendLine(speaker, text);
+                 refreshTeachingSummary();
+-                refreshVoiceResponseSummary();
+-            }
++            refreshVoiceResponseSummary();
++            refreshBrainStatus();
++        }
+             refreshStatus(status);
+             refreshDiagnostics();
+         }
+@@ -78,6 +83,7 @@ public class MainActivity extends Activity {
+     @Override
+     protected void onCreate(Bundle savedInstanceState) {
+         super.onCreate(savedInstanceState);
++        brainManager = SageBrainManager.get(this);
+         setContentView(buildInterface());
+         registerStateReceiver();
+         refreshStatus(null);
+@@ -107,7 +113,7 @@ public class MainActivity extends Activity {
+         root.addView(title, matchWrap());
+ 
+         TextView subtitle = new TextView(this);
+-        subtitle.setText("Quiet wake word + natural conversation + live diagnostics");
++        subtitle.setText("Fast wake word + local Sage Brain + live diagnostics");
+         subtitle.setTextSize(16);
+         subtitle.setTextColor(Color.DKGRAY);
+         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
+@@ -143,6 +149,66 @@ public class MainActivity extends Activity {
+         conversationModeHelp.setPadding(8, 2, 8, 6);
+         root.addView(conversationModeHelp, matchWrap());
+ 
++        TextView brainTitle = new TextView(this);
++        brainTitle.setText("Sage Brain");
++        brainTitle.setTextSize(23);
++        brainTitle.setTextColor(Color.rgb(31, 41, 55));
++        brainTitle.setPadding(4, 18, 4, 4);
++        root.addView(brainTitle, spaced());
++
++        TextView brainHelp = new TextView(this);
++        brainHelp.setText("Sage's fast built-in commands still run first. The optional local model handles natural questions and rephrases unmatched requests, then sends any tablet action back through Sage's safe command engine. It runs on this tablet without an account or API key.");
++        brainHelp.setTextSize(15);
++        brainHelp.setTextColor(Color.DKGRAY);
++        brainHelp.setPadding(8, 2, 8, 8);
++        root.addView(brainHelp, matchWrap());
++
++        brainStatusText = new TextView(this);
++        brainStatusText.setTextSize(14);
++        brainStatusText.setTextColor(Color.rgb(17, 24, 39));
++        brainStatusText.setPadding(14, 14, 14, 14);
++        brainStatusText.setBackgroundColor(Color.rgb(236, 253, 245));
++        brainStatusText.setTextIsSelectable(true);
++        root.addView(brainStatusText, matchWrap());
++
++        Button downloadBrainModel = makeButton("Download recommended Qwen brain (1.83 GB)");
++        downloadBrainModel.setOnClickListener(v -> openRecommendedBrainModel());
++        root.addView(downloadBrainModel, spacedSmall());
++
++        Button chooseBrainModel = makeButton("Choose downloaded GGUF model");
++        chooseBrainModel.setOnClickListener(v -> chooseBrainModelFile());
++        root.addView(chooseBrainModel, spacedSmall());
++
++        brainToggleButton = makeButton("");
++        brainToggleButton.setOnClickListener(v -> toggleBrain());
++        root.addView(brainToggleButton, spacedSmall());
++
++        Button testBrain = makeButton("Test Sage Brain");
++        testBrain.setOnClickListener(v -> {
++            if (!brainManager.canAnswer()) {
++                Toast.makeText(
++                        this,
++                        "Choose a GGUF model and turn Sage Brain on first.",
++                        Toast.LENGTH_LONG
++                ).show();
++                return;
++            }
++            dispatchTypedCommand("Tell me one short interesting fact about pineapples");
++        });
++        root.addView(testBrain, spacedSmall());
++
++        Button removeBrain = makeButton("Remove local brain model");
++        removeBrain.setOnClickListener(v -> confirmRemoveBrainModel());
++        root.addView(removeBrain, spacedSmall());
++
++        TextView brainStorageHelp = new TextView(this);
++        brainStorageHelp.setText("The model is copied into Sage's private storage. After Sage says it is verified, delete the original download to reclaim about 1.83 GB. Other instruction-tuned GGUF models up to 3.5 GB can be added later.");
++        brainStorageHelp.setTextSize(13);
++        brainStorageHelp.setTextColor(Color.DKGRAY);
++        brainStorageHelp.setPadding(8, 4, 8, 4);
++        root.addView(brainStorageHelp, matchWrap());
++        refreshBrainStatus();
++
+         TextView diagnosticsTitle = new TextView(this);
+         diagnosticsTitle.setText("Sage Diagnostics");
+         diagnosticsTitle.setTextSize(23);
+@@ -346,7 +412,7 @@ public class MainActivity extends Activity {
+         root.addView(translationDisclaimer, matchWrap());
+ 
+         conversationText = new TextView(this);
+-        conversationText.setText("Natural conversation is the default: say Sage, wait for Yes, then speak. After Sage answers, she opens one follow-up turn without requiring her name again. If nobody speaks, that turn closes and the quiet offline wake listener waits for Sage—there is no automatic beep loop.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nThe green microphone privacy dot can remain visible while the quiet wake-word listener is active. Android command dictation should open only for an expected conversation turn.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
++        conversationText.setText("Natural conversation is the default: say Sage, feel the short wake vibration if this tablet supports it, wait for Yes, then speak. The command microphone now opens shortly after Sage finishes instead of waiting several seconds. After Sage answers, she opens one follow-up turn without requiring her name again. If nobody speaks, that turn closes and the quiet offline wake listener waits for Sage—there is no automatic beep loop.\n\nSage Brain is optional. Built-in commands remain fast; the local model answers open-ended questions and interprets unfamiliar wording. It cannot repair audio Android never transcribed, so Diagnostics now shows the last time the wake word was actually detected.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nThe green microphone privacy dot can remain visible while the quiet wake-word listener is active. Android command dictation should open only for an expected conversation turn.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
+         conversationText.setTextSize(17);
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+@@ -422,6 +488,162 @@ public class MainActivity extends Activity {
+                 : "Mode: Say Sage for every command");
+     }
+ 
++    private void openRecommendedBrainModel() {
++        try {
++            startActivity(new Intent(
++                    Intent.ACTION_VIEW,
++                    Uri.parse(SageBrainManager.RECOMMENDED_MODEL_URL)
++            ));
++            Toast.makeText(
++                    this,
++                    "Download the 1.83 GB GGUF file, then return and tap Choose downloaded GGUF model.",
++                    Toast.LENGTH_LONG
++            ).show();
++        } catch (Exception error) {
++            Toast.makeText(
++                    this,
++                    "Android could not open the official Qwen download.",
++                    Toast.LENGTH_LONG
++            ).show();
++        }
++    }
++
++    private void chooseBrainModelFile() {
++        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++        picker.addCategory(Intent.CATEGORY_OPENABLE);
++        picker.setType("*/*");
++        picker.putExtra(
++                Intent.EXTRA_MIME_TYPES,
++                new String[]{"application/octet-stream", "application/gguf", "*/*"}
++        );
++        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
++        try {
++            startActivityForResult(picker, BRAIN_MODEL_FILE_PICKER);
++        } catch (Exception error) {
++            Toast.makeText(
++                    this,
++                    "Android could not open the model file picker.",
++                    Toast.LENGTH_LONG
++            ).show();
++        }
++    }
++
++    private void importBrainModel(Uri uri) {
++        String displayName = getDisplayName(uri);
++        brainStatusText.setText("Starting model import…");
++        brainManager.importModelAsync(uri, displayName, new SageBrainManager.LoadCallback() {
++            @Override
++            public void onStatus(String status) {
++                if (brainStatusText != null) {
++                    brainStatusText.setText(status);
++                }
++            }
++
++            @Override
++            public void onReady(String summary) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, summary, Toast.LENGTH_LONG).show();
++            }
++
++            @Override
++            public void onError(String message) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
++            }
++        });
++    }
++
++    private void toggleBrain() {
++        if (!brainManager.isConfigured()) {
++            Toast.makeText(
++                    this,
++                    "Download and choose a GGUF model first.",
++                    Toast.LENGTH_LONG
++            ).show();
++            return;
++        }
++        boolean enabled = !brainManager.isEnabled();
++        brainManager.setEnabled(enabled);
++        refreshBrainStatus();
++        if (!enabled) {
++            Toast.makeText(
++                    this,
++                    "Sage Brain is off. Built-in voice commands still work.",
++                    Toast.LENGTH_LONG
++            ).show();
++            return;
++        }
++        brainManager.prepareAsync(new SageBrainManager.LoadCallback() {
++            @Override
++            public void onStatus(String status) {
++                refreshBrainStatus();
++            }
++
++            @Override
++            public void onReady(String summary) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, summary, Toast.LENGTH_LONG).show();
++            }
++
++            @Override
++            public void onError(String message) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
++            }
++        });
++    }
++
++    private void confirmRemoveBrainModel() {
++        if (!brainManager.isConfigured()) {
++            Toast.makeText(this, "No local brain model is installed.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        new AlertDialog.Builder(this)
++                .setTitle("Remove Sage Brain model?")
++                .setMessage("This deletes Sage's private model copy. Built-in commands, memories, lessons, translations, and voice clips stay saved.")
++                .setNegativeButton("Cancel", null)
++                .setPositiveButton("Remove", (dialog, which) -> removeBrainModel())
++                .show();
++    }
++
++    private void removeBrainModel() {
++        brainManager.removeModelAsync(new SageBrainManager.LoadCallback() {
++            @Override
++            public void onStatus(String status) {
++                if (brainStatusText != null) {
++                    brainStatusText.setText(status);
++                }
++            }
++
++            @Override
++            public void onReady(String summary) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, summary, Toast.LENGTH_LONG).show();
++            }
++
++            @Override
++            public void onError(String message) {
++                refreshBrainStatus();
++                Toast.makeText(MainActivity.this, message, Toast.LENGTH_LONG).show();
++            }
++        });
++    }
++
++    private void refreshBrainStatus() {
++        if (brainManager == null) {
++            return;
++        }
++        if (brainStatusText != null) {
++            brainStatusText.setText(brainManager.getStatusSummary());
++        }
++        if (brainToggleButton != null) {
++            brainToggleButton.setText(brainManager.isEnabled()
++                    ? "Sage Brain: ON"
++                    : "Sage Brain: OFF");
++            brainToggleButton.setEnabled(brainManager.isConfigured());
++        }
++    }
++
+     private void refreshDiagnostics() {
+         if (diagnosticsText != null) {
+             diagnosticsText.setText(SageDiagnostics.buildSummary(this));
+@@ -588,6 +810,10 @@ public class MainActivity extends Activity {
+             saveVoiceResponse(data, uri);
+             return;
+         }
++        if (requestCode == BRAIN_MODEL_FILE_PICKER) {
++            importBrainModel(uri);
++            return;
++        }
+         if (requestCode != UPDATE_FILE_PICKER) {
+             return;
+         }
+@@ -906,6 +1132,7 @@ public class MainActivity extends Activity {
+         refreshDiagnostics();
+         refreshTeachingSummary();
+         refreshVoiceResponseSummary();
++        refreshBrainStatus();
+         if (pendingUpdateUri != null
+                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                 || getPackageManager().canRequestPackageInstalls())) {
+diff --git a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+new file mode 100644
+index 0000000..894fd34
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+@@ -0,0 +1,842 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.database.Cursor;
++import android.net.Uri;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.StatFs;
++import android.provider.OpenableColumns;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.nio.file.Files;
++import java.nio.file.StandardCopyOption;
++import java.security.MessageDigest;
++import java.util.ArrayDeque;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++
++/**
++ * Owns Sage's optional on-device GGUF language model.
++ *
++ * The model is deliberately separated from SageCommandEngine. Known commands always run through
++ * the deterministic command engine first. The model only interprets unmatched language, and every
++ * proposed tablet action is sent back through the existing command allow-list before it can run.
++ */
++public final class SageBrainManager {
++    public interface LoadCallback {
++        void onStatus(String status);
++        void onReady(String summary);
++        void onError(String message);
++    }
++
++    public interface ReplyCallback {
++        void onStatus(String status);
++        void onReply(Reply reply);
++        void onError(String message);
++    }
++
++    public static final class Reply {
++        public final boolean action;
++        public final String text;
++
++        private Reply(boolean action, String text) {
++            this.action = action;
++            this.text = text;
++        }
++
++        public static Reply action(String command) {
++            return new Reply(true, command);
++        }
++
++        public static Reply answer(String answer) {
++            return new Reply(false, answer);
++        }
++    }
++
++    private enum State {
++        NOT_CONFIGURED,
++        DISABLED,
++        LOADING,
++        READY,
++        ERROR
++    }
++
++    public static final String RECOMMENDED_MODEL_NAME = "Qwen3-1.7B-Q8_0.gguf";
++    public static final String RECOMMENDED_MODEL_URL =
++            "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/"
++                    + RECOMMENDED_MODEL_NAME
++                    + "?download=true";
++    public static final String RECOMMENDED_MODEL_SHA256 =
++            "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a";
++    public static final long RECOMMENDED_MODEL_BYTES = 1_830_000_000L;
++
++    private static final String PREFS_NAME = "sage_state";
++    private static final String KEY_ENABLED = "brain_enabled";
++    private static final String KEY_MODEL_NAME = "brain_model_name";
++    private static final String KEY_MODEL_SIZE = "brain_model_size";
++    private static final String KEY_MODEL_SHA256 = "brain_model_sha256";
++    private static final long MIN_MODEL_BYTES = 16L * 1024L * 1024L;
++    private static final long MAX_MODEL_BYTES = 3_500L * 1024L * 1024L;
++    private static final long IMPORT_HEADROOM_BYTES = 512L * 1024L * 1024L;
++    private static final int MAX_REPLY_TOKENS = 96;
++    private static final int MAX_VISIBLE_REPLY_CHARS = 520;
++
++    private static volatile SageBrainManager instance;
++    private static final boolean NATIVE_AVAILABLE;
++    private static final String NATIVE_LOAD_ERROR;
++
++    static {
++        boolean loaded = false;
++        String error = "";
++        try {
++            System.loadLibrary("sage-brain");
++            loaded = true;
++        } catch (Throwable problem) {
++            error = problem.getMessage();
++            if (error == null || error.trim().isEmpty()) {
++                error = problem.getClass().getSimpleName();
++            }
++        }
++        NATIVE_AVAILABLE = loaded;
++        NATIVE_LOAD_ERROR = error;
++    }
++
++    private final Context context;
++    private final SharedPreferences preferences;
++    private final Handler mainHandler = new Handler(Looper.getMainLooper());
++    private final ExecutorService worker = Executors.newSingleThreadExecutor(runnable -> {
++        Thread thread = new Thread(runnable, "Sage-Brain");
++        thread.setPriority(Thread.NORM_PRIORITY - 1);
++        return thread;
++    });
++    private final ArrayDeque<String> recentTurns = new ArrayDeque<>();
++
++    private volatile State state = State.NOT_CONFIGURED;
++    private volatile String status = "No local brain model selected";
++    private volatile String lastError = "";
++
++    private SageBrainManager(Context context) {
++        this.context = context.getApplicationContext();
++        this.preferences = this.context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
++        if (!isConfigured()) {
++            state = State.NOT_CONFIGURED;
++        } else if (!isEnabled()) {
++            state = State.DISABLED;
++        } else {
++            status = "Brain model saved — loading when needed";
++        }
++    }
++
++    public static SageBrainManager get(Context context) {
++        SageBrainManager current = instance;
++        if (current != null) {
++            return current;
++        }
++        synchronized (SageBrainManager.class) {
++            if (instance == null) {
++                instance = new SageBrainManager(context);
++            }
++            return instance;
++        }
++    }
++
++    public boolean isConfigured() {
++        File model = modelFile();
++        return model.isFile() && model.length() >= MIN_MODEL_BYTES;
++    }
++
++    public boolean isEnabled() {
++        return preferences.getBoolean(KEY_ENABLED, true);
++    }
++
++    public boolean canAnswer() {
++        return NATIVE_AVAILABLE && isConfigured() && isEnabled();
++    }
++
++    public boolean isReady() {
++        return state == State.READY;
++    }
++
++    public boolean isLoading() {
++        return state == State.LOADING;
++    }
++
++    public String getStatusSummary() {
++        if (!NATIVE_AVAILABLE) {
++            return "Brain engine unavailable in this build: " + NATIVE_LOAD_ERROR;
++        }
++        if (!isConfigured()) {
++            return "No model installed. Recommended: "
++                    + RECOMMENDED_MODEL_NAME
++                    + " (1.83 GB). Free app storage: "
++                    + formatBytes(availableStorageBytes())
++                    + ".";
++        }
++        String name = preferences.getString(KEY_MODEL_NAME, "Local GGUF model");
++        long size = preferences.getLong(KEY_MODEL_SIZE, modelFile().length());
++        String mode = !isEnabled()
++                ? "OFF"
++                : state == State.READY
++                ? "READY"
++                : state == State.LOADING
++                ? "LOADING"
++                : "saved";
++        String summary = "Sage Brain " + mode + " • " + name + " • " + formatBytes(size);
++        if (!lastError.isEmpty()) {
++            summary += "\nLast brain error: " + lastError;
++        } else if (state != State.READY && isEnabled()) {
++            summary += "\n" + status;
++        }
++        return summary;
++    }
++
++    public void setEnabled(boolean enabled) {
++        preferences.edit().putBoolean(KEY_ENABLED, enabled).apply();
++        if (!enabled) {
++            worker.execute(() -> {
++                if (NATIVE_AVAILABLE) {
++                    nativeUnloadModel();
++                }
++                state = State.DISABLED;
++                status = "Sage Brain is off";
++            });
++        } else if (isConfigured()) {
++            state = State.NOT_CONFIGURED;
++            status = "Brain model saved — loading when needed";
++        }
++    }
++
++    public void prepareAsync(LoadCallback callback) {
++        worker.execute(() -> {
++            postLoadStatus(callback, "Loading Sage Brain");
++            String error = ensureLoadedOnWorker();
++            if (error.isEmpty()) {
++                postLoadReady(callback, modelSummary());
++            } else {
++                postLoadError(callback, error);
++            }
++        });
++    }
++
++    public void importModelAsync(Uri uri, String displayName, LoadCallback callback) {
++        worker.execute(() -> importModelOnWorker(uri, displayName, callback));
++    }
++
++    public void removeModelAsync(LoadCallback callback) {
++        worker.execute(() -> {
++            postLoadStatus(callback, "Removing local brain model");
++            if (NATIVE_AVAILABLE) {
++                nativeUnloadModel();
++            }
++            File model = modelFile();
++            boolean removed = !model.exists() || model.delete();
++            if (!removed) {
++                postLoadError(callback, "Android could not remove the local model file.");
++                return;
++            }
++            preferences.edit()
++                    .remove(KEY_MODEL_NAME)
++                    .remove(KEY_MODEL_SIZE)
++                    .remove(KEY_MODEL_SHA256)
++                    .apply();
++            state = State.NOT_CONFIGURED;
++            status = "No local brain model selected";
++            lastError = "";
++            postLoadReady(callback, "Local brain model removed.");
++        });
++    }
++
++    public void askAsync(String userText, ReplyCallback callback) {
++        String cleaned = clean(userText);
++        if (cleaned.isEmpty()) {
++            postReplyError(callback, "I did not receive enough words for Sage Brain.");
++            return;
++        }
++        worker.execute(() -> {
++            postReplyStatus(callback, isReady()
++                    ? "Sage Brain is thinking"
++                    : "Loading Sage Brain for this request");
++            String loadError = ensureLoadedOnWorker();
++            if (!loadError.isEmpty()) {
++                postReplyError(callback, loadError);
++                return;
++            }
++            String systemPrompt = buildSystemPrompt();
++            String userPrompt = buildUserPrompt(cleaned);
++            String raw;
++            try {
++                raw = nativeGenerate(systemPrompt, userPrompt, MAX_REPLY_TOKENS);
++            } catch (Throwable problem) {
++                raw = "";
++                lastError = "Brain generation failed: " + safeProblem(problem);
++            }
++            if (raw == null || raw.trim().isEmpty()) {
++                String error = nativeErrorOr("The local model did not return an answer.");
++                state = State.ERROR;
++                status = error;
++                lastError = error;
++                postReplyError(callback, error);
++                return;
++            }
++            Reply reply = parseReply(cleaned, raw);
++            if (reply.text.isEmpty()) {
++                postReplyError(callback, "The local model returned an unreadable answer.");
++                return;
++            }
++            rememberTurn("User: " + cleaned);
++            rememberTurn("Sage: " + reply.text);
++            postReply(callback, reply);
++        });
++    }
++
++    private void importModelOnWorker(Uri uri, String displayName, LoadCallback callback) {
++        if (!NATIVE_AVAILABLE) {
++            postLoadError(callback, "This APK does not contain the local brain engine.");
++            return;
++        }
++        if (uri == null) {
++            postLoadError(callback, "No model file was selected.");
++            return;
++        }
++        String name = clean(displayName);
++        if (name.isEmpty()) {
++            name = queryDisplayName(uri);
++        }
++        if (!name.isEmpty() && !name.toLowerCase(Locale.US).endsWith(".gguf")) {
++            postLoadError(callback, "Choose a GGUF model file. Its name should end in .gguf.");
++            return;
++        }
++        long reportedSize = querySize(uri);
++        if (reportedSize > 0L
++                && (reportedSize < MIN_MODEL_BYTES || reportedSize > MAX_MODEL_BYTES)) {
++            postLoadError(
++                    callback,
++                    "That model is " + formatBytes(reportedSize)
++                            + ". Sage supports local models from 16 MB through 3.5 GB on this tablet."
++            );
++            return;
++        }
++        long required = (reportedSize > 0L ? reportedSize : RECOMMENDED_MODEL_BYTES)
++                + IMPORT_HEADROOM_BYTES;
++        long available = availableStorageBytes();
++        if (available < required) {
++            postLoadError(
++                    callback,
++                    "Not enough free storage to import that model. Sage needs about "
++                            + formatBytes(required)
++                            + " free during import; Android reports "
++                            + formatBytes(available)
++                            + "."
++            );
++            return;
++        }
++
++        File directory = brainDirectory();
++        if (!directory.exists() && !directory.mkdirs()) {
++            postLoadError(callback, "Android could not create Sage's private brain folder.");
++            return;
++        }
++        File temporary = new File(directory, "incoming-model.gguf");
++        if (temporary.exists() && !temporary.delete()) {
++            postLoadError(callback, "Sage could not clear an unfinished model import.");
++            return;
++        }
++
++        postLoadStatus(callback, "Copying model into Sage — keep the app open");
++        long copied = 0L;
++        byte[] firstBytes = new byte[4];
++        int firstCount = 0;
++        MessageDigest digest;
++        try {
++            digest = MessageDigest.getInstance("SHA-256");
++        } catch (Exception problem) {
++            postLoadError(callback, "Android could not start model verification.");
++            return;
++        }
++
++        try (InputStream input = context.getContentResolver().openInputStream(uri);
++             FileOutputStream output = new FileOutputStream(temporary)) {
++            if (input == null) {
++                throw new IllegalStateException("The selected file could not be opened.");
++            }
++            byte[] buffer = new byte[1024 * 1024];
++            long nextProgress = 64L * 1024L * 1024L;
++            int count;
++            while ((count = input.read(buffer)) >= 0) {
++                if (count == 0) {
++                    continue;
++                }
++                if (firstCount < firstBytes.length) {
++                    int amount = Math.min(firstBytes.length - firstCount, count);
++                    System.arraycopy(buffer, 0, firstBytes, firstCount, amount);
++                    firstCount += amount;
++                }
++                output.write(buffer, 0, count);
++                digest.update(buffer, 0, count);
++                copied += count;
++                if (copied >= nextProgress) {
++                    String progress = reportedSize > 0L
++                            ? "Copying model: "
++                            + Math.min(99L, (copied * 100L) / reportedSize)
++                            + "%"
++                            : "Copying model: " + formatBytes(copied);
++                    postLoadStatus(callback, progress);
++                    nextProgress += 64L * 1024L * 1024L;
++                }
++                if (copied > MAX_MODEL_BYTES) {
++                    throw new IllegalArgumentException("The selected model is larger than 3.5 GB.");
++                }
++            }
++            output.getFD().sync();
++        } catch (Exception problem) {
++            temporary.delete();
++            postLoadError(callback, "Model import stopped: " + safeProblem(problem));
++            return;
++        }
++
++        if (copied < MIN_MODEL_BYTES
++                || firstCount < 4
++                || firstBytes[0] != 'G'
++                || firstBytes[1] != 'G'
++                || firstBytes[2] != 'U'
++                || firstBytes[3] != 'F') {
++            temporary.delete();
++            postLoadError(callback, "That file is not a readable GGUF language model.");
++            return;
++        }
++
++        String sha256 = hex(digest.digest());
++        postLoadStatus(callback, "Verifying and loading local model");
++        nativeUnloadModel();
++        try {
++            Files.move(
++                    temporary.toPath(),
++                    modelFile().toPath(),
++                    StandardCopyOption.REPLACE_EXISTING,
++                    StandardCopyOption.ATOMIC_MOVE
++            );
++        } catch (Exception atomicProblem) {
++            try {
++                Files.move(
++                        temporary.toPath(),
++                        modelFile().toPath(),
++                        StandardCopyOption.REPLACE_EXISTING
++                );
++            } catch (Exception moveProblem) {
++                temporary.delete();
++                postLoadError(callback, "Sage could not finish saving the model.");
++                return;
++            }
++        }
++
++        String savedName = name.isEmpty() ? "Local GGUF model" : name;
++        preferences.edit()
++                .putBoolean(KEY_ENABLED, true)
++                .putString(KEY_MODEL_NAME, savedName)
++                .putLong(KEY_MODEL_SIZE, copied)
++                .putString(KEY_MODEL_SHA256, sha256)
++                .commit();
++        state = State.NOT_CONFIGURED;
++        lastError = "";
++        String error = ensureLoadedOnWorker();
++        if (!error.isEmpty()) {
++            postLoadError(callback, error);
++            return;
++        }
++        String verification = RECOMMENDED_MODEL_SHA256.equalsIgnoreCase(sha256)
++                ? "Official Qwen model verified. "
++                : "Custom GGUF imported. ";
++        postLoadReady(
++                callback,
++                verification
++                        + modelSummary()
++                        + " You can delete the original downloaded copy to reclaim storage."
++        );
++    }
++
++    private String ensureLoadedOnWorker() {
++        if (!NATIVE_AVAILABLE) {
++            return fail("Brain engine unavailable: " + NATIVE_LOAD_ERROR);
++        }
++        if (!isEnabled()) {
++            state = State.DISABLED;
++            return fail("Sage Brain is turned off.");
++        }
++        File model = modelFile();
++        if (!model.isFile() || model.length() < MIN_MODEL_BYTES) {
++            state = State.NOT_CONFIGURED;
++            return fail("Choose a local GGUF model under Sage Brain first.");
++        }
++        if (state == State.READY) {
++            return "";
++        }
++        state = State.LOADING;
++        status = "Loading " + preferences.getString(KEY_MODEL_NAME, "local GGUF model");
++        boolean loaded;
++        try {
++            loaded = nativeLoadModel(model.getAbsolutePath());
++        } catch (Throwable problem) {
++            return fail("Local model could not load: " + safeProblem(problem));
++        }
++        if (!loaded) {
++            return fail(nativeErrorOr("Local model could not load."));
++        }
++        state = State.READY;
++        status = "Sage Brain ready";
++        lastError = "";
++        return "";
++    }
++
++    private Reply parseReply(String original, String raw) {
++        String cleaned = cleanModelOutput(raw);
++        String action = valueAfterMarker(cleaned, "ACTION");
++        if (!action.isEmpty() && isSafeProposedAction(original, action)) {
++            return Reply.action(limit(action, 260));
++        }
++        String answer = valueAfterMarker(cleaned, "ANSWER");
++        if (answer.isEmpty()) {
++            answer = cleaned
++                    .replaceFirst("(?i)^ACTION\\s*[|:]\\s*", "")
++                    .replaceFirst("(?i)^ANSWER\\s*[|:]\\s*", "");
++        }
++        if (!action.isEmpty() && answer.equals(action)) {
++            answer = "I understood the request, but I would rather not guess at a tablet action.";
++        }
++        return Reply.answer(limit(clean(answer), MAX_VISIBLE_REPLY_CHARS));
++    }
++
++    private boolean isSafeProposedAction(String original, String proposed) {
++        String user = normalize(original);
++        String action = normalize(proposed);
++        if (action.isEmpty() || action.length() > 260
++                || action.contains("delete ")
++                || action.contains("uninstall ")
++                || action.contains("clear memory")
++                || action.contains("forget everything")
++                || action.contains("password")
++                || action.contains("purchase ")
++                || action.contains("buy ")
++                || action.contains("pay ")) {
++            return false;
++        }
++        if (startsWithAny(action, "type ", "write ")) {
++            return containsAny(user, "type", "write", "enter", "put");
++        }
++        if (startsWithAny(action, "tap ", "click ", "press ", "choose ", "select ", "pick ")) {
++            return containsAny(user, "tap", "click", "press", "choose", "select", "pick", "hit");
++        }
++        if (startsWithAny(action, "remember ", "note ")) {
++            return containsAny(user, "remember", "note", "save");
++        }
++        if (startsWithAny(action, "open ", "go to ", "search ", "search for ",
++                "look up ", "find ", "youtube ", "search youtube for ")) {
++            return containsAny(user, "open", "go", "take me", "search", "look", "find", "youtube");
++        }
++        if (action.equals("home") || action.equals("go home")) {
++            return containsAny(user, "home");
++        }
++        if (action.equals("back") || action.equals("go back")) {
++            return containsAny(user, "back");
++        }
++        if (action.equals("recents") || action.equals("recent apps")) {
++            return containsAny(user, "recent", "apps");
++        }
++        if (action.equals("scroll down") || action.equals("scroll up")) {
++            return containsAny(user, "scroll", "down", "up");
++        }
++        if (startsWithAny(action, "volume ", "mute", "unmute", "pause", "next", "previous")) {
++            return containsAny(user, "volume", "louder", "quieter", "mute", "pause",
++                    "play", "next", "skip", "previous");
++        }
++        return action.equals("show notifications") && containsAny(user, "notification");
++    }
++
++    private String buildSystemPrompt() {
++        return "You are Sage, a private local voice assistant on an Android tablet. "
++                + "Be useful, concise, warm, and truthful. Decide whether the user wants a tablet "
++                + "action or a spoken answer. Return exactly one line in one of these formats: "
++                + "ACTION|canonical command OR ANSWER|short answer. "
++                + "Allowed canonical commands are: open TARGET; go to TARGET; search for QUERY; "
++                + "search YouTube for QUERY; tap LABEL; type TEXT; home; back; recents; scroll up; "
++                + "scroll down; show notifications; volume up; volume down; mute; unmute; pause; "
++                + "next; previous; remember NOTE. Use ACTION only for a direct user request. "
++                + "Never invent an action, current fact, or ability. Never use Markdown. "
++                + "Keep answers to two short sentences.";
++    }
++
++    private String buildUserPrompt(String userText) {
++        StringBuilder prompt = new StringBuilder();
++        String memories = memorySummary();
++        if (!memories.isEmpty()) {
++            prompt.append("Saved user notes: ").append(memories).append('\n');
++        }
++        synchronized (recentTurns) {
++            if (!recentTurns.isEmpty()) {
++                prompt.append("Recent conversation:\n");
++                for (String turn : recentTurns) {
++                    prompt.append(turn).append('\n');
++                }
++            }
++        }
++        prompt.append("User said: ").append(limit(userText, 700)).append("\n/no_think");
++        return prompt.toString();
++    }
++
++    private String memorySummary() {
++        Set<String> saved = preferences.getStringSet("memory_items", new HashSet<>());
++        if (saved == null || saved.isEmpty()) {
++            return "";
++        }
++        List<String> notes = new ArrayList<>(saved);
++        notes.sort(String.CASE_INSENSITIVE_ORDER);
++        StringBuilder summary = new StringBuilder();
++        for (String note : notes) {
++            if (summary.length() > 0) {
++                summary.append("; ");
++            }
++            summary.append(limit(clean(note), 100));
++            if (summary.length() >= 420) {
++                break;
++            }
++        }
++        return limit(summary.toString(), 420);
++    }
++
++    private void rememberTurn(String turn) {
++        synchronized (recentTurns) {
++            recentTurns.addLast(limit(turn, 320));
++            while (recentTurns.size() > 6) {
++                recentTurns.removeFirst();
++            }
++        }
++    }
++
++    private String modelSummary() {
++        String name = preferences.getString(KEY_MODEL_NAME, "Local GGUF model");
++        long size = preferences.getLong(KEY_MODEL_SIZE, modelFile().length());
++        return "Sage Brain ready with " + name + " (" + formatBytes(size) + ").";
++    }
++
++    private String fail(String message) {
++        state = State.ERROR;
++        status = clean(message);
++        lastError = status;
++        SageDiagnostics.recordError(context, "Sage Brain: " + status);
++        return status;
++    }
++
++    private File brainDirectory() {
++        return new File(context.getFilesDir(), "brain");
++    }
++
++    private File modelFile() {
++        return new File(brainDirectory(), "sage-brain.gguf");
++    }
++
++    private long availableStorageBytes() {
++        try {
++            return new StatFs(context.getFilesDir().getAbsolutePath()).getAvailableBytes();
++        } catch (Exception ignored) {
++            return 0L;
++        }
++    }
++
++    private long querySize(Uri uri) {
++        Cursor cursor = null;
++        try {
++            cursor = context.getContentResolver().query(uri, null, null, null, null);
++            if (cursor != null && cursor.moveToFirst()) {
++                int index = cursor.getColumnIndex(OpenableColumns.SIZE);
++                if (index >= 0 && !cursor.isNull(index)) {
++                    return cursor.getLong(index);
++                }
++            }
++        } catch (Exception ignored) {
++        } finally {
++            if (cursor != null) {
++                cursor.close();
++            }
++        }
++        return -1L;
++    }
++
++    private String queryDisplayName(Uri uri) {
++        Cursor cursor = null;
++        try {
++            cursor = context.getContentResolver().query(uri, null, null, null, null);
++            if (cursor != null && cursor.moveToFirst()) {
++                int index = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME);
++                if (index >= 0) {
++                    return clean(cursor.getString(index));
++                }
++            }
++        } catch (Exception ignored) {
++        } finally {
++            if (cursor != null) {
++                cursor.close();
++            }
++        }
++        return "";
++    }
++
++    private String nativeErrorOr(String fallback) {
++        try {
++            String nativeError = nativeLastError();
++            return nativeError == null || nativeError.trim().isEmpty()
++                    ? fallback
++                    : clean(nativeError);
++        } catch (Throwable ignored) {
++            return fallback;
++        }
++    }
++
++    private String cleanModelOutput(String raw) {
++        String value = raw == null ? "" : raw;
++        value = value.replaceAll("(?is)<think>.*?</think>", " ");
++        value = value.replaceAll("(?is)^.*?</think>", " ");
++        value = value.replace("```", " ").trim();
++        int doubleBreak = value.indexOf("\n\n");
++        if (doubleBreak > 0) {
++            value = value.substring(0, doubleBreak);
++        }
++        return clean(value);
++    }
++
++    private static String valueAfterMarker(String value, String marker) {
++        String[] lines = value.split("\\r?\\n");
++        for (String line : lines) {
++            String trimmed = clean(line);
++            if (trimmed.matches("(?i)^" + marker + "\\s*[|:].*")) {
++                return clean(trimmed.replaceFirst(
++                        "(?i)^" + marker + "\\s*[|:]\\s*",
++                        ""
++                ));
++            }
++        }
++        return "";
++    }
++
++    private void postLoadStatus(LoadCallback callback, String message) {
++        status = clean(message);
++        if (callback != null) {
++            mainHandler.post(() -> callback.onStatus(status));
++        }
++    }
++
++    private void postLoadReady(LoadCallback callback, String message) {
++        if (callback != null) {
++            mainHandler.post(() -> callback.onReady(message));
++        }
++    }
++
++    private void postLoadError(LoadCallback callback, String message) {
++        String cleaned = fail(message);
++        if (callback != null) {
++            mainHandler.post(() -> callback.onError(cleaned));
++        }
++    }
++
++    private void postReplyStatus(ReplyCallback callback, String message) {
++        if (callback != null) {
++            mainHandler.post(() -> callback.onStatus(message));
++        }
++    }
++
++    private void postReply(ReplyCallback callback, Reply reply) {
++        if (callback != null) {
++            mainHandler.post(() -> callback.onReply(reply));
++        }
++    }
++
++    private void postReplyError(ReplyCallback callback, String message) {
++        if (callback != null) {
++            mainHandler.post(() -> callback.onError(clean(message)));
++        }
++    }
++
++    private static String normalize(String value) {
++        return clean(value).toLowerCase(Locale.US)
++                .replaceAll("[^a-z0-9. ]", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
++    }
++
++    private static boolean startsWithAny(String value, String... prefixes) {
++        for (String prefix : prefixes) {
++            if (value.equals(prefix) || value.startsWith(prefix)) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static boolean containsAny(String value, String... pieces) {
++        String padded = " " + value + " ";
++        for (String piece : pieces) {
++            if (piece.contains(" ")) {
++                if (value.contains(piece)) {
++                    return true;
++                }
++            } else if (padded.contains(" " + piece + " ")) {
++                return true;
++            }
++        }
++        return false;
++    }
++
++    private static String formatBytes(long bytes) {
++        if (bytes <= 0L) {
++            return "unknown";
++        }
++        double gib = bytes / (1024.0 * 1024.0 * 1024.0);
++        if (gib >= 1.0) {
++            return String.format(Locale.US, "%.2f GB", gib);
++        }
++        return String.format(Locale.US, "%.0f MB", bytes / (1024.0 * 1024.0));
++    }
++
++    private static String hex(byte[] bytes) {
++        StringBuilder result = new StringBuilder(bytes.length * 2);
++        for (byte value : bytes) {
++            result.append(String.format(Locale.US, "%02x", value & 0xff));
++        }
++        return result.toString();
++    }
++
++    private static String limit(String value, int maximum) {
++        String cleaned = clean(value);
++        if (cleaned.length() <= maximum) {
++            return cleaned;
++        }
++        return cleaned.substring(0, maximum).trim() + "…";
++    }
++
++    private static String safeProblem(Throwable problem) {
++        if (problem == null) {
++            return "unknown error";
++        }
++        String message = clean(problem.getMessage());
++        return message.isEmpty() ? problem.getClass().getSimpleName() : message;
++    }
++
++    private static String clean(String value) {
++        return value == null
++                ? ""
++                : value.replace('\u0000', ' ').replaceAll("\\s+", " ").trim();
++    }
++
++    private static native boolean nativeLoadModel(String path);
++    private static native String nativeGenerate(String systemPrompt, String userPrompt, int maxTokens);
++    private static native void nativeUnloadModel();
++    private static native String nativeLastError();
++}
+diff --git a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+index 244142a..6f44761 100644
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -31,24 +31,39 @@ public class SageCommandEngine {
+         public final String message;
+         public final boolean stopListening;
+         public final boolean speak;
++        public final boolean matched;
+ 
+         public Result(String message) {
+-            this(message, false, true);
++            this(message, false, true, true);
+         }
+ 
+         public Result(String message, boolean stopListening) {
+-            this(message, stopListening, true);
++            this(message, stopListening, true, true);
+         }
+ 
+         public Result(String message, boolean stopListening, boolean speak) {
++            this(message, stopListening, speak, true);
++        }
++
++        private Result(
++                String message,
++                boolean stopListening,
++                boolean speak,
++                boolean matched
++        ) {
+             this.message = message;
+             this.stopListening = stopListening;
+             this.speak = speak;
++            this.matched = matched;
+         }
+ 
+         public static Result quiet(String message) {
+             return new Result(message, false, false);
+         }
++
++        public static Result unmatched(String message) {
++            return new Result(message, false, true, false);
++        }
+     }
+ 
+     private final Context context;
+@@ -388,7 +403,7 @@ public class SageCommandEngine {
+         }
+ 
+         preferences.edit().putString("last_unmatched", raw).apply();
+-        return new Result("I heard \"" + raw + "\" but could not match it yet. Say that means, followed by what you wanted, and I will remember your phrasing.");
++        return Result.unmatched("I heard \"" + raw + "\" but could not match it yet. Say that means, followed by what you wanted, and I will remember your phrasing.");
+     }
+ 
+     private Result naturalScreenSelection(String raw, String lower) {
+diff --git a/app/src/main/java/com/pineapple/sage/SageDiagnostics.java b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+index 49b29d5..e4471b6 100644
+--- a/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
++++ b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+@@ -23,6 +23,9 @@ public final class SageDiagnostics {
+     private static final String KEY_BUSY_RETRIES = "busy_retries";
+     private static final String KEY_STALE_CALLBACKS = "stale_callbacks";
+     private static final String KEY_ECHO_REJECTIONS = "echo_rejections";
++    private static final String KEY_WAKE_DETECTIONS = "wake_detections";
++    private static final String KEY_LAST_WAKE_DETECTED = "last_wake_detected";
++    private static final String KEY_BRAIN_REQUESTS = "brain_requests";
+     private static final int MAX_LOG_CHARS = 12000;
+     private static final Object LOCK = new Object();
+ 
+@@ -84,6 +87,14 @@ public final class SageDiagnostics {
+         appendEvent(context, "WAKE", detail);
+     }
+ 
++    public static void wakeDetected(Context context, String detail) {
++        increment(context, KEY_WAKE_DETECTIONS);
++        preferences(context).edit()
++                .putString(KEY_LAST_WAKE_DETECTED, timestamp())
++                .apply();
++        appendEvent(context, "WAKE HEARD", detail);
++    }
++
+     public static void commandStarted(Context context, String detail) {
+         increment(context, KEY_COMMAND_STARTS);
+         preferences(context).edit().putString(KEY_LISTENER, "Android command turn").apply();
+@@ -110,6 +121,11 @@ public final class SageDiagnostics {
+         appendEvent(context, "ECHO", detail);
+     }
+ 
++    public static void brainRequest(Context context, String detail) {
++        increment(context, KEY_BRAIN_REQUESTS);
++        appendEvent(context, "BRAIN", detail);
++    }
++
+     public static void appendEvent(Context context, String category, String detail) {
+         synchronized (LOCK) {
+             SharedPreferences preferences = preferences(context);
+@@ -135,14 +151,19 @@ public final class SageDiagnostics {
+         String listener = preferences.getString(KEY_LISTENER, "None");
+         String heard = preferences.getString(KEY_LAST_HEARD, "");
+         String error = preferences.getString(KEY_LAST_ERROR, "");
++        String lastWake = preferences.getString(KEY_LAST_WAKE_DETECTED, "");
+         float mic = preferences.getFloat(KEY_MIC_LEVEL, 0.0f);
+         return "State: " + state
+                 + "\nListener: " + listener
+                 + "\nMic level: " + String.format(Locale.US, "%.1f dB", mic)
+                 + "\nLast heard: " + (heard == null || heard.isEmpty() ? "Nothing yet" : heard)
++                + "\nLast wake word: "
++                + (lastWake == null || lastWake.isEmpty() ? "Not detected yet" : lastWake)
+                 + "\nLast error: " + (error == null || error.isEmpty() ? "None" : error)
+                 + "\nWake starts: " + preferences.getInt(KEY_WAKE_STARTS, 0)
+-                + "  •  Command turns: " + preferences.getInt(KEY_COMMAND_STARTS, 0)
++                + "  •  Wake words heard: " + preferences.getInt(KEY_WAKE_DETECTIONS, 0)
++                + "\nCommand turns: " + preferences.getInt(KEY_COMMAND_STARTS, 0)
++                + "  •  Brain requests: " + preferences.getInt(KEY_BRAIN_REQUESTS, 0)
+                 + "\nSilent turns closed: " + preferences.getInt(KEY_SILENCE_CLOSES, 0)
+                 + "  •  Busy retries: " + preferences.getInt(KEY_BUSY_RETRIES, 0)
+                 + "\nStale callbacks blocked: " + preferences.getInt(KEY_STALE_CALLBACKS, 0)
+diff --git a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+index cdc3d92..5d23f24 100644
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -16,6 +16,8 @@ import android.os.Bundle;
+ import android.os.Handler;
+ import android.os.IBinder;
+ import android.os.Looper;
++import android.os.VibrationEffect;
++import android.os.Vibrator;
+ import android.speech.RecognitionListener;
+ import android.speech.RecognizerIntent;
+ import android.speech.SpeechRecognizer;
+@@ -51,8 +53,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private static final int NOTIFICATION_ID = 1042;
+     private static final String WAKE_MODEL_ASSET = "model-en-us";
+     private static final Locale COMMAND_LOCALE = Locale.US;
+-    private static final long WAKE_ECHO_GUARD_MS = 3500L;
+-    private static final long COMMAND_PROMPT_ECHO_GUARD_MS = 1200L;
++    private static final long WAKE_ECHO_GUARD_MS = 800L;
++    private static final long COMMAND_PROMPT_ECHO_GUARD_MS = 250L;
++    private static final long MEDIA_ECHO_GUARD_MS = 1800L;
+     private static final long ECHO_TEXT_WINDOW_MS = 6000L;
+     private static final long CONVERSATION_WINDOW_MS = 45000L;
+     private static final long COMMAND_BUSY_RETRY_MS = 1400L;
+@@ -77,6 +80,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private MediaPlayer responsePlayer;
+     private SageCommandEngine commandEngine;
+     private SageTranslationManager translationManager;
++    private SageBrainManager brainManager;
+     private SharedPreferences preferences;
+ 
+     private Model wakeModel;
+@@ -84,6 +88,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private boolean wakeModelLoading;
+     private boolean wakeModelReady;
+     private boolean wakeListening;
++    private boolean wakeConfirmedForCapture;
+     private String latestWakeText = "";
+ 
+     private boolean speaking;
+@@ -102,6 +107,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private boolean singleCommandArmed;
+     private long conversationExpiresAtMs;
+     private boolean translationInProgress;
++    private boolean brainInProgress;
++    private boolean mediaResponseFinishing;
+     private boolean restoreDefaultSpeechLanguage;
+     private Locale defaultSpeechLocale = Locale.getDefault();
+ 
+@@ -115,6 +122,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         running = true;
+         commandEngine = new SageCommandEngine(this);
+         translationManager = new SageTranslationManager();
++        brainManager = SageBrainManager.get(this);
+         preferences = getSharedPreferences("sage_state", Context.MODE_PRIVATE);
+         createNotificationChannel();
+         configureCommandRecognizerIntent();
+@@ -187,6 +195,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                         broadcastStatus("Wake listener ready");
+                     }
+                     startWakeListening(250);
++                    handler.postDelayed(this::prepareBrainQuietly, 1800L);
+                 }),
+                 exception -> handler.post(() -> {
+                     wakeModelLoading = false;
+@@ -227,6 +236,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 Recognizer recognizer = new Recognizer(wakeModel, 16000.0f, buildWakeGrammar());
+                 wakeSpeechService = new SpeechService(recognizer, 16000.0f);
+                 wakeListening = true;
++                wakeConfirmedForCapture = false;
+                 latestWakeText = "";
+                 SageDiagnostics.wakeStarted(this, "Quiet offline listener started");
+                 wakeSpeechService.startListening(new org.vosk.android.RecognitionListener() {
+@@ -314,9 +324,19 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             return;
+         }
+         SageDiagnostics.recordHeard(this, normalized);
++        if (!wakeConfirmedForCapture) {
++            wakeConfirmedForCapture = true;
++            SageDiagnostics.wakeDetected(this, normalized);
++            confirmWakeWithHaptic();
++        }
+         latestWakeText = normalized;
+         handler.removeCallbacks(finishWakeCaptureRunnable);
+-        handler.postDelayed(finishWakeCaptureRunnable, finalResult ? 120L : 850L);
++        long captureDelay = finalResult
++                ? 80L
++                : isExactWakePhrase(normalized)
++                ? 280L
++                : 650L;
++        handler.postDelayed(finishWakeCaptureRunnable, captureDelay);
+         broadcastStatus("Sage heard her name");
+     }
+ 
+@@ -440,6 +460,46 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         return remainder;
+     }
+ 
++    private boolean isExactWakePhrase(String normalized) {
++        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
++            if (normalized.equals(prefix)) {
++                return true;
++            }
++        }
++        for (String alias : EXACT_WAKE_ALIASES) {
++            if (normalized.equals(alias)) {
++                return true;
++            }
++        }
++        Set<String> aliases = preferences.getStringSet("wake_aliases", null);
++        if (aliases != null) {
++            for (String alias : aliases) {
++                if (normalized.equals(normalizeForEcho(alias))) {
++                    return true;
++                }
++            }
++        }
++        return false;
++    }
++
++    private void confirmWakeWithHaptic() {
++        try {
++            Vibrator vibrator = (Vibrator) getSystemService(VIBRATOR_SERVICE);
++            if (vibrator == null || !vibrator.hasVibrator()) {
++                return;
++            }
++            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++                vibrator.vibrate(VibrationEffect.createOneShot(
++                        35L,
++                        VibrationEffect.DEFAULT_AMPLITUDE
++                ));
++            } else {
++                vibrator.vibrate(35L);
++            }
++        } catch (RuntimeException ignored) {
++        }
++    }
++
+     private String extractVoskText(String json, String field) {
+         if (json == null) {
+             return "";
+@@ -480,9 +540,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+         recognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+         recognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 10);
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 2500L);
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1300L);
+-        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 900L);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1200L);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 850L);
++        recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 600L);
+     }
+ 
+     private void startCommandRecognition(long delayMs) {
+@@ -851,6 +911,10 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             broadcastLine("Sage", "I am still preparing that translation.");
+             return;
+         }
++        if (brainInProgress) {
++            broadcastLine("Sage", "I am still thinking about the last request.");
++            return;
++        }
+         SageDiagnostics.recordHeard(this, cleaned);
+         broadcastLine("You", cleaned);
+         if (isConversationCloseCommand(cleaned)) {
+@@ -884,7 +948,58 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             }
+             return;
+         }
++        if (brainManager != null
++                && brainManager.canAnswer()
++                && isOpenEndedBrainRequest(cleaned)) {
++            beginBrainRequest(
++                    cleaned,
++                    SageCommandEngine.Result.unmatched(
++                            "I heard \"" + cleaned + "\" but my local brain could not answer it."
++                    )
++            );
++            return;
++        }
+         SageCommandEngine.Result result = commandEngine.execute(cleaned);
++        if (!result.matched && brainManager != null && brainManager.canAnswer()) {
++            beginBrainRequest(cleaned, result);
++            return;
++        }
++        deliverCommandResult(result);
++    }
++
++    private boolean isOpenEndedBrainRequest(String command) {
++        String value = normalizeForEcho(command);
++        if (value.isEmpty()
++                || value.equals("what did you hear")
++                || value.equals("what did you think i said")
++                || value.equals("what can you do")
++                || value.equals("what do you remember")
++                || value.equals("what is on the screen")
++                || value.equals("what are my notifications")
++                || value.equals("what have i taught you")
++                || value.contains("translate ")) {
++            return false;
++        }
++        String[] starts = {
++                "tell me ", "explain ", "why ", "why is ", "why are ",
++                "how do ", "how can ", "how does ", "what is ", "what are ",
++                "who is ", "who was ", "when did ", "where is ", "do you know ",
++                "can you tell me ", "could you tell me ", "let s talk ", "i wonder "
++        };
++        for (String start : starts) {
++            if (value.startsWith(start)) {
++                return true;
++            }
++        }
++        return value.equals("hello")
++                || value.equals("hi")
++                || value.equals("hey")
++                || value.equals("good morning")
++                || value.equals("good afternoon")
++                || value.equals("good evening");
++    }
++
++    private void deliverCommandResult(SageCommandEngine.Result result) {
+         if (commandEngine.isAwaitingFollowUp()) {
+             openConversationWindow();
+             listenForCommandAfterSpeech = true;
+@@ -902,6 +1017,111 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         }
+     }
+ 
++    private void prepareBrainQuietly() {
++        if (brainManager == null || !brainManager.canAnswer() || brainManager.isReady()) {
++            return;
++        }
++        brainManager.prepareAsync(new SageBrainManager.LoadCallback() {
++            @Override
++            public void onStatus(String status) {
++                SageDiagnostics.appendEvent(
++                        SageVoiceService.this,
++                        "BRAIN",
++                        status
++                );
++            }
++
++            @Override
++            public void onReady(String summary) {
++                SageDiagnostics.appendEvent(
++                        SageVoiceService.this,
++                        "BRAIN",
++                        summary
++                );
++            }
++
++            @Override
++            public void onError(String message) {
++                SageDiagnostics.recordError(
++                        SageVoiceService.this,
++                        "Sage Brain preload: " + message
++                );
++            }
++        });
++    }
++
++    private void beginBrainRequest(
++            String originalCommand,
++            SageCommandEngine.Result fallbackResult
++    ) {
++        brainInProgress = true;
++        stopWakeListening();
++        destroyCommandRecognizer();
++        if (isConversationOpen()) {
++            extendConversationWindow();
++        }
++        SageDiagnostics.brainRequest(this, originalCommand);
++        broadcastStatus(brainManager.isReady()
++                ? "Sage Brain is thinking"
++                : "Loading Sage Brain");
++        updateNotification("Sage Brain is thinking");
++        brainManager.askAsync(originalCommand, new SageBrainManager.ReplyCallback() {
++            @Override
++            public void onStatus(String status) {
++                if (stopRequested) {
++                    return;
++                }
++                broadcastStatus(status);
++                updateNotification(status);
++                if (isConversationOpen()) {
++                    extendConversationWindow();
++                }
++            }
++
++            @Override
++            public void onReply(SageBrainManager.Reply reply) {
++                if (stopRequested) {
++                    brainInProgress = false;
++                    return;
++                }
++                brainInProgress = false;
++                if (reply.action) {
++                    SageCommandEngine.Result interpreted = commandEngine.execute(reply.text);
++                    if (interpreted.matched) {
++                        SageDiagnostics.appendEvent(
++                                SageVoiceService.this,
++                                "BRAIN ACTION",
++                                reply.text
++                        );
++                        deliverCommandResult(interpreted);
++                        return;
++                    }
++                    SageDiagnostics.recordError(
++                            SageVoiceService.this,
++                            "Brain proposed an unmatched action: " + reply.text
++                    );
++                    deliverCommandResult(fallbackResult);
++                    return;
++                }
++                deliverCommandResult(new SageCommandEngine.Result(reply.text));
++            }
++
++            @Override
++            public void onError(String message) {
++                if (stopRequested) {
++                    brainInProgress = false;
++                    return;
++                }
++                brainInProgress = false;
++                SageDiagnostics.recordError(
++                        SageVoiceService.this,
++                        "Sage Brain request: " + message
++                );
++                deliverCommandResult(fallbackResult);
++            }
++        });
++    }
++
+     private void playVoiceResponse(SageMediaResponseStore.Entry response) {
+         stopWakeListening();
+         destroyCommandRecognizer();
+@@ -911,7 +1131,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         releaseResponsePlayer();
+         speaking = true;
+         lastSpokenForEcho = "";
+-        ignoreRecognitionUntilMs = System.currentTimeMillis() + WAKE_ECHO_GUARD_MS;
++        ignoreRecognitionUntilMs = System.currentTimeMillis() + MEDIA_ECHO_GUARD_MS;
+         String label = response.displayName == null || response.displayName.trim().isEmpty()
+                 ? "the saved voice clip"
+                 : response.displayName;
+@@ -940,7 +1160,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 if (durationMs > 0) {
+                     ignoreRecognitionUntilMs = Math.max(
+                             ignoreRecognitionUntilMs,
+-                            System.currentTimeMillis() + durationMs + WAKE_ECHO_GUARD_MS
++                            System.currentTimeMillis() + durationMs + MEDIA_ECHO_GUARD_MS
+                     );
+                 }
+                 prepared.start();
+@@ -950,6 +1170,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                     return;
+                 }
+                 releaseResponsePlayer();
++                mediaResponseFinishing = true;
+                 afterSpeaking();
+             });
+             player.setOnErrorListener((failed, what, extra) -> {
+@@ -1138,16 +1359,19 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         long now = System.currentTimeMillis();
+         lastSpokenFinishedAtMs = now;
+         boolean promptFollowUp = listenForCommandAfterSpeech;
+-        long echoGuard = promptFollowUp
++        long echoGuard = mediaResponseFinishing
++                ? MEDIA_ECHO_GUARD_MS
++                : promptFollowUp
+                 ? COMMAND_PROMPT_ECHO_GUARD_MS
+                 : WAKE_ECHO_GUARD_MS;
+-        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, now + echoGuard);
++        mediaResponseFinishing = false;
++        ignoreRecognitionUntilMs = now + echoGuard;
+         if (stopRequested) {
+             stopSelf();
+         } else if (promptFollowUp || isConversationOpen()) {
+             listenForCommandAfterSpeech = false;
+             extendConversationWindow();
+-            long delay = Math.max(700L, ignoreRecognitionUntilMs - System.currentTimeMillis());
++            long delay = Math.max(250L, ignoreRecognitionUntilMs - System.currentTimeMillis());
+             broadcastStatus(promptFollowUp
+                     ? "Get ready to speak"
+                     : "Conversation open — speaker echo guard");
+@@ -1218,7 +1442,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         if (!conversationActive || stopRequested) {
+             return;
+         }
+-        if (translationInProgress) {
++        if (translationInProgress || brainInProgress) {
+             extendConversationWindow();
+             return;
+         }
+diff --git a/gradle.properties b/gradle.properties
+index 2e11322..10bb076 100644
+--- a/gradle.properties
++++ b/gradle.properties
+@@ -1,3 +1,4 @@
+ org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+ android.useAndroidX=true
+ android.nonTransitiveRClass=true
++org.gradle.workers.max=2
