@@ -1,0 +1,593 @@
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -2,6 +2,7 @@
+ 
+ import android.Manifest;
+ import android.app.Activity;
++import android.app.AlertDialog;
+ import android.content.BroadcastReceiver;
+ import android.content.Context;
+ import android.content.Intent;
+@@ -32,6 +33,7 @@
+ public class MainActivity extends Activity {
+     private static final int MICROPHONE_PERMISSION = 41;
+     private static final int UPDATE_FILE_PICKER = 42;
++    private static final int VOICE_RESPONSE_FILE_PICKER = 43;
+     private static final String APK_MIME = "application/vnd.android.package-archive";
+ 
+     private TextView statusText;
+@@ -44,9 +46,12 @@
+     private EditText teachMeaning;
+     private EditText memoryItem;
+     private TextView teachingSummary;
++    private EditText voiceResponsePhrase;
++    private TextView voiceResponseSummary;
+     private Uri pendingUpdateUri;
+     private boolean talkAfterPermission;
+     private String pendingTypedCommand = "";
++    private String pendingVoiceResponsePhrase = "";
+ 
+     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
+         @Override
+@@ -60,6 +65,7 @@
+             if (speaker != null && text != null) {
+                 appendLine(speaker, text);
+                 refreshTeachingSummary();
++                refreshVoiceResponseSummary();
+             }
+             refreshStatus(status);
+         }
+@@ -96,7 +102,7 @@
+         root.addView(title, matchWrap());
+ 
+         TextView subtitle = new TextView(this);
+-        subtitle.setText("Strict wake word + saved voice lessons + translation");
++        subtitle.setText("Strict wake word + saved lessons + custom voice clips + translation");
+         subtitle.setTextSize(16);
+         subtitle.setTextColor(Color.DKGRAY);
+         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
+@@ -232,6 +238,46 @@
+         root.addView(teachingSummary, matchWrap());
+         refreshTeachingSummary();
+ 
++        TextView voiceResponseTitle = new TextView(this);
++        voiceResponseTitle.setText("Custom voice responses");
++        voiceResponseTitle.setTextSize(23);
++        voiceResponseTitle.setTextColor(Color.rgb(31, 41, 55));
++        voiceResponseTitle.setPadding(4, 18, 4, 4);
++        root.addView(voiceResponseTitle, spaced());
++
++        TextView voiceResponseHelp = new TextView(this);
++        voiceResponseHelp.setText("Give the response a command phrase, then choose an audio or video file from Drive or this tablet. Sage plays only its audio and pauses her microphone until it finishes. Save the command without the wake word—for example, “red queen mode,” not “Sage red queen mode.”");
++        voiceResponseHelp.setTextSize(15);
++        voiceResponseHelp.setTextColor(Color.DKGRAY);
++        voiceResponseHelp.setPadding(8, 2, 8, 8);
++        root.addView(voiceResponseHelp, matchWrap());
++
++        voiceResponsePhrase = new EditText(this);
++        voiceResponsePhrase.setHint("Command phrase");
++        voiceResponsePhrase.setText("red queen mode");
++        voiceResponsePhrase.setSingleLine(false);
++        voiceResponsePhrase.setTextSize(17);
++        root.addView(voiceResponsePhrase, spacedSmall());
++
++        Button chooseVoiceResponse = makeButton("Choose audio/video response");
++        chooseVoiceResponse.setOnClickListener(v -> chooseVoiceResponseFile());
++        root.addView(chooseVoiceResponse, spacedSmall());
++
++        Button testVoiceResponse = makeButton("Test saved voice response");
++        testVoiceResponse.setOnClickListener(v -> testVoiceResponse());
++        root.addView(testVoiceResponse, spacedSmall());
++
++        Button clearVoiceResponses = makeButton("Clear custom voice responses");
++        clearVoiceResponses.setOnClickListener(v -> confirmClearVoiceResponses());
++        root.addView(clearVoiceResponses, spacedSmall());
++
++        voiceResponseSummary = new TextView(this);
++        voiceResponseSummary.setTextSize(15);
++        voiceResponseSummary.setTextColor(Color.rgb(55, 65, 81));
++        voiceResponseSummary.setPadding(8, 10, 8, 4);
++        root.addView(voiceResponseSummary, matchWrap());
++        refreshVoiceResponseSummary();
++
+         Button translationCredit = makeButton("Powered by Google Translate");
+         translationCredit.setOnClickListener(v -> {
+             try {
+@@ -253,7 +299,7 @@
+         root.addView(translationDisclaimer, matchWrap());
+ 
+         conversationText = new TextView(this);
+-        conversationText.setText("Wake-word mode is the default: say Sage, wait for Yes, then give one command. Sage returns to waiting for her name after she answers. If Sage asks you a question, she listens for that answer without making you repeat her name.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nUse the mode button above only when you want a 30-second hands-free conversation window.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
++        conversationText.setText("Wake-word mode is the default: say Sage, wait for Yes, then give one command. Sage returns to waiting for her name after she answers. If Sage asks you a question, she listens for that answer without making you repeat her name.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nUse the mode button above only when you want a 30-second hands-free conversation window.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
+         conversationText.setTextSize(17);
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+@@ -362,6 +408,26 @@
+         startActivityForResult(picker, UPDATE_FILE_PICKER);
+     }
+ 
++    private void chooseVoiceResponseFile() {
++        String phrase = voiceResponsePhrase.getText().toString().trim();
++        if (phrase.isEmpty()) {
++            Toast.makeText(this, "Type the command phrase Sage should respond to.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        pendingVoiceResponsePhrase = phrase;
++        Intent picker = new Intent(Intent.ACTION_OPEN_DOCUMENT);
++        picker.addCategory(Intent.CATEGORY_OPENABLE);
++        picker.setType("*/*");
++        picker.putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"audio/*", "video/*"});
++        picker.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
++        try {
++            startActivityForResult(picker, VOICE_RESPONSE_FILE_PICKER);
++        } catch (Exception error) {
++            pendingVoiceResponsePhrase = "";
++            Toast.makeText(this, "Android could not open the audio/video picker.", Toast.LENGTH_LONG).show();
++        }
++    }
++
+     private void openVoiceSettings() {
+         Intent voiceSettings = new Intent("com.android.settings.TTS_SETTINGS");
+         try {
+@@ -420,11 +486,24 @@
+     @Override
+     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+         super.onActivityResult(requestCode, resultCode, data);
+-        if (requestCode != UPDATE_FILE_PICKER || resultCode != RESULT_OK || data == null) {
++        if (resultCode != RESULT_OK || data == null) {
++            if (requestCode == VOICE_RESPONSE_FILE_PICKER) {
++                pendingVoiceResponsePhrase = "";
++            }
+             return;
+         }
+         Uri uri = data.getData();
+         if (uri == null) {
++            if (requestCode == VOICE_RESPONSE_FILE_PICKER) {
++                pendingVoiceResponsePhrase = "";
++            }
++            return;
++        }
++        if (requestCode == VOICE_RESPONSE_FILE_PICKER) {
++            saveVoiceResponse(data, uri);
++            return;
++        }
++        if (requestCode != UPDATE_FILE_PICKER) {
+             return;
+         }
+         String name = getDisplayName(uri);
+@@ -441,6 +520,104 @@
+         installPendingUpdate();
+     }
+ 
++    private void saveVoiceResponse(Intent data, Uri uri) {
++        String phrase = pendingVoiceResponsePhrase.trim();
++        pendingVoiceResponsePhrase = "";
++        if (phrase.isEmpty()) {
++            Toast.makeText(this, "The command phrase was lost. Choose the file again.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        String mimeType = getContentResolver().getType(uri);
++        if (mimeType != null
++                && !mimeType.isEmpty()
++                && !mimeType.startsWith("audio/")
++                && !mimeType.startsWith("video/")
++                && !mimeType.equals("application/octet-stream")) {
++            Toast.makeText(this, "Choose an audio or video file.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        try {
++            int flags = data.getFlags() & Intent.FLAG_GRANT_READ_URI_PERMISSION;
++            if (flags != 0) {
++                getContentResolver().takePersistableUriPermission(uri, flags);
++            }
++        } catch (Exception ignored) {
++        }
++        String displayName = getDisplayName(uri);
++        boolean saved = SageMediaResponseStore.save(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE),
++                phrase,
++                uri.toString(),
++                displayName
++        );
++        if (!saved) {
++            Toast.makeText(this, "Android could not save that voice response.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        voiceResponsePhrase.setText(phrase);
++        refreshVoiceResponseSummary();
++        Toast.makeText(
++                this,
++                "Saved. Say Sage, then “" + phrase + ".”",
++                Toast.LENGTH_LONG
++        ).show();
++    }
++
++    private void testVoiceResponse() {
++        String phrase = voiceResponsePhrase.getText().toString().trim();
++        if (phrase.isEmpty()) {
++            Toast.makeText(this, "Type a saved command phrase first.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        SageMediaResponseStore.Entry entry = SageMediaResponseStore.find(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE),
++                phrase
++        );
++        if (entry == null) {
++            Toast.makeText(this, "No voice response is saved for that phrase yet.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        dispatchTypedCommand(phrase);
++    }
++
++    private void confirmClearVoiceResponses() {
++        if (SageMediaResponseStore.list(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++        ).isEmpty()) {
++            Toast.makeText(this, "There are no custom voice responses to clear.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        new AlertDialog.Builder(this)
++                .setTitle("Clear voice responses?")
++                .setMessage("This removes every phrase-to-clip link. It does not delete the original files.")
++                .setNegativeButton("Cancel", null)
++                .setPositiveButton("Clear", (dialog, which) -> clearVoiceResponses())
++                .show();
++    }
++
++    private void clearVoiceResponses() {
++        for (SageMediaResponseStore.Entry entry : SageMediaResponseStore.list(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++        )) {
++            try {
++                getContentResolver().releasePersistableUriPermission(
++                        Uri.parse(entry.uri),
++                        Intent.FLAG_GRANT_READ_URI_PERMISSION
++                );
++            } catch (Exception ignored) {
++            }
++        }
++        boolean cleared = SageMediaResponseStore.clear(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++        );
++        refreshVoiceResponseSummary();
++        Toast.makeText(
++                this,
++                cleared ? "Custom voice responses cleared." : "Android could not clear the responses.",
++                Toast.LENGTH_LONG
++        ).show();
++    }
++
+     private void runTypedCommand() {
+         String command = typedCommand.getText().toString().trim();
+         if (command.isEmpty()) {
+@@ -536,6 +713,31 @@
+         teachingSummary.setText(summary.toString());
+     }
+ 
++    private void refreshVoiceResponseSummary() {
++        if (voiceResponseSummary == null) {
++            return;
++        }
++        ArrayList<String> responses = new ArrayList<>();
++        for (SageMediaResponseStore.Entry entry : SageMediaResponseStore.list(
++                getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++        )) {
++            responses.add(entry.phrase + " → " + entry.displayName);
++        }
++        StringBuilder summary = new StringBuilder("Saved: ")
++                .append(responses.size())
++                .append(" custom voice response")
++                .append(responses.size() == 1 ? "" : "s");
++        if (!responses.isEmpty()) {
++            summary.append("\n\nSaved voice responses:");
++            for (String response : responses) {
++                summary.append("\n• ").append(response);
++            }
++        } else {
++            summary.append("\nNo audio or video file is linked yet.");
++        }
++        voiceResponseSummary.setText(summary.toString());
++    }
++
+     private void refreshStatus(String serviceStatus) {
+         String status = serviceStatus == null
+                 ? (SageVoiceService.isRunning() ? "Listening service ON" : "Listening service OFF")
+@@ -616,6 +818,7 @@
+         refreshStatus(null);
+         refreshConversationModeButton();
+         refreshTeachingSummary();
++        refreshVoiceResponseSummary();
+         if (pendingUpdateUri != null
+                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O
+                 || getPackageManager().canRequestPackageInstalls())) {
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -8,6 +8,9 @@
+ import android.content.Context;
+ import android.content.Intent;
+ import android.content.SharedPreferences;
++import android.media.AudioAttributes;
++import android.media.MediaPlayer;
++import android.net.Uri;
+ import android.os.Build;
+ import android.os.Bundle;
+ import android.os.Handler;
+@@ -71,6 +74,7 @@
+     private Intent recognizerIntent;
+     private Intent wakeRecognizerIntent;
+     private TextToSpeech textToSpeech;
++    private MediaPlayer responsePlayer;
+     private SageCommandEngine commandEngine;
+     private SageTranslationManager translationManager;
+     private SharedPreferences preferences;
+@@ -928,7 +932,7 @@
+                 "help", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+                 "eighth", "ninth", "tenth", "video", "link", "result", "website", "settings",
+                 "translate", "language", "spanish", "french", "german", "japanese", "chinese",
+-                "teach", "taught", "when", "mean", "means", "phrase"
++                "teach", "taught", "when", "mean", "means", "phrase", "voice", "audio", "clip"
+         };
+         for (String cue : cues) {
+             if (padded.contains(" " + cue + " ")) {
+@@ -964,6 +968,12 @@
+         } else if (isConversationOpen()) {
+             extendConversationWindow();
+         }
++        SageMediaResponseStore.Entry voiceResponse =
++                SageMediaResponseStore.find(preferences, cleaned);
++        if (voiceResponse != null) {
++            playVoiceResponse(voiceResponse);
++            return;
++        }
+         SageTranslationManager.Request translationRequest = translationManager.parse(cleaned);
+         if (translationRequest != null) {
+             if (translationRequest.isValid()) {
+@@ -992,6 +1002,96 @@
+         }
+     }
+ 
++    private void playVoiceResponse(SageMediaResponseStore.Entry response) {
++        stopWakeListening();
++        destroyCommandRecognizer();
++        if (textToSpeech != null) {
++            textToSpeech.stop();
++        }
++        releaseResponsePlayer();
++        speaking = true;
++        lastWakePreview = "";
++        lastSpokenForEcho = "";
++        ignoreRecognitionUntilMs = System.currentTimeMillis() + WAKE_ECHO_GUARD_MS;
++        String label = response.displayName == null || response.displayName.trim().isEmpty()
++                ? "the saved voice clip"
++                : response.displayName;
++        broadcastLine("Sage", "Playing " + label + " for “" + response.phrase + ".”");
++        broadcastStatus("Playing custom voice");
++        updateNotification("Playing custom voice");
++
++        MediaPlayer player = new MediaPlayer();
++        responsePlayer = player;
++        try {
++            player.setAudioAttributes(new AudioAttributes.Builder()
++                    .setUsage(AudioAttributes.USAGE_ASSISTANT)
++                    .setContentType(AudioAttributes.CONTENT_TYPE_SPEECH)
++                    .build());
++            player.setDataSource(this, Uri.parse(response.uri));
++            player.setOnPreparedListener(prepared -> {
++                if (prepared != responsePlayer || stopRequested) {
++                    releaseResponsePlayer();
++                    speaking = false;
++                    if (stopRequested) {
++                        stopSelf();
++                    }
++                    return;
++                }
++                int durationMs = prepared.getDuration();
++                if (durationMs > 0) {
++                    ignoreRecognitionUntilMs = Math.max(
++                            ignoreRecognitionUntilMs,
++                            System.currentTimeMillis() + durationMs + WAKE_ECHO_GUARD_MS
++                    );
++                }
++                prepared.start();
++            });
++            player.setOnCompletionListener(completed -> {
++                if (completed != responsePlayer) {
++                    return;
++                }
++                releaseResponsePlayer();
++                afterSpeaking();
++            });
++            player.setOnErrorListener((failed, what, extra) -> {
++                if (failed == responsePlayer) {
++                    failVoiceResponse(response);
++                }
++                return true;
++            });
++            player.prepareAsync();
++        } catch (Exception error) {
++            failVoiceResponse(response);
++        }
++    }
++
++    private void failVoiceResponse(SageMediaResponseStore.Entry response) {
++        releaseResponsePlayer();
++        speaking = false;
++        String message = "I could not play that saved voice clip. "
++                + "If the file was moved or Drive access changed, choose it again under custom voice responses.";
++        broadcastLine("Sage", message);
++        speak(message);
++    }
++
++    private void releaseResponsePlayer() {
++        MediaPlayer player = responsePlayer;
++        responsePlayer = null;
++        if (player == null) {
++            return;
++        }
++        player.setOnPreparedListener(null);
++        player.setOnCompletionListener(null);
++        player.setOnErrorListener(null);
++        try {
++            if (player.isPlaying()) {
++                player.stop();
++            }
++        } catch (IllegalStateException ignored) {
++        }
++        player.release();
++    }
++
+     private void beginTranslation(SageTranslationManager.Request request) {
+         translationInProgress = true;
+         stopWakeListening();
+@@ -1382,6 +1482,7 @@
+         handler.removeCallbacksAndMessages(null);
+         stopWakeListening();
+         destroyCommandRecognizer();
++        releaseResponsePlayer();
+         if (translationManager != null) {
+             translationManager.close();
+         }
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -155,7 +155,7 @@
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I wait for the word Sage before each command unless you turn on conversation mode. Say remember this to teach me a phrase, or say when I say movie time, it means open YouTube. I can also translate, control the tablet, open apps and websites, search, scroll, type, control media, and read notifications.");
++            return new Result("I wait for the word Sage before each command unless you turn on conversation mode. Say remember this to teach me a phrase, or say when I say movie time, it means open YouTube. You can also link command phrases to voice clips in the app. I can translate, control the tablet, open apps and websites, search, scroll, type, control media, and read notifications.");
+         }
+ 
+         if (isAny(lower, "show numbers", "number the screen", "put numbers on the screen", "label the screen", "number everything")) {
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageMediaResponseStore.java
+@@ -0,0 +1,129 @@
++package com.pineapple.sage;
++
++import android.content.SharedPreferences;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Locale;
++import java.util.Set;
++
++final class SageMediaResponseStore {
++    private static final String PREFERENCE_KEY = "sage_voice_responses";
++    private static final String SEPARATOR = "\t";
++
++    static final class Entry {
++        final String normalizedPhrase;
++        final String phrase;
++        final String uri;
++        final String displayName;
++
++        Entry(String normalizedPhrase, String phrase, String uri, String displayName) {
++            this.normalizedPhrase = normalizedPhrase;
++            this.phrase = phrase;
++            this.uri = uri;
++            this.displayName = displayName;
++        }
++    }
++
++    private SageMediaResponseStore() {
++    }
++
++    static boolean save(
++            SharedPreferences preferences,
++            String phrase,
++            String uri,
++            String displayName
++    ) {
++        String cleanedPhrase = cleanField(phrase);
++        String normalized = normalize(cleanedPhrase);
++        String cleanedUri = cleanField(uri);
++        String cleanedName = cleanField(displayName);
++        if (normalized.isEmpty() || cleanedUri.isEmpty()) {
++            return false;
++        }
++        if (cleanedName.isEmpty()) {
++            cleanedName = "Selected voice clip";
++        }
++        Set<String> saved = new HashSet<>(
++                preferences.getStringSet(PREFERENCE_KEY, new HashSet<>())
++        );
++        saved.removeIf(raw -> {
++            Entry entry = parse(raw);
++            return entry != null && entry.normalizedPhrase.equals(normalized);
++        });
++        saved.add(
++                normalized + SEPARATOR
++                        + cleanedPhrase + SEPARATOR
++                        + cleanedUri + SEPARATOR
++                        + cleanedName
++        );
++        return preferences.edit().putStringSet(PREFERENCE_KEY, saved).commit();
++    }
++
++    static Entry find(SharedPreferences preferences, String spokenPhrase) {
++        String normalized = normalize(spokenPhrase);
++        if (normalized.isEmpty()) {
++            return null;
++        }
++        for (Entry entry : list(preferences)) {
++            if (entry.normalizedPhrase.equals(normalized)) {
++                return entry;
++            }
++        }
++        return null;
++    }
++
++    static List<Entry> list(SharedPreferences preferences) {
++        Set<String> saved = preferences.getStringSet(PREFERENCE_KEY, new HashSet<>());
++        List<Entry> entries = new ArrayList<>();
++        if (saved != null) {
++            for (String raw : saved) {
++                Entry entry = parse(raw);
++                if (entry != null) {
++                    entries.add(entry);
++                }
++            }
++        }
++        Collections.sort(
++                entries,
++                (left, right) -> left.phrase.compareToIgnoreCase(right.phrase)
++        );
++        return entries;
++    }
++
++    static boolean clear(SharedPreferences preferences) {
++        return preferences.edit().remove(PREFERENCE_KEY).commit();
++    }
++
++    static String normalize(String value) {
++        return value == null
++                ? ""
++                : value.toLowerCase(Locale.US)
++                        .replaceAll("[^a-z0-9 ]", " ")
++                        .replaceAll("\\s+", " ")
++                        .trim();
++    }
++
++    private static Entry parse(String raw) {
++        if (raw == null) {
++            return null;
++        }
++        String[] parts = raw.split(SEPARATOR, 4);
++        if (parts.length != 4 || parts[0].isEmpty() || parts[2].isEmpty()) {
++            return null;
++        }
++        return new Entry(parts[0], parts[1], parts[2], parts[3]);
++    }
++
++    private static String cleanField(String value) {
++        return value == null
++                ? ""
++                : value.replace('\t', ' ')
++                        .replace('\n', ' ')
++                        .replace('\r', ' ')
++                        .replaceAll("\\s+", " ")
++                        .trim();
++    }
++}
+

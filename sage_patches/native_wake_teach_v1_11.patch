@@ -1,0 +1,409 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -54 +54,7 @@
+-            "hey save", "okay save", "ok save", "save"
++            "hey save", "okay save", "ok save", "save",
++            "hey say", "okay say", "ok say",
++            "hey age", "okay age", "ok age",
++            "hey page", "okay page", "ok page"
++    };
++    private static final String[] EXACT_WAKE_SOUNDALIKES = {
++            "sage", "stage", "safe", "save", "say", "age", "page"
+@@ -63,0 +70 @@
++    private Intent wakeRecognizerIntent;
+@@ -72,0 +80,2 @@
++    private boolean nativeWakeListening;
++    private int nativeWakeFailures;
+@@ -73,0 +83 @@
++    private String lastWakePreview = "";
+@@ -96,0 +107 @@
++        configureWakeRecognizerIntent();
+@@ -110 +121 @@
+-        startForeground(NOTIFICATION_ID, buildNotification("Say Sage, then your command"));
++        startForeground(NOTIFICATION_ID, buildNotification("Say Sage"));
+@@ -122,2 +132,0 @@
+-        } else if (wakeModelReady) {
+-            startWakeListening(250);
+@@ -125 +134 @@
+-            broadcastStatus("Preparing wake word");
++            startWakeListening(250);
+@@ -150,2 +159,3 @@
+-                    broadcastStatus("Waiting for Sage");
+-                    updateNotification("Say Sage, then your command");
++                    if (!nativeWakeListening && !wakeListening && !commandListening && !speaking) {
++                        broadcastStatus("Wake listener ready");
++                    }
+@@ -157,3 +167,9 @@
+-                    broadcastLine("Sage", "The offline wake-word model could not start. Tap Listen to use one command at a time.");
+-                    broadcastStatus("Wake word unavailable");
+-                    updateNotification("Wake word unavailable");
++                    if (SpeechRecognizer.isRecognitionAvailable(this)) {
++                        broadcastStatus("Using high-accuracy wake listener");
++                        updateNotification("Say Sage");
++                        startWakeListening(250);
++                    } else {
++                        broadcastLine("Sage", "The wake-word services could not start. Tap Talk to Sage to use one command at a time.");
++                        broadcastStatus("Wake word unavailable");
++                        updateNotification("Wake word unavailable");
++                    }
+@@ -165,2 +181 @@
+-        if (stopRequested || speaking || commandListening || commandStartPending
+-                || !wakeModelReady || wakeModel == null) {
++        if (stopRequested || speaking || commandListening || commandStartPending) {
+@@ -171 +186,11 @@
+-                    || wakeListening || wakeModel == null) {
++                    || wakeListening || nativeWakeListening) {
++                return;
++            }
++            if (SpeechRecognizer.isRecognitionAvailable(this) && nativeWakeFailures < 3) {
++                startNativeWakeRecognition();
++                return;
++            }
++            if (!wakeModelReady || wakeModel == null) {
++                broadcastStatus("Preparing wake backup");
++                updateNotification("Preparing wake-word listener");
++                initializeWakeModel();
+@@ -218,2 +243,2 @@
+-                broadcastStatus("Waiting for Sage");
+-                updateNotification("Say Sage, then your command");
++                broadcastStatus("Waiting for Sage — offline backup");
++                updateNotification("Offline backup: say Sage");
+@@ -231,0 +257,9 @@
++        nativeWakeListening = false;
++        if (speechRecognizer != null && !commandListening) {
++            try {
++                speechRecognizer.cancel();
++            } catch (RuntimeException ignored) {
++            }
++            speechRecognizer.destroy();
++            speechRecognizer = null;
++        }
+@@ -241,0 +276,129 @@
++    private void startNativeWakeRecognition() {
++        if (stopRequested || speaking || commandListening || commandStartPending
++                || nativeWakeListening || wakeListening) {
++            return;
++        }
++        try {
++            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
++            speechRecognizer.setRecognitionListener(new RecognitionListener() {
++                @Override
++                public void onReadyForSpeech(Bundle params) {
++                    if (!nativeWakeListening) {
++                        return;
++                    }
++                    String status = lastWakePreview.isEmpty()
++                            ? "Waiting for Sage — high accuracy"
++                            : "Waiting for Sage — last heard: " + lastWakePreview;
++                    broadcastStatus(status);
++                    updateNotification("Say Sage");
++                }
++
++                @Override
++                public void onBeginningOfSpeech() {
++                    if (nativeWakeListening) {
++                        broadcastStatus("Checking wake word");
++                    }
++                }
++
++                @Override public void onRmsChanged(float rmsdB) { }
++                @Override public void onBufferReceived(byte[] buffer) { }
++                @Override public void onEndOfSpeech() { }
++
++                @Override
++                public void onError(int error) {
++                    if (!nativeWakeListening) {
++                        return;
++                    }
++                    nativeWakeListening = false;
++                    destroyCommandRecognizer();
++                    if (isNativeWakeFailure(error)) {
++                        nativeWakeFailures++;
++                    }
++                    if (!stopRequested && !speaking && !commandListening) {
++                        long retryDelay = error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 900L : 350L;
++                        startWakeListening(retryDelay);
++                    }
++                }
++
++                @Override
++                public void onResults(Bundle results) {
++                    if (!nativeWakeListening) {
++                        return;
++                    }
++                    if (handleNativeWakeResults(results, true)) {
++                        return;
++                    }
++                    nativeWakeListening = false;
++                    destroyCommandRecognizer();
++                    startWakeListening(250);
++                }
++
++                @Override
++                public void onPartialResults(Bundle partialResults) {
++                    if (nativeWakeListening) {
++                        handleNativeWakeResults(partialResults, false);
++                    }
++                }
++
++                @Override public void onEvent(int eventType, Bundle params) { }
++            });
++            nativeWakeListening = true;
++            speechRecognizer.startListening(wakeRecognizerIntent);
++            broadcastStatus("Starting high-accuracy wake listener");
++            updateNotification("Starting wake listener");
++        } catch (RuntimeException error) {
++            nativeWakeListening = false;
++            destroyCommandRecognizer();
++            nativeWakeFailures++;
++            startWakeListening(900);
++        }
++    }
++
++    private boolean handleNativeWakeResults(Bundle results, boolean finalResult) {
++        ArrayList<String> choices = results == null
++                ? null
++                : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
++        if (choices == null || choices.isEmpty()) {
++            return false;
++        }
++        String preview = "";
++        for (String choice : choices) {
++            String normalized = normalizeForEcho(choice);
++            if (normalized.isEmpty()) {
++                continue;
++            }
++            if (preview.isEmpty()) {
++                preview = normalized;
++            }
++            String command = commandAfterNativeWake(normalized);
++            if (command != null) {
++                nativeWakeFailures = 0;
++                lastWakePreview = "";
++                nativeWakeListening = false;
++                stopWakeListening();
++                respondToWake(command);
++                return true;
++            }
++        }
++        nativeWakeFailures = 0;
++        if (!preview.isEmpty()) {
++            String visible = preview.length() > 48 ? preview.substring(0, 48) + "…" : preview;
++            lastWakePreview = visible;
++            broadcastStatus("Wake heard: " + visible);
++            if (finalResult) {
++                updateNotification("Heard “" + visible + "” — waiting for Sage");
++            }
++        }
++        return false;
++    }
++
++    private boolean isNativeWakeFailure(int error) {
++        return error == SpeechRecognizer.ERROR_AUDIO
++                || error == SpeechRecognizer.ERROR_CLIENT
++                || error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
++                || error == SpeechRecognizer.ERROR_NETWORK
++                || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
++                || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
++                || error == SpeechRecognizer.ERROR_SERVER;
++    }
++
+@@ -266 +429,4 @@
+-        String command = commandAfterWake(captured);
++        respondToWake(commandAfterWake(captured));
++    }
++
++    private void respondToWake(String command) {
+@@ -275,0 +442,30 @@
++    private String commandAfterNativeWake(String text) {
++        String normalized = normalizeForEcho(text);
++        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
++            if (normalized.equals(prefix)) {
++                return "";
++            }
++            if (normalized.startsWith(prefix + " ")) {
++                return cleanWakeRemainder(normalized.substring(prefix.length()));
++            }
++        }
++        for (String soundalike : EXACT_WAKE_SOUNDALIKES) {
++            if (normalized.equals(soundalike)) {
++                return "";
++            }
++        }
++        Set<String> aliases = preferences.getStringSet("wake_aliases", null);
++        if (aliases != null) {
++            for (String alias : aliases) {
++                String wake = normalizeForEcho(alias);
++                if (normalized.equals(wake)) {
++                    return "";
++                }
++                if (!wake.isEmpty() && normalized.startsWith(wake + " ")) {
++                    return cleanWakeRemainder(normalized.substring(wake.length()));
++                }
++            }
++        }
++        return null;
++    }
++
+@@ -403,0 +600,13 @@
++    private void configureWakeRecognizerIntent() {
++        wakeRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, COMMAND_LOCALE.toLanguageTag());
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, COMMAND_LOCALE.toLanguageTag());
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 8);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 900L);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L);
++        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L);
++    }
++
+@@ -664 +873 @@
+-        updateNotification("Say Sage, then your command");
++        updateNotification("Say Sage");
+@@ -703 +912 @@
+-            updateNotification("Say Sage, then your command");
++            updateNotification("Say Sage");
+@@ -708,0 +918 @@
++        nativeWakeListening = false;
+@@ -825,0 +1036 @@
++        nativeWakeListening = false;
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -27,0 +28,2 @@
++import java.util.Set;
++
+@@ -37,0 +40,4 @@
++    private EditText teachPhrase;
++    private EditText teachMeaning;
++    private EditText memoryItem;
++    private TextView teachingSummary;
+@@ -39,0 +46 @@
++    private String pendingTypedCommand = "";
+@@ -51,0 +59 @@
++                refreshTeachingSummary();
+@@ -88 +96 @@
+-        subtitle.setText("Focused wake word + clearer US English commands");
++        subtitle.setText("High-accuracy wake word + commands you can teach");
+@@ -141,0 +150,51 @@
++        TextView teachTitle = new TextView(this);
++        teachTitle.setText("Teach Sage");
++        teachTitle.setTextSize(23);
++        teachTitle.setTextColor(Color.rgb(31, 41, 55));
++        teachTitle.setPadding(4, 18, 4, 4);
++        root.addView(teachTitle, spaced());
++
++        TextView teachHelp = new TextView(this);
++        teachHelp.setText("Give Sage your own phrase and the command it should run. These stay saved on this tablet after updates.");
++        teachHelp.setTextSize(15);
++        teachHelp.setTextColor(Color.DKGRAY);
++        teachHelp.setPadding(8, 2, 8, 8);
++        root.addView(teachHelp, matchWrap());
++
++        teachPhrase = new EditText(this);
++        teachPhrase.setHint("When I say…  example: movie time");
++        teachPhrase.setSingleLine(false);
++        teachPhrase.setTextSize(17);
++        root.addView(teachPhrase, spacedSmall());
++
++        teachMeaning = new EditText(this);
++        teachMeaning.setHint("Sage should…  example: open YouTube");
++        teachMeaning.setSingleLine(false);
++        teachMeaning.setTextSize(17);
++        root.addView(teachMeaning, spacedSmall());
++
++        Button teachButton = makeButton("Save this command");
++        teachButton.setOnClickListener(v -> teachSage());
++        root.addView(teachButton, spacedSmall());
++
++        memoryItem = new EditText(this);
++        memoryItem.setHint("Something Sage should remember");
++        memoryItem.setSingleLine(false);
++        memoryItem.setTextSize(17);
++        root.addView(memoryItem, spaced());
++
++        Button rememberButton = makeButton("Add to Sage’s memory");
++        rememberButton.setOnClickListener(v -> addMemoryItem());
++        root.addView(rememberButton, spacedSmall());
++
++        Button readMemoryButton = makeButton("Read Sage’s memory");
++        readMemoryButton.setOnClickListener(v -> dispatchTypedCommand("memory"));
++        root.addView(readMemoryButton, spacedSmall());
++
++        teachingSummary = new TextView(this);
++        teachingSummary.setTextSize(15);
++        teachingSummary.setTextColor(Color.rgb(55, 65, 81));
++        teachingSummary.setPadding(8, 10, 8, 4);
++        root.addView(teachingSummary, matchWrap());
++        refreshTeachingSummary();
++
+@@ -143 +202 @@
+-        conversationText.setText("Tap Talk to Sage and speak when the status says Listening for command.\n\nBackground mode: say Sage by itself, wait for her to answer Yes, then speak your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
++        conversationText.setText("Tap Start background listening. When the status says Waiting for Sage — high accuracy, say Sage by itself and pause. She will answer Yes, then you speak your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
+@@ -285 +344,30 @@
+-        appendLine("You", command);
++        dispatchTypedCommand(command);
++    }
++
++    private void teachSage() {
++        String phrase = teachPhrase.getText().toString().trim();
++        String meaning = teachMeaning.getText().toString().trim();
++        if (phrase.isEmpty() || meaning.isEmpty()) {
++            Toast.makeText(this, "Fill in both what you say and what Sage should do.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        teachPhrase.setText("");
++        teachMeaning.setText("");
++        dispatchTypedCommand("teach Sage " + phrase + " means " + meaning);
++    }
++
++    private void addMemoryItem() {
++        String item = memoryItem.getText().toString().trim();
++        if (item.isEmpty()) {
++            Toast.makeText(this, "Type what you want Sage to remember.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        memoryItem.setText("");
++        dispatchTypedCommand("remember " + item);
++    }
++
++    private void dispatchTypedCommand(String command) {
++        String value = command == null ? "" : command.trim();
++        if (value.isEmpty()) {
++            return;
++        }
+@@ -287 +375,3 @@
+-            Toast.makeText(this, "Grant microphone permission once so Sage can run as a voice service.", Toast.LENGTH_LONG).show();
++            pendingTypedCommand = value;
++            talkAfterPermission = false;
++            Toast.makeText(this, "Grant microphone permission once so Sage can run her voice service.", Toast.LENGTH_LONG).show();
+@@ -293 +383 @@
+-                .putExtra(SageVoiceService.EXTRA_COMMAND, command);
++                .putExtra(SageVoiceService.EXTRA_COMMAND, value);
+@@ -300,0 +391,16 @@
++    private void refreshTeachingSummary() {
++        if (teachingSummary == null) {
++            return;
++        }
++        Set<String> phrases = getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                .getStringSet("phrase_aliases", null);
++        Set<String> memories = getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                .getStringSet("memory_items", null);
++        int phraseCount = phrases == null ? 0 : phrases.size();
++        int memoryCount = memories == null ? 0 : memories.size();
++        teachingSummary.setText("Saved: " + phraseCount + " custom command"
++                + (phraseCount == 1 ? "" : "s")
++                + "  •  " + memoryCount + " memory note"
++                + (memoryCount == 1 ? "" : "s"));
++    }
++
+@@ -360 +466,5 @@
+-            if (talkAfterPermission) {
++            if (!pendingTypedCommand.isEmpty()) {
++                String command = pendingTypedCommand;
++                pendingTypedCommand = "";
++                dispatchTypedCommand(command);
++            } else if (talkAfterPermission) {
+@@ -374,0 +485 @@
++        refreshTeachingSummary();

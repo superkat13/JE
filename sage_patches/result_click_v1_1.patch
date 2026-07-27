@@ -1,0 +1,235 @@
+--- a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java	2026-07-26 08:51:02.000000000 +0000
++++ b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java	2026-07-26 09:59:19.329171719 +0000
+@@ -3,14 +3,20 @@
+ import android.accessibilityservice.AccessibilityService;
+ import android.accessibilityservice.GestureDescription;
+ import android.graphics.Path;
++import android.graphics.Rect;
+ import android.os.Bundle;
+ import android.util.DisplayMetrics;
+ import android.view.accessibility.AccessibilityEvent;
+ import android.view.accessibility.AccessibilityNodeInfo;
+ 
+ import java.util.ArrayDeque;
++import java.util.ArrayList;
++import java.util.Comparator;
+ import java.util.Deque;
++import java.util.HashSet;
++import java.util.List;
+ import java.util.Locale;
++import java.util.Set;
+ 
+ public class SageAccessibilityService extends AccessibilityService {
+     private static volatile SageAccessibilityService instance;
+@@ -92,17 +98,26 @@
+         }
+         String target = requestedText.trim().toLowerCase(Locale.US);
+         AccessibilityNodeInfo match = findTextMatch(root, target);
+-        if (match == null) {
++        return match != null && service.clickNodeOrTap(match);
++    }
++
++    public static boolean tapSearchResult(int resultNumber) {
++        SageAccessibilityService service = instance;
++        if (service == null || resultNumber < 1) {
+             return false;
+         }
+-        AccessibilityNodeInfo current = match;
+-        while (current != null) {
+-            if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+-                return true;
+-            }
+-            current = current.getParent();
++        AccessibilityNodeInfo root = service.getRootInActiveWindow();
++        if (root == null) {
++            return false;
+         }
+-        return match.performAction(AccessibilityNodeInfo.ACTION_CLICK);
++        List<AccessibilityNodeInfo> candidates = findResultCandidates(
++                root,
++                service.getResources().getDisplayMetrics().heightPixels
++        );
++        if (resultNumber > candidates.size()) {
++            return false;
++        }
++        return service.clickNodeOrTap(candidates.get(resultNumber - 1));
+     }
+ 
+     public static boolean typeText(String text) {
+@@ -165,6 +180,126 @@
+         return result.length() == 0 ? "I do not see readable text." : result.toString();
+     }
+ 
++    private boolean clickNodeOrTap(AccessibilityNodeInfo node) {
++        AccessibilityNodeInfo current = node;
++        AccessibilityNodeInfo bestBoundsNode = node;
++        while (current != null) {
++            Rect bounds = new Rect();
++            current.getBoundsInScreen(bounds);
++            if (!bounds.isEmpty()) {
++                bestBoundsNode = current;
++            }
++            if (current.isClickable() && current.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
++                return true;
++            }
++            current = current.getParent();
++        }
++        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
++            return true;
++        }
++        return tapNodeCenter(bestBoundsNode);
++    }
++
++    private boolean tapNodeCenter(AccessibilityNodeInfo node) {
++        if (node == null) {
++            return false;
++        }
++        Rect bounds = new Rect();
++        node.getBoundsInScreen(bounds);
++        if (bounds.isEmpty()) {
++            return false;
++        }
++        float x = bounds.exactCenterX();
++        float y = bounds.exactCenterY();
++        Path path = new Path();
++        path.moveTo(x, y);
++        GestureDescription gesture = new GestureDescription.Builder()
++                .addStroke(new GestureDescription.StrokeDescription(path, 0, 90))
++                .build();
++        return dispatchGesture(gesture, null, null);
++    }
++
++    private static List<AccessibilityNodeInfo> findResultCandidates(
++            AccessibilityNodeInfo root,
++            int screenHeight
++    ) {
++        List<AccessibilityNodeInfo> candidates = new ArrayList<>();
++        Set<String> seen = new HashSet<>();
++        Deque<AccessibilityNodeInfo> queue = new ArrayDeque<>();
++        queue.add(root);
++        int minimumY = Math.max(1, (int) (screenHeight * 0.18f));
++
++        while (!queue.isEmpty()) {
++            AccessibilityNodeInfo node = queue.removeFirst();
++            if (node.isVisibleToUser()) {
++                CharSequence rawText = node.getText();
++                if (rawText == null || rawText.length() == 0) {
++                    rawText = node.getContentDescription();
++                }
++                String text = rawText == null ? "" : rawText.toString().trim();
++                Rect bounds = new Rect();
++                node.getBoundsInScreen(bounds);
++                AccessibilityNodeInfo clickable = nearestClickable(node);
++                if (clickable != null
++                        && !bounds.isEmpty()
++                        && bounds.centerY() >= minimumY
++                        && looksLikeResultText(text)) {
++                    Rect clickBounds = new Rect();
++                    clickable.getBoundsInScreen(clickBounds);
++                    String key = clickBounds.flattenToString() + "|" + text.toLowerCase(Locale.US);
++                    if (seen.add(key)) {
++                        candidates.add(clickable);
++                    }
++                }
++            }
++            for (int i = 0; i < node.getChildCount(); i++) {
++                AccessibilityNodeInfo child = node.getChild(i);
++                if (child != null) {
++                    queue.addLast(child);
++                }
++            }
++        }
++
++        candidates.sort(Comparator.comparingInt(node -> {
++            Rect bounds = new Rect();
++            node.getBoundsInScreen(bounds);
++            return bounds.top;
++        }));
++        return candidates;
++    }
++
++    private static AccessibilityNodeInfo nearestClickable(AccessibilityNodeInfo node) {
++        AccessibilityNodeInfo current = node;
++        for (int depth = 0; current != null && depth < 6; depth++) {
++            if (current.isClickable()) {
++                return current;
++            }
++            current = current.getParent();
++        }
++        return null;
++    }
++
++    private static boolean looksLikeResultText(String text) {
++        if (text == null) {
++            return false;
++        }
++        String value = text.trim().toLowerCase(Locale.US);
++        if (value.length() < 5 || value.length() > 180) {
++            return false;
++        }
++        String[] ignored = {
++                "search", "all", "images", "videos", "news", "maps", "shopping",
++                "books", "more", "tools", "filters", "sign in", "home", "explore",
++                "shorts", "subscriptions", "library", "you", "youtube", "google"
++        };
++        for (String item : ignored) {
++            if (value.equals(item)) {
++                return false;
++            }
++        }
++        return true;
++    }
++
+     private boolean swipeFallback(boolean down) {
+         DisplayMetrics metrics = getResources().getDisplayMetrics();
+         float x = metrics.widthPixels * 0.5f;
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-07-26 08:51:02.000000000 +0000
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-07-26 09:59:19.329171719 +0000
+@@ -101,7 +101,7 @@
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I can open apps and websites, search YouTube or the web, go Home, Back, or Recents, scroll, tap visible words, type into a selected box, control volume and media, read notifications, read visible screen text, and remember notes.");
++            return new Result("I can open apps and websites, search YouTube or the web, go Home, Back, or Recents, scroll, open the first three search results, tap visible words, type into a selected box, control volume and media, read notifications, read visible screen text, and remember notes.");
+         }
+ 
+         if (isAny(lower, "back", "go back")) {
+@@ -126,6 +126,22 @@
+             return globalAction(SageAccessibilityService.scroll(false), "Scrolling up.");
+         }
+ 
++        if (isAny(lower,
++                "open first result", "tap first result", "click first result", "first result",
++                "open result one", "open result 1")) {
++            return openSearchResult(1);
++        }
++        if (isAny(lower,
++                "open second result", "tap second result", "click second result", "second result",
++                "open result two", "open result 2")) {
++            return openSearchResult(2);
++        }
++        if (isAny(lower,
++                "open third result", "tap third result", "click third result", "third result",
++                "open result three", "open result 3")) {
++            return openSearchResult(3);
++        }
++
+         if (lower.equals("tap") || lower.equals("click")) {
+             pendingAction = "tap";
+             return new Result("Tap what?");
+@@ -252,6 +268,15 @@
+                 : new Result("Tablet control is not enabled. Open Sage and tap Accessibility control once.");
+     }
+ 
++    private Result openSearchResult(int resultNumber) {
++        if (!SageAccessibilityService.isReady()) {
++            return new Result("Tablet control is not enabled. Open Sage and tap Accessibility control once.");
++        }
++        return SageAccessibilityService.tapSearchResult(resultNumber)
++                ? new Result("Opening result " + resultNumber + ".")
++                : new Result("I could not identify result " + resultNumber + " on this screen. Try saying tap followed by words from its title.");
++    }
++
+     private Result tapText(String text) {
+         String target = clean(text);
+         if (target.isEmpty()) {

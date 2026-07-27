@@ -1,0 +1,91 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -48,0 +49,3 @@
++    private static final long WAKE_ECHO_GUARD_MS = 3500L;
++    private static final long COMMAND_PROMPT_ECHO_GUARD_MS = 1200L;
++    private static final long ECHO_TEXT_WINDOW_MS = 6000L;
+@@ -92,0 +96 @@
++    private long lastSpokenFinishedAtMs;
+@@ -183,0 +188 @@
++        long safeDelay = Math.max(delayMs, ignoreRecognitionUntilMs - System.currentTimeMillis());
+@@ -188,0 +194,5 @@
++            long echoDelay = ignoreRecognitionUntilMs - System.currentTimeMillis();
++            if (echoDelay > 0L) {
++                startWakeListening(echoDelay + 100L);
++                return;
++            }
+@@ -251 +261 @@
+-        }, Math.max(0L, delayMs));
++        }, Math.max(0L, safeDelay));
+@@ -291 +301 @@
+-                            : "Waiting for Sage — last heard: " + lastWakePreview;
++                            : "Waiting for Sage — ignored (not Sage): " + lastWakePreview;
+@@ -333 +343 @@
+-                    startWakeListening(250);
++                    startWakeListening(700);
+@@ -357,0 +368,3 @@
++        if (System.currentTimeMillis() < ignoreRecognitionUntilMs) {
++            return false;
++        }
+@@ -387 +400 @@
+-            broadcastStatus("Wake heard: " + visible);
++            broadcastStatus("Ignored (not Sage): " + visible);
+@@ -389 +402 @@
+-                updateNotification("Heard “" + visible + "” — waiting for Sage");
++                updateNotification("Ignored “" + visible + "” — waiting for Sage");
+@@ -406 +419,2 @@
+-        if (text == null || text.trim().isEmpty() || stopRequested || speaking || commandListening) {
++        if (text == null || text.trim().isEmpty() || stopRequested || speaking || commandListening
++                || System.currentTimeMillis() < ignoreRecognitionUntilMs) {
+@@ -623,0 +638 @@
++        lastWakePreview = "";
+@@ -883,0 +899 @@
++        lastWakePreview = "";
+@@ -900 +916,6 @@
+-        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, System.currentTimeMillis() + 1200L);
++        long now = System.currentTimeMillis();
++        lastSpokenFinishedAtMs = now;
++        long echoGuard = listenForCommandAfterSpeech
++                ? COMMAND_PROMPT_ECHO_GUARD_MS
++                : WAKE_ECHO_GUARD_MS;
++        ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, now + echoGuard);
+@@ -911,2 +932,2 @@
+-            broadcastStatus("Waiting for Sage");
+-            updateNotification("Say Sage");
++            broadcastStatus("Speaker echo guard — wake listener paused");
++            updateNotification("Waiting for speaker echo to clear");
+@@ -934 +955,2 @@
+-        if (candidate.isEmpty() || spoken.isEmpty()) {
++        if (candidate.isEmpty() || spoken.isEmpty() || lastSpokenFinishedAtMs <= 0L
++                || System.currentTimeMillis() - lastSpokenFinishedAtMs > ECHO_TEXT_WINDOW_MS) {
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -136,0 +137,3 @@
++            if (action.equals("say")) {
++                return sayText(raw);
++            }
+@@ -288,0 +292,8 @@
++        if (lower.equals("say")) {
++            pendingAction = "say";
++            return new Result("What should I say?");
++        }
++        if (lower.startsWith("say ")) {
++            return sayText(raw.substring(4));
++        }
++
+@@ -594,0 +606,7 @@
++    }
++
++    private Result sayText(String text) {
++        String value = clean(text);
++        return value.isEmpty()
++                ? new Result("What should I say?")
++                : new Result(value);
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -96 +96 @@
+-        subtitle.setText("High-accuracy wake word + commands you can teach");
++        subtitle.setText("High-accuracy wake word + speaker echo protection");
+@@ -202 +202 @@
+-        conversationText.setText("Tap Start background listening. When the status says Waiting for Sage — high accuracy, say Sage by itself and pause. She will answer Yes, then you speak your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
++        conversationText.setText("Tap Start background listening. When the status says Waiting for Sage — high accuracy, say Sage by itself and pause. She will answer Yes, then you speak your command.\n\nIgnored (not Sage) means she heard a sound but correctly rejected it.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");

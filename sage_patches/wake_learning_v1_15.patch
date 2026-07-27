@@ -1,0 +1,677 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -36,6 +36,8 @@
+     public static final String ACTION_STOP = "com.pineapple.sage.STOP";
+     public static final String ACTION_LISTEN_NOW = "com.pineapple.sage.LISTEN_NOW";
+     public static final String ACTION_TYPED_COMMAND = "com.pineapple.sage.TYPED_COMMAND";
++    public static final String ACTION_REFRESH_LISTENING_MODE =
++            "com.pineapple.sage.REFRESH_LISTENING_MODE";
+     public static final String ACTION_STATE = "com.pineapple.sage.STATE";
+     public static final String EXTRA_COMMAND = "command";
+     public static final String EXTRA_SPEAKER = "speaker";
+@@ -52,17 +54,11 @@
+     private static final long CONVERSATION_WINDOW_MS = 30000L;
+     private static final long CONVERSATION_RETRY_MS = 550L;
+     private static final String[] BUILT_IN_WAKE_PREFIXES = {
+-            "hey sage", "okay sage", "ok sage", "sage",
+-            "hey stage", "okay stage", "ok stage", "stage",
+-            "hey say age", "okay say age", "ok say age", "say age",
+-            "hey safe", "okay safe", "ok safe", "safe",
+-            "hey save", "okay save", "ok save", "save",
+-            "hey say", "okay say", "ok say",
+-            "hey age", "okay age", "ok age",
+-            "hey page", "okay page", "ok page"
++            "hey sage", "okay sage", "ok sage", "sage"
+     };
+-    private static final String[] EXACT_WAKE_SOUNDALIKES = {
+-            "sage", "stage", "safe", "save", "say", "age", "page"
++    private static final String[] EXACT_WAKE_ALIASES = {
++            "hey stage", "okay stage", "ok stage", "stage",
++            "hey say age", "okay say age", "ok say age", "say age"
+     };
+     private static volatile boolean running;
+ 
+@@ -100,6 +96,7 @@
+     private long lastSpokenFinishedAtMs;
+     private String lastSpokenForEcho = "";
+     private boolean conversationActive;
++    private boolean singleCommandArmed;
+     private long conversationExpiresAtMs;
+     private boolean translationInProgress;
+     private boolean restoreDefaultSpeechLanguage;
+@@ -140,6 +137,18 @@
+             if (command != null && !command.trim().isEmpty()) {
+                 handler.post(() -> handleCommand(command));
+             }
++        } else if (ACTION_REFRESH_LISTENING_MODE.equals(action)) {
++            closeConversationWindow();
++            commandEngine.cancelFollowUp();
++            destroyCommandRecognizer();
++            if (!isConversationModeEnabled()) {
++                broadcastStatus("Wake-word mode — waiting for Sage");
++                updateNotification("Say Sage");
++            } else {
++                broadcastStatus("Conversation mode ready — say Sage");
++                updateNotification("Say Sage");
++            }
++            startWakeListening(250);
+         } else if (ACTION_LISTEN_NOW.equals(action)) {
+             openConversationWindow();
+             broadcastStatus("Getting ready to listen");
+@@ -385,6 +394,20 @@
+         if (choices == null || choices.isEmpty()) {
+             return false;
+         }
++        if (!finalResult) {
++            for (String choice : choices) {
++                String preview = normalizeForEcho(choice);
++                if (preview.isEmpty()) {
++                    continue;
++                }
++                String visible = preview.length() > 48
++                        ? preview.substring(0, 48) + "…"
++                        : preview;
++                broadcastStatus("Waiting for Sage — hearing: " + visible);
++                break;
++            }
++            return false;
++        }
+         String preview = "";
+         for (String choice : choices) {
+             String normalized = normalizeForEcho(choice);
+@@ -435,7 +458,7 @@
+                 .replaceAll("\\bunk\\b", " ")
+                 .replaceAll("\\s+", " ")
+                 .trim();
+-        if (!startsWithWakePhrase(normalized)) {
++        if (!startsWithWakePhrase(normalized, finalResult)) {
+             return;
+         }
+         latestWakeText = normalized;
+@@ -475,8 +498,8 @@
+                 return cleanWakeRemainder(normalized.substring(prefix.length()));
+             }
+         }
+-        for (String soundalike : EXACT_WAKE_SOUNDALIKES) {
+-            if (normalized.equals(soundalike)) {
++        for (String alias : EXACT_WAKE_ALIASES) {
++            if (normalized.equals(alias)) {
+                 return "";
+             }
+         }
+@@ -500,6 +523,9 @@
+         for (String prefix : BUILT_IN_WAKE_PREFIXES) {
+             phrases.add(prefix);
+         }
++        for (String alias : EXACT_WAKE_ALIASES) {
++            phrases.add(alias);
++        }
+         Set<String> aliases = preferences.getStringSet("wake_aliases", null);
+         if (aliases != null) {
+             for (String alias : aliases) {
+@@ -526,12 +552,20 @@
+         return grammar.toString();
+     }
+ 
+-    private boolean startsWithWakePhrase(String normalized) {
++    private boolean startsWithWakePhrase(String normalized, boolean finalResult) {
+         for (String prefix : BUILT_IN_WAKE_PREFIXES) {
+             if (normalized.equals(prefix) || normalized.startsWith(prefix + " ")) {
+                 return true;
+             }
+         }
++        if (!finalResult) {
++            return false;
++        }
++        for (String alias : EXACT_WAKE_ALIASES) {
++            if (normalized.equals(alias)) {
++                return true;
++            }
++        }
+         Set<String> aliases = preferences.getStringSet("wake_aliases", null);
+         if (aliases != null) {
+             for (String alias : aliases) {
+@@ -554,6 +588,11 @@
+                 return cleanWakeRemainder(normalized.substring(prefix.length()));
+             }
+         }
++        for (String alias : EXACT_WAKE_ALIASES) {
++            if (normalized.equals(alias)) {
++                return "";
++            }
++        }
+         Set<String> aliases = preferences.getStringSet("wake_aliases", null);
+         if (aliases != null) {
+             for (String alias : aliases) {
+@@ -888,7 +927,8 @@
+                 "previous", "notification", "remember", "memory", "red", "queen", "sleep",
+                 "help", "first", "second", "third", "fourth", "fifth", "sixth", "seventh",
+                 "eighth", "ninth", "tenth", "video", "link", "result", "website", "settings",
+-                "translate", "language", "spanish", "french", "german", "japanese", "chinese"
++                "translate", "language", "spanish", "french", "german", "japanese", "chinese",
++                "teach", "taught", "when", "mean", "means", "phrase"
+         };
+         for (String cue : cues) {
+             if (padded.contains(" " + cue + " ")) {
+@@ -908,16 +948,20 @@
+             broadcastLine("Sage", "I am still preparing that translation.");
+             return;
+         }
+-        preferences.edit().putString("last_heard", cleaned).apply();
+         broadcastLine("You", cleaned);
+         if (isConversationCloseCommand(cleaned)) {
+             closeConversationWindow();
++            commandEngine.cancelFollowUp();
+             String message = "Okay. Say Sage when you need me.";
+             broadcastLine("Sage", message);
+             speak(message);
+             return;
+         }
+-        if (isConversationOpen()) {
++        boolean finishAfterThisCommand = singleCommandArmed;
++        singleCommandArmed = false;
++        if (finishAfterThisCommand) {
++            closeConversationWindow();
++        } else if (isConversationOpen()) {
+             extendConversationWindow();
+         }
+         SageTranslationManager.Request translationRequest = translationManager.parse(cleaned);
+@@ -931,10 +975,15 @@
+             return;
+         }
+         SageCommandEngine.Result result = commandEngine.execute(cleaned);
++        if (commandEngine.isAwaitingFollowUp()) {
++            openConversationWindow();
++            listenForCommandAfterSpeech = true;
++        }
+         broadcastLine("Sage", result.message);
+         if (result.stopListening) {
+             stopRequested = true;
+             closeConversationWindow();
++            commandEngine.cancelFollowUp();
+         }
+         if (result.speak) {
+             speak(result.message);
+@@ -1118,10 +1167,16 @@
+ 
+     private void openConversationWindow() {
+         conversationActive = true;
++        singleCommandArmed = !isConversationModeEnabled();
+         lastWakePreview = "";
+         extendConversationWindow();
+     }
+ 
++    private boolean isConversationModeEnabled() {
++        return preferences != null
++                && preferences.getBoolean("conversation_mode_enabled", false);
++    }
++
+     private void extendConversationWindow() {
+         if (!conversationActive || stopRequested) {
+             return;
+@@ -1145,6 +1200,7 @@
+ 
+     private void closeConversationWindow() {
+         conversationActive = false;
++        singleCommandArmed = false;
+         conversationExpiresAtMs = 0L;
+         listenForCommandAfterSpeech = false;
+         handler.removeCallbacks(conversationExpiryRunnable);
+@@ -1164,8 +1220,10 @@
+             return;
+         }
+         conversationActive = false;
++        singleCommandArmed = false;
+         conversationExpiresAtMs = 0L;
+         commandStartPending = false;
++        commandEngine.cancelFollowUp();
+         if (speaking) {
+             return;
+         }
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -55,6 +55,7 @@
+     private final PackageManager packageManager;
+     private final SharedPreferences preferences;
+     private String pendingAction = "";
++    private String pendingTeachingPhrase = "";
+ 
+     private static final Map<String, String> PACKAGE_ALIASES = new HashMap<>();
+ 
+@@ -79,6 +80,11 @@
+         return !pendingAction.isEmpty();
+     }
+ 
++    public void cancelFollowUp() {
++        pendingAction = "";
++        pendingTeachingPhrase = "";
++    }
++
+     public Result execute(String spokenText) {
+         String raw = clean(spokenText);
+         if (raw.isEmpty()) {
+@@ -90,24 +96,27 @@
+         }
+         raw = stripWakeAndConversation(raw);
+         lower = normalize(raw);
+-        preferences.edit().putString("last_heard", raw).apply();
++        String previousHeard = preferences.getString("last_heard", "");
+ 
+-        Result learningResult = handlePhraseLearning(raw, lower);
++        Result learningResult = handlePhraseLearning(raw, lower, previousHeard);
+         if (learningResult != null) {
++            preferences.edit().putString("last_heard", raw).apply();
+             return learningResult;
+         }
+ 
++        if (isAny(lower, "what did you hear", "what did you think i said", "repeat what you heard")) {
++            return new Result(previousHeard.isEmpty()
++                    ? "I do not have a recent phrase."
++                    : "I heard " + previousHeard + ".");
++        }
++        preferences.edit().putString("last_heard", raw).apply();
++
+         String learnedCommand = resolveLearnedAlias(raw);
+         if (!learnedCommand.equals(raw)) {
+             raw = learnedCommand;
+             lower = normalize(raw);
+         }
+ 
+-        if (isAny(lower, "what did you hear", "what did you think i said", "repeat what you heard")) {
+-            String heard = preferences.getString("last_heard", "");
+-            return new Result(heard.isEmpty() ? "I do not have a recent phrase." : "I heard " + heard + ".");
+-        }
+-
+         int numberedChoice = extractOrdinal(lower);
+         if (SageAccessibilityService.hasNumberOverlay() && numberedChoice > 0
+                 && (isStandaloneNumber(lower) || containsAnyPhrase(lower, "number", "click", "tap", "pick", "choose", "select", "open"))) {
+@@ -146,7 +155,7 @@
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I can wait for the word Sage, keep a conversation open after you wake me, translate and speak other languages, understand natural tablet commands, number clickable things on the screen, learn your phrases, open apps and websites, search, scroll, type, control media, and read notifications.");
++            return new Result("I wait for the word Sage before each command unless you turn on conversation mode. Say remember this to teach me a phrase, or say when I say movie time, it means open YouTube. I can also translate, control the tablet, open apps and websites, search, scroll, type, control media, and read notifications.");
+         }
+ 
+         if (isAny(lower, "show numbers", "number the screen", "put numbers on the screen", "label the screen", "number everything")) {
+@@ -349,7 +358,7 @@
+             return recall();
+         }
+         if (isAny(lower, "clear memory", "forget everything")) {
+-            preferences.edit().remove("memory_items").apply();
++            preferences.edit().remove("memory_items").commit();
+             return new Result("Memory cleared.");
+         }
+ 
+@@ -472,12 +481,85 @@
+         return clean(result);
+     }
+ 
+-    private Result handlePhraseLearning(String raw, String lower) {
++    private Result handlePhraseLearning(String raw, String lower, String previousHeard) {
+         if (isAny(lower, "forget my phrases", "clear learned phrases", "forget how i talk")) {
+-            preferences.edit().remove("phrase_aliases").remove("last_unmatched").apply();
++            cancelFollowUp();
++            preferences.edit().remove("phrase_aliases").remove("last_unmatched").commit();
+             return new Result("I cleared the phrases you taught me.");
+         }
+ 
++        if (isAny(lower,
++                "what have i taught you",
++                "what did i teach you",
++                "what phrases do you know",
++                "read my custom commands",
++                "show my custom commands")) {
++            return recallLearnedPhrases();
++        }
++
++        if (pendingAction.equals("teach_phrase")) {
++            String phrase = clean(raw)
++                    .replaceFirst("(?i)^(?:the\\s+phrase\\s+is|when\\s+i\\s+say)\\s+", "");
++            phrase = clean(phrase);
++            if (phrase.isEmpty()) {
++                return new Result("Tell me the phrase you want me to recognize.");
++            }
++            pendingTeachingPhrase = phrase;
++            pendingAction = "teach_meaning";
++            return new Result("Okay. What should " + phrase
++                    + " mean? For example, open YouTube, or say hello.");
++        }
++
++        if (pendingAction.equals("teach_meaning")) {
++            String phrase = pendingTeachingPhrase;
++            String meaning = cleanTeachingMeaning(raw);
++            cancelFollowUp();
++            if (phrase.isEmpty() || meaning.isEmpty()) {
++                return new Result("I lost part of that lesson. Say remember this, and we can try again.");
++            }
++            return saveLearnedPhrase(phrase, meaning);
++        }
++
++        String lesson = raw.replaceFirst(
++                "(?i)^remember(?:\\s+(?:this|that))?\\s*[,.:;-]*\\s+(?=when\\s+i\\s+say)",
++                ""
++        );
++        Pattern[] patterns = {
++                Pattern.compile(
++                        "(?i)^when\\s+i\\s+say\\s+(.+?)\\s*[,;:-]?\\s+"
++                                + "(?:i\\s+mean|that\\s+means|this\\s+means|it\\s+means|"
++                                + "it\\s+s\\s+means|its\\s+means|it's\\s+means)\\s+(.+)$"
++                ),
++                Pattern.compile(
++                        "(?i)^(?:teach\\s+sage|teach\\s+you|learn\\s+that|remember)\\s+"
++                                + "(.+?)\\s+(?:means|should\\s+mean)\\s+(.+)$"
++                )
++        };
++        for (Pattern pattern : patterns) {
++            Matcher matcher = pattern.matcher(lesson);
++            if (matcher.matches()) {
++                String phrase = clean(matcher.group(1));
++                String meaning = cleanTeachingMeaning(matcher.group(2));
++                if (phrase.isEmpty() || meaning.isEmpty()) {
++                    return new Result("I need both the phrase you use and what you want it to mean.");
++                }
++                return saveLearnedPhrase(phrase, meaning);
++            }
++        }
++
++        if (isAny(lower,
++                "remember this",
++                "remember that",
++                "learn this",
++                "teach sage something",
++                "teach you something",
++                "let me teach you something",
++                "i want to teach you something")) {
++            pendingAction = "teach_phrase";
++            pendingTeachingPhrase = "";
++            return new Result("Okay. What phrase should I remember?");
++        }
++
+         String correction = "";
+         if (lower.startsWith("that means ")) {
+             correction = clean(raw.substring(Math.min(raw.length(), 11)));
+@@ -487,44 +569,69 @@
+         if (!correction.isEmpty()) {
+             String previous = preferences.getString("last_unmatched", "");
+             if (previous.isEmpty()) {
+-                previous = preferences.getString("last_heard", "");
++                previous = previousHeard;
+             }
+             if (previous.isEmpty() || normalize(previous).equals(normalize(raw))) {
+-                return new Result("Tell me the whole phrase like, when I say pick that second one, I mean open the second video.");
++                return new Result("Tell me the whole lesson like, when I say movie time, it means open YouTube. Or say remember this and I will ask you both parts.");
+             }
+-            savePhraseAlias(previous, correction);
+-            preferences.edit().remove("last_unmatched").apply();
+-            return new Result("Got it. When you say " + previous + ", I will treat it as " + correction + ".");
++            return saveLearnedPhrase(previous, correction);
+         }
++        return null;
++    }
+ 
+-        Pattern[] patterns = {
+-                Pattern.compile("(?i)^when\\s+i\\s+say\\s+(.+?)\\s+(?:i\\s+mean|that\\s+means|it\\s+means)\\s+(.+)$"),
+-                Pattern.compile("(?i)^(?:teach\\s+sage|learn\\s+that)\\s+(.+?)\\s+means\\s+(.+)$")
+-        };
+-        for (Pattern pattern : patterns) {
+-            Matcher matcher = pattern.matcher(raw);
+-            if (matcher.matches()) {
+-                String phrase = clean(matcher.group(1));
+-                String meaning = clean(matcher.group(2));
+-                if (phrase.isEmpty() || meaning.isEmpty()) {
+-                    return new Result("I need both the phrase you use and what you want it to mean.");
+-                }
+-                savePhraseAlias(phrase, meaning);
+-                return new Result("Got it. " + phrase + " now means " + meaning + ".");
+-            }
++    private Result saveLearnedPhrase(String phrase, String meaning) {
++        if (!savePhraseAlias(phrase, meaning)) {
++            return new Result("I understood the lesson, but Android did not save it. Please try once more.");
+         }
+-        return null;
++        preferences.edit().remove("last_unmatched").commit();
++        return new Result("Saved. When you say " + clean(phrase)
++                + ", I will treat it as " + clean(meaning) + ".");
+     }
+ 
+-    private void savePhraseAlias(String phrase, String meaning) {
++    private boolean savePhraseAlias(String phrase, String meaning) {
+         String key = normalize(phrase);
+         if (key.isEmpty()) {
+-            return;
++            return false;
+         }
+         Set<String> saved = new HashSet<>(preferences.getStringSet("phrase_aliases", new HashSet<>()));
+         saved.removeIf(entry -> entry.startsWith(key + "\t"));
+         saved.add(key + "\t" + clean(meaning));
+-        preferences.edit().putStringSet("phrase_aliases", saved).apply();
++        return preferences.edit().putStringSet("phrase_aliases", saved).commit();
++    }
++
++    private String cleanTeachingMeaning(String value) {
++        String meaning = clean(value);
++        meaning = meaning.replaceFirst(
++                "(?i)^(?:i\\s+mean|that\\s+means|this\\s+means|it\\s+means|"
++                        + "it\\s+s\\s+means|its\\s+means|it's\\s+means)\\s+",
++                ""
++        );
++        return clean(meaning);
++    }
++
++    private Result recallLearnedPhrases() {
++        Set<String> saved = preferences.getStringSet("phrase_aliases", new HashSet<>());
++        if (saved == null || saved.isEmpty()) {
++            return new Result("You have not taught me any custom commands yet. Say remember this to teach me one.");
++        }
++        List<String> lessons = new ArrayList<>();
++        for (String entry : saved) {
++            int split = entry.indexOf('\t');
++            if (split <= 0 || split >= entry.length() - 1) {
++                continue;
++            }
++            lessons.add(entry.substring(0, split) + " means " + entry.substring(split + 1));
++        }
++        lessons.sort(String.CASE_INSENSITIVE_ORDER);
++        if (lessons.isEmpty()) {
++            return new Result("I found the lesson storage, but no readable custom commands.");
++        }
++        int spokenCount = Math.min(5, lessons.size());
++        String message = "You taught me: " + String.join(". ", lessons.subList(0, spokenCount));
++        if (lessons.size() > spokenCount) {
++            message += ". And " + (lessons.size() - spokenCount) + " more shown in the Sage app";
++        }
++        return new Result(message + ".");
+     }
+ 
+     private String resolveLearnedAlias(String raw) {
+@@ -752,8 +859,10 @@
+         }
+         Set<String> saved = new HashSet<>(preferences.getStringSet("memory_items", new HashSet<>()));
+         saved.add(value);
+-        preferences.edit().putStringSet("memory_items", saved).apply();
+-        return new Result("I will remember that.");
++        boolean stored = preferences.edit().putStringSet("memory_items", saved).commit();
++        return new Result(stored
++                ? "I saved that in my memory."
++                : "I heard that, but Android did not save it. Please try again.");
+     }
+ 
+     private Result recall() {
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -25,6 +25,8 @@
+ 
+ import android.database.Cursor;
+ 
++import java.util.ArrayList;
++import java.util.Collections;
+ import java.util.Set;
+ 
+ public class MainActivity extends Activity {
+@@ -36,6 +38,7 @@
+     private TextView conversationText;
+     private Button listenButton;
+     private Button wakeButton;
++    private Button conversationModeButton;
+     private EditText typedCommand;
+     private EditText teachPhrase;
+     private EditText teachMeaning;
+@@ -93,7 +96,7 @@
+         root.addView(title, matchWrap());
+ 
+         TextView subtitle = new TextView(this);
+-        subtitle.setText("Conversation mode + spoken on-device translation");
++        subtitle.setText("Strict wake word + saved voice lessons + translation");
+         subtitle.setTextSize(16);
+         subtitle.setTextColor(Color.DKGRAY);
+         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
+@@ -117,6 +120,18 @@
+         wakeButton.setOnClickListener(v -> toggleListening());
+         root.addView(wakeButton, spacedSmall());
+ 
++        conversationModeButton = makeButton("");
++        conversationModeButton.setOnClickListener(v -> toggleConversationMode());
++        root.addView(conversationModeButton, spacedSmall());
++        refreshConversationModeButton();
++
++        TextView conversationModeHelp = new TextView(this);
++        conversationModeHelp.setText("Wake-word mode waits for “Sage” before every command. Optional conversation mode keeps listening for follow-ups for 30 seconds.");
++        conversationModeHelp.setTextSize(14);
++        conversationModeHelp.setTextColor(Color.DKGRAY);
++        conversationModeHelp.setPadding(8, 2, 8, 6);
++        root.addView(conversationModeHelp, matchWrap());
++
+         Button accessibility = makeButton("Accessibility control");
+         accessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+         root.addView(accessibility, spacedSmall());
+@@ -170,7 +185,7 @@
+         root.addView(teachTitle, spaced());
+ 
+         TextView teachHelp = new TextView(this);
+-        teachHelp.setText("Give Sage your own phrase and the command it should run. These stay saved on this tablet after updates.");
++        teachHelp.setText("Say “Sage, remember this” and answer her two questions, or say the whole lesson: “Sage, when I say movie time, it means open YouTube.” Lessons stay saved after restarts and updates.");
+         teachHelp.setTextSize(15);
+         teachHelp.setTextColor(Color.DKGRAY);
+         teachHelp.setPadding(8, 2, 8, 8);
+@@ -192,6 +207,10 @@
+         teachButton.setOnClickListener(v -> teachSage());
+         root.addView(teachButton, spacedSmall());
+ 
++        Button readLessonsButton = makeButton("Show what Sage learned");
++        readLessonsButton.setOnClickListener(v -> dispatchTypedCommand("what have I taught you"));
++        root.addView(readLessonsButton, spacedSmall());
++
+         memoryItem = new EditText(this);
+         memoryItem.setHint("Something Sage should remember");
+         memoryItem.setSingleLine(false);
+@@ -234,7 +253,7 @@
+         root.addView(translationDisclaimer, matchWrap());
+ 
+         conversationText = new TextView(this);
+-        conversationText.setText("Say Sage once and wait for Yes. After each reply, Conversation open means you can keep giving commands without saying Sage again. The window closes after 30 seconds of silence.\n\nTranslation stays inside Sage. The first use of each language downloads its model over Wi-Fi; afterward that language works offline.\n\nTry:\ntranslate good morning to Spanish\nhow do you say thank you in Japanese\ntranslate buenos días from Spanish to English\n\nSay “that’s all” to close the conversation early.");
++        conversationText.setText("Wake-word mode is the default: say Sage, wait for Yes, then give one command. Sage returns to waiting for her name after she answers. If Sage asks you a question, she listens for that answer without making you repeat her name.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nUse the mode button above only when you want a 30-second hands-free conversation window.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
+         conversationText.setTextSize(17);
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+@@ -268,6 +287,48 @@
+         startSageService();
+     }
+ 
++    private void toggleConversationMode() {
++        boolean enabled = !getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                .getBoolean("conversation_mode_enabled", false);
++        boolean saved = getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                .edit()
++                .putBoolean("conversation_mode_enabled", enabled)
++                .commit();
++        if (!saved) {
++            Toast.makeText(this, "Android could not save the listening mode.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        refreshConversationModeButton();
++        Toast.makeText(
++                this,
++                enabled
++                        ? "30-second conversation mode is on."
++                        : "Wake-word mode is on. Sage will wait for her name before each command.",
++                Toast.LENGTH_LONG
++        ).show();
++        if (!SageVoiceService.isRunning()) {
++            return;
++        }
++        Intent refresh = new Intent(this, SageVoiceService.class)
++                .setAction(SageVoiceService.ACTION_REFRESH_LISTENING_MODE);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            startForegroundService(refresh);
++        } else {
++            startService(refresh);
++        }
++    }
++
++    private void refreshConversationModeButton() {
++        if (conversationModeButton == null) {
++            return;
++        }
++        boolean enabled = getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                .getBoolean("conversation_mode_enabled", false);
++        conversationModeButton.setText(enabled
++                ? "Mode: 30-second conversation"
++                : "Mode: Say Sage for every command");
++    }
++
+     private void listenNow() {
+         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+             talkAfterPermission = true;
+@@ -441,12 +502,38 @@
+                 .getStringSet("phrase_aliases", null);
+         Set<String> memories = getSharedPreferences("sage_state", Context.MODE_PRIVATE)
+                 .getStringSet("memory_items", null);
+-        int phraseCount = phrases == null ? 0 : phrases.size();
++        ArrayList<String> lessons = new ArrayList<>();
++        if (phrases != null) {
++            for (String entry : phrases) {
++                int split = entry.indexOf('\t');
++                if (split <= 0 || split >= entry.length() - 1) {
++                    continue;
++                }
++                lessons.add(entry.substring(0, split) + " → " + entry.substring(split + 1));
++            }
++        }
++        Collections.sort(lessons, String.CASE_INSENSITIVE_ORDER);
++        int phraseCount = lessons.size();
+         int memoryCount = memories == null ? 0 : memories.size();
+-        teachingSummary.setText("Saved: " + phraseCount + " custom command"
+-                + (phraseCount == 1 ? "" : "s")
+-                + "  •  " + memoryCount + " memory note"
+-                + (memoryCount == 1 ? "" : "s"));
++        StringBuilder summary = new StringBuilder("Saved: ")
++                .append(phraseCount)
++                .append(" custom command")
++                .append(phraseCount == 1 ? "" : "s")
++                .append("  •  ")
++                .append(memoryCount)
++                .append(" memory note")
++                .append(memoryCount == 1 ? "" : "s");
++        if (!lessons.isEmpty()) {
++            summary.append("\n\nSaved lessons:");
++            int visibleCount = Math.min(8, lessons.size());
++            for (int index = 0; index < visibleCount; index++) {
++                summary.append("\n• ").append(lessons.get(index));
++            }
++            if (lessons.size() > visibleCount) {
++                summary.append("\n• …and ").append(lessons.size() - visibleCount).append(" more");
++            }
++        }
++        teachingSummary.setText(summary.toString());
+     }
+ 
+     private void refreshStatus(String serviceStatus) {
+@@ -527,6 +614,7 @@
+     protected void onResume() {
+         super.onResume();
+         refreshStatus(null);
++        refreshConversationModeButton();
+         refreshTeachingSummary();
+         if (pendingUpdateUri != null
+                 && (Build.VERSION.SDK_INT < Build.VERSION_CODES.O

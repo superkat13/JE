@@ -1,0 +1,400 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -49,6 +49,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private static final long WAKE_ECHO_GUARD_MS = 3500L;
+     private static final long COMMAND_PROMPT_ECHO_GUARD_MS = 1200L;
+     private static final long ECHO_TEXT_WINDOW_MS = 6000L;
++    private static final long CONVERSATION_WINDOW_MS = 30000L;
++    private static final long CONVERSATION_RETRY_MS = 550L;
+     private static final String[] BUILT_IN_WAKE_PREFIXES = {
+             "hey sage", "okay sage", "ok sage", "sage",
+             "hey stage", "okay stage", "ok stage", "stage",
+@@ -67,6 +69,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private final Handler handler = new Handler(Looper.getMainLooper());
+     private final ArrayList<String> partialChoices = new ArrayList<>();
+     private final Runnable finishWakeCaptureRunnable = this::finishWakeCapture;
++    private final Runnable conversationExpiryRunnable = this::expireConversationIfNeeded;
+ 
+     private SpeechRecognizer speechRecognizer;
+     private Intent recognizerIntent;
+@@ -95,6 +98,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private long ignoreRecognitionUntilMs;
+     private long lastSpokenFinishedAtMs;
+     private String lastSpokenForEcho = "";
++    private boolean conversationActive;
++    private long conversationExpiresAtMs;
+ 
+     public static boolean isRunning() {
+         return running;
+@@ -131,6 +136,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 handler.post(() -> handleCommand(command));
+             }
+         } else if (ACTION_LISTEN_NOW.equals(action)) {
++            openConversationWindow();
+             broadcastStatus("Getting ready to listen");
+             updateNotification("Getting ready to listen");
+             startCommandRecognition(550);
+@@ -444,6 +450,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     }
+ 
+     private void respondToWake(String command) {
++        openConversationWindow();
+         if (!command.isEmpty()) {
+             handleCommand(command);
+         } else {
+@@ -632,6 +639,10 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         if (stopRequested || speaking || commandListening || commandStartPending) {
+             return;
+         }
++        if (!isConversationOpen()) {
++            startWakeListening(delayMs);
++            return;
++        }
+         if (!retryingBusyRecognizer) {
+             commandBusyRetries = 0;
+         }
+@@ -643,8 +654,14 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 commandStartPending = false;
+                 return;
+             }
++            if (!isConversationOpen()) {
++                commandStartPending = false;
++                startWakeListening(250);
++                return;
++            }
+             if (!SpeechRecognizer.isRecognitionAvailable(this)) {
+                 commandStartPending = false;
++                closeConversationWindow();
+                 broadcastLine("Sage", "Android voice typing is unavailable. Make sure the tablet's Speech Services are enabled, then tap Talk to Sage again.");
+                 broadcastStatus("Voice typing unavailable");
+                 startWakeListening(500);
+@@ -655,6 +672,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+             } catch (RuntimeException error) {
+                 commandStartPending = false;
++                closeConversationWindow();
+                 broadcastLine("Sage", "Android voice typing could not open. Tap Talk to Sage and try again.");
+                 broadcastStatus("Tap Talk to Sage");
+                 startWakeListening(700);
+@@ -665,8 +683,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 public void onReadyForSpeech(Bundle params) {
+                     partialChoices.clear();
+                     commandListening = true;
+-                    broadcastStatus("Listening for command");
+-                    updateNotification("Listening for your command");
++                    broadcastStatus("Conversation open — listening");
++                    updateNotification("Conversation open — keep talking");
+                 }
+ 
+                 @Override
+@@ -695,10 +713,20 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                         handleCommand(partialCandidate);
+                         return;
+                     }
++                    if ((error == SpeechRecognizer.ERROR_NO_MATCH
++                            || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)
++                            && isConversationOpen()) {
++                        commandBusyRetries = 0;
++                        broadcastStatus("Conversation open — keep talking");
++                        updateNotification("Conversation open — keep talking");
++                        startCommandRecognition(CONVERSATION_RETRY_MS);
++                        return;
++                    }
+                     if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+                             && commandBusyRetries < 2
+                             && !stopRequested
+-                            && !speaking) {
++                            && !speaking
++                            && isConversationOpen()) {
+                         commandBusyRetries++;
+                         broadcastStatus("Switching microphone");
+                         updateNotification("Switching microphone");
+@@ -707,6 +735,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                     }
+                     if (!stopRequested && !speaking) {
+                         commandBusyRetries = 0;
++                        closeConversationWindow();
+                         broadcastLine("Sage", recognitionErrorMessage(error));
+                         broadcastStatus("Tap Talk to Sage");
+                         updateNotification("Tap Talk to Sage, or say Sage");
+@@ -726,6 +755,10 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                     commandBusyRetries = 0;
+                     if (!candidate.isEmpty()) {
+                         handleCommand(candidate);
++                    } else if (isConversationOpen()) {
++                        broadcastStatus("Conversation open — keep talking");
++                        updateNotification("Conversation open — keep talking");
++                        startCommandRecognition(CONVERSATION_RETRY_MS);
+                     } else {
+                         broadcastLine("Sage", "I did not catch that. Tap Talk to Sage and try again.");
+                         startWakeListening(500);
+@@ -765,11 +798,12 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                 commandListening = false;
+                 commandStartPending = false;
+                 destroyCommandRecognizer();
+-                if (commandBusyRetries < 2) {
++                if (commandBusyRetries < 2 && isConversationOpen()) {
+                     commandBusyRetries++;
+                     startCommandRecognition(900, true);
+                 } else {
+                     commandBusyRetries = 0;
++                    closeConversationWindow();
+                     broadcastLine("Sage", "The microphone opened, but Android voice typing did not start. Tap Talk to Sage and try once more.");
+                     broadcastStatus("Tap Talk to Sage");
+                     startWakeListening(800);
+@@ -861,15 +895,26 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private void handleCommand(String command) {
+         String cleaned = command == null ? "" : command.trim();
+         if (cleaned.isEmpty() || speaking || stopRequested || isLikelySelfEcho(cleaned)) {
+-            startWakeListening(500);
++            resumeConversationOrWake(500);
+             return;
+         }
+         preferences.edit().putString("last_heard", cleaned).apply();
+         broadcastLine("You", cleaned);
++        if (isConversationCloseCommand(cleaned)) {
++            closeConversationWindow();
++            String message = "Okay. Say Sage when you need me.";
++            broadcastLine("Sage", message);
++            speak(message);
++            return;
++        }
++        if (isConversationOpen()) {
++            extendConversationWindow();
++        }
+         SageCommandEngine.Result result = commandEngine.execute(cleaned);
+         broadcastLine("Sage", result.message);
+         if (result.stopListening) {
+             stopRequested = true;
++            closeConversationWindow();
+         }
+         if (result.speak) {
+             speak(result.message);
+@@ -884,9 +929,16 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             stopSelf();
+             return;
+         }
+-        broadcastStatus("Waiting for Sage");
+-        updateNotification("Say Sage");
+-        startWakeListening(350);
++        if (isConversationOpen()) {
++            extendConversationWindow();
++            broadcastStatus("Conversation open — listening");
++            updateNotification("Conversation open — keep talking");
++            startCommandRecognition(350);
++        } else {
++            broadcastStatus("Waiting for Sage");
++            updateNotification("Say Sage");
++            startWakeListening(350);
++        }
+     }
+ 
+     private void speak(String message) {
+@@ -915,17 +967,23 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         speaking = false;
+         long now = System.currentTimeMillis();
+         lastSpokenFinishedAtMs = now;
+-        long echoGuard = listenForCommandAfterSpeech
++        boolean promptFollowUp = listenForCommandAfterSpeech;
++        long echoGuard = promptFollowUp
+                 ? COMMAND_PROMPT_ECHO_GUARD_MS
+                 : WAKE_ECHO_GUARD_MS;
+         ignoreRecognitionUntilMs = Math.max(ignoreRecognitionUntilMs, now + echoGuard);
+         if (stopRequested) {
+             stopSelf();
+-        } else if (listenForCommandAfterSpeech) {
++        } else if (promptFollowUp || isConversationOpen()) {
+             listenForCommandAfterSpeech = false;
++            extendConversationWindow();
+             long delay = Math.max(700L, ignoreRecognitionUntilMs - System.currentTimeMillis());
+-            broadcastStatus("Get ready to speak");
+-            updateNotification("Getting ready for your command");
++            broadcastStatus(promptFollowUp
++                    ? "Get ready to speak"
++                    : "Conversation open — speaker echo guard");
++            updateNotification(promptFollowUp
++                    ? "Getting ready for your command"
++                    : "Conversation open — listening resumes shortly");
+             startCommandRecognition(delay);
+         } else {
+             long delay = Math.max(300L, ignoreRecognitionUntilMs - System.currentTimeMillis());
+@@ -935,6 +993,82 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         }
+     }
+ 
++    private void openConversationWindow() {
++        conversationActive = true;
++        lastWakePreview = "";
++        extendConversationWindow();
++    }
++
++    private void extendConversationWindow() {
++        if (!conversationActive || stopRequested) {
++            return;
++        }
++        conversationExpiresAtMs = System.currentTimeMillis() + CONVERSATION_WINDOW_MS;
++        handler.removeCallbacks(conversationExpiryRunnable);
++        handler.postDelayed(conversationExpiryRunnable, CONVERSATION_WINDOW_MS + 100L);
++    }
++
++    private boolean isConversationOpen() {
++        if (!conversationActive) {
++            return false;
++        }
++        if (System.currentTimeMillis() < conversationExpiresAtMs) {
++            return true;
++        }
++        conversationActive = false;
++        handler.removeCallbacks(conversationExpiryRunnable);
++        return false;
++    }
++
++    private void closeConversationWindow() {
++        conversationActive = false;
++        conversationExpiresAtMs = 0L;
++        listenForCommandAfterSpeech = false;
++        handler.removeCallbacks(conversationExpiryRunnable);
++    }
++
++    private void expireConversationIfNeeded() {
++        if (!conversationActive || stopRequested) {
++            return;
++        }
++        long remaining = conversationExpiresAtMs - System.currentTimeMillis();
++        if (remaining > 0L) {
++            handler.postDelayed(conversationExpiryRunnable, remaining + 100L);
++            return;
++        }
++        conversationActive = false;
++        conversationExpiresAtMs = 0L;
++        commandStartPending = false;
++        if (speaking) {
++            return;
++        }
++        destroyCommandRecognizer();
++        broadcastStatus("Conversation closed — say Sage");
++        updateNotification("Say Sage");
++        startWakeListening(300);
++    }
++
++    private void resumeConversationOrWake(long delayMs) {
++        if (isConversationOpen()) {
++            broadcastStatus("Conversation open — keep talking");
++            updateNotification("Conversation open — keep talking");
++            startCommandRecognition(delayMs);
++        } else {
++            startWakeListening(delayMs);
++        }
++    }
++
++    private boolean isConversationCloseCommand(String command) {
++        String normalized = normalizeForEcho(command);
++        return normalized.equals("that s all")
++                || normalized.equals("that is all")
++                || normalized.equals("never mind")
++                || normalized.equals("end conversation")
++                || normalized.equals("close conversation")
++                || normalized.equals("thanks sage")
++                || normalized.equals("thank you sage");
++    }
++
+     private void destroyCommandRecognizer() {
+         nativeWakeListening = false;
+         if (speechRecognizer != null) {
+@@ -1055,6 +1189,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         running = false;
+         commandStartPending = false;
+         listenForCommandAfterSpeech = false;
++        conversationActive = false;
++        conversationExpiresAtMs = 0L;
+         nativeWakeListening = false;
+         handler.removeCallbacksAndMessages(null);
+         stopWakeListening();
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -146,7 +146,7 @@ public class SageCommandEngine {
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I can wait for the word Sage, understand natural tablet commands, number clickable things on the screen, learn your phrases, open apps and websites, search, scroll, type, control media, and read notifications.");
++            return new Result("I can wait for the word Sage, keep a conversation open after you wake me, understand natural tablet commands, number clickable things on the screen, learn your phrases, open apps and websites, search, scroll, type, control media, and read notifications.");
+         }
+ 
+         if (isAny(lower, "show numbers", "number the screen", "put numbers on the screen", "label the screen", "number everything")) {
+@@ -558,7 +558,7 @@ public class SageCommandEngine {
+         if (count <= 0) {
+             return new Result("I could not find clickable things to number on this screen.");
+         }
+-        return new Result("I numbered " + count + " things. Say Sage and the number you want.");
++        return new Result("I numbered " + count + " things. Say the number you want.");
+     }
+ 
+     private Result openScreenItem(int number, String type) {
+@@ -570,7 +570,7 @@ public class SageCommandEngine {
+         }
+         int count = SageAccessibilityService.showNumberOverlay(type);
+         if (count > 0) {
+-            return new Result("I was not confident which one you meant, so I numbered the screen. Say Sage and the number.");
++            return new Result("I was not confident which one you meant, so I numbered the screen. Say the number you want.");
+         }
+         return new Result("I could not find that " + type + " on this screen.");
+     }
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -93,7 +93,7 @@ public class MainActivity extends Activity {
+         root.addView(title, matchWrap());
+ 
+         TextView subtitle = new TextView(this);
+-        subtitle.setText("High-accuracy wake word + speaker echo protection");
++        subtitle.setText("Wake once + a 30-second conversation window");
+         subtitle.setTextSize(16);
+         subtitle.setTextColor(Color.DKGRAY);
+         subtitle.setGravity(Gravity.CENTER_HORIZONTAL);
+@@ -125,6 +125,21 @@ public class MainActivity extends Activity {
+         notifications.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
+         root.addView(notifications, spacedSmall());
+ 
++        Button voiceSettings = makeButton("Choose Sage voice");
++        voiceSettings.setOnClickListener(v -> openVoiceSettings());
++        root.addView(voiceSettings, spacedSmall());
++
++        TextView voiceHelp = new TextView(this);
++        voiceHelp.setText("Sage uses Android’s installed text-to-speech voice. Install a voice pack or engine, choose it here, then stop and restart Sage.");
++        voiceHelp.setTextSize(14);
++        voiceHelp.setTextColor(Color.DKGRAY);
++        voiceHelp.setPadding(8, 4, 8, 4);
++        root.addView(voiceHelp, matchWrap());
++
++        Button testVoice = makeButton("Test current Sage voice");
++        testVoice.setOnClickListener(v -> dispatchTypedCommand("say This is Sage's current voice."));
++        root.addView(testVoice, spacedSmall());
++
+         Button installUpdate = makeButton("Install Sage update file");
+         installUpdate.setOnClickListener(v -> chooseUpdateFile());
+         root.addView(installUpdate, spacedSmall());
+@@ -199,7 +214,7 @@ public class MainActivity extends Activity {
+         refreshTeachingSummary();
+ 
+         conversationText = new TextView(this);
+-        conversationText.setText("Tap Start background listening. When the status says Waiting for Sage — high accuracy, say Sage by itself and pause. She will answer Yes, then you speak your command.\n\nIgnored (not Sage) means she heard a sound but correctly rejected it.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
++        conversationText.setText("Say Sage once and wait for Yes. After each reply, Conversation open means you can keep giving commands without saying Sage again. The window closes after 30 seconds of silence.\n\nSay “that’s all” to close it early. Ignored (not Sage) means she heard a sound but correctly rejected it.\n\nTry: Sage\nopen YouTube\nsearch for funny dogs\nopen the second video");
+         conversationText.setTextSize(17);
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+@@ -266,6 +281,16 @@ public class MainActivity extends Activity {
+         startActivityForResult(picker, UPDATE_FILE_PICKER);
+     }
+ 
++    private void openVoiceSettings() {
++        Intent voiceSettings = new Intent("com.android.settings.TTS_SETTINGS");
++        try {
++            startActivity(voiceSettings);
++            Toast.makeText(this, "Choose an installed text-to-speech engine and voice. Restart Sage afterward.", Toast.LENGTH_LONG).show();
++        } catch (Exception error) {
++            Toast.makeText(this, "Android could not open its voice settings on this tablet.", Toast.LENGTH_LONG).show();
++        }
++    }
++
+     private void installPendingUpdate() {
+         if (pendingUpdateUri == null) {
+             return;

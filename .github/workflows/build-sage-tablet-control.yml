@@ -1,0 +1,276 @@
+name: Build Sage Tablet Control APK
+
+on:
+  workflow_dispatch:
+  pull_request:
+  push:
+    branches:
+      - sage-tablet-control-v1
+      - main
+      - 'agent/**'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rebuild Sage source archive
+        run: |
+          mkdir -p sage_build
+          cat sage_package/part_*.b64 | tr -d '\n\r ' | base64 --decode > Sage_Tablet_Control_v1_source.zip
+          echo "9d23d8566cd30a81818b99f7f032a823b89d98221da029b31c6d4838d5a07d91  Sage_Tablet_Control_v1_source.zip" | sha256sum --check
+          unzip -q Sage_Tablet_Control_v1_source.zip -d sage_build
+          patch -d sage_build -p1 < sage_patches/result_click_v1_1.patch
+          patch -d sage_build -p1 < sage_patches/voice_redqueen_v1_2.patch
+          patch -d sage_build -p1 < sage_patches/recognition_v1_4.patch
+          base64 --decode sage_patches/natural_voice_v1_5.patch.gz.b64 | gunzip > /tmp/natural_voice_v1_5.patch
+          patch -d sage_build -p1 < /tmp/natural_voice_v1_5.patch
+          patch -d sage_build -p1 < sage_patches/updater_v1_6.patch
+          base64 --decode sage_patches/wake_learn_click_v1_7.patch.gz.b64 | gunzip > /tmp/wake_learn_click_v1_7.patch
+          echo "c5d5ee8681c03f393a77ff7da9b8afc0d6c2ff7f7d0d54ea4687e1144bab77dc  /tmp/wake_learn_click_v1_7.patch" | sha256sum --check
+          patch -d sage_build -p1 < /tmp/wake_learn_click_v1_7.patch
+          patch -d sage_build -p1 < sage_patches/native_speech_v1_9.patch
+          patch -d sage_build -p1 < sage_patches/voice_accuracy_v1_10.patch
+          patch -d sage_build -p1 < sage_patches/native_wake_teach_v1_11.patch
+          patch -d sage_build -p1 < sage_patches/echo_guard_v1_12.patch
+          patch -d sage_build -p1 < sage_patches/conversation_voice_v1_13.patch
+          patch -d sage_build -p1 < sage_patches/translation_v1_14.patch
+          patch -d sage_build -p1 < sage_patches/wake_learning_v1_15.patch
+          patch -d sage_build -p1 < sage_patches/media_responses_v1_16.patch
+          patch -d sage_build -p1 < sage_patches/screen_targeting_v1_17.patch
+          patch -d sage_build -p1 < sage_patches/conversation_diagnostics_v1_18.patch
+          patch -d sage_build -p1 < sage_patches/brain_v1_19.patch
+          base64 --decode sage_patches/wake_match_v1_20.patch.gz.b64 | gunzip > /tmp/wake_match_v1_20.patch
+          echo "7342e6ba2fc5a374b0ff77e222471912633e5f775a3ae92d5553a79a160a8547  /tmp/wake_match_v1_20.patch" | sha256sum --check
+          patch --fuzz=0 -d sage_build -p1 < /tmp/wake_match_v1_20.patch
+
+      - name: Verify Sage 1.20 wake-word hotfix
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          voice = Path(
+              "sage_build/app/src/main/java/com/pineapple/sage/SageVoiceService.java"
+          ).read_text()
+          diagnostics = Path(
+              "sage_build/app/src/main/java/com/pineapple/sage/SageDiagnostics.java"
+          ).read_text()
+
+          for phrase in ("hey age", "okay age", "ok age"):
+              if f'"{phrase}"' not in voice:
+                  raise SystemExit(f"Missing empirically required wake sound-alike: {phrase}")
+
+          block = voice.split(
+              "SAFE_PREFIXED_WAKE_SOUNDALIKES", 1
+          )[1].split("};", 1)[0]
+          for ambiguous in ('"age"', '"safe"', '"save"', '"say"', '"page"'):
+              if ambiguous in block:
+                  raise SystemExit(
+                      f"Unsafe bare wake sound-alike was enabled: {ambiguous}"
+                  )
+
+          if "wakeCandidateMissed" not in voice or "Last wake candidate" not in diagnostics:
+              raise SystemExit("Rejected wake-candidate diagnostics are incomplete")
+          PY
+
+      - name: Add pinned llama.cpp engine
+        run: |
+          mkdir -p sage_build/third_party/llama.cpp
+          git -C sage_build/third_party/llama.cpp init
+          git -C sage_build/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build/third_party/llama.cpp rev-parse HEAD)" = "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"
+          test -f sage_build/third_party/llama.cpp/include/llama.h
+
+      - name: Give Sage 1.20 permanent update identity
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+
+          choices = [Path('sage_build/app/build.gradle.kts'), Path('sage_build/app/build.gradle')]
+          for path in choices:
+              if not path.exists():
+                  continue
+              text = path.read_text()
+              text, app_count = re.subn(
+                  r'applicationId\s*(?:=\s*)?["\'][^"\']+["\']',
+                  'applicationId = "com.pineapple.sagecommander.stable"',
+                  text,
+                  count=1,
+              )
+              text, code_count = re.subn(
+                  r'versionCode\s*(?:=\s*)?\d+',
+                  'versionCode = 30',
+                  text,
+                  count=1,
+              )
+              text, name_count = re.subn(
+                  r'versionName\s*(?:=\s*)?["\'][^"\']+["\']',
+                  'versionName = "1.20"',
+                  text,
+                  count=1,
+              )
+              if app_count == 0 or code_count == 0 or name_count == 0:
+                  raise SystemExit(f'Could not update app identity/version in {path}')
+
+              if 'com.alphacephei:vosk-android' not in text:
+                  if path.suffix == '.kts':
+                      dependency_lines = (
+                          '    implementation("net.java.dev.jna:jna:5.18.1@aar")\n'
+                          '    implementation("com.alphacephei:vosk-android:0.3.75@aar")\n'
+                      )
+                  else:
+                      dependency_lines = (
+                          "    implementation 'net.java.dev.jna:jna:5.18.1@aar'\n"
+                          "    implementation 'com.alphacephei:vosk-android:0.3.75@aar'\n"
+                      )
+                  match = re.search(r'dependencies\s*\{', text)
+                  if match:
+                      insert_at = match.end()
+                      text = text[:insert_at] + '\n' + dependency_lines + text[insert_at:]
+                  else:
+                      text = text.rstrip() + '\n\ndependencies {\n' + dependency_lines + '}\n'
+
+              if 'com.google.mlkit:translate' not in text:
+                  if path.suffix == '.kts':
+                      translation_dependencies = (
+                          '    implementation("com.google.mlkit:translate:17.0.3")\n'
+                          '    implementation("com.google.mlkit:language-id:17.0.6")\n'
+                      )
+                  else:
+                      translation_dependencies = (
+                          "    implementation 'com.google.mlkit:translate:17.0.3'\n"
+                          "    implementation 'com.google.mlkit:language-id:17.0.6'\n"
+                      )
+                  match = re.search(r'dependencies\s*\{', text)
+                  if match:
+                      insert_at = match.end()
+                      text = text[:insert_at] + '\n' + translation_dependencies + text[insert_at:]
+                  else:
+                      text = text.rstrip() + '\n\ndependencies {\n' + translation_dependencies + '}\n'
+
+              if 'sagePermanentSigning' not in text:
+                  if path.suffix == '.kts':
+                      signing = (
+                          '\n\nandroid {\n'
+                          '    signingConfigs {\n'
+                          '        create("sagePermanentSigning") {\n'
+                          '            storeFile = rootProject.file(System.getProperty("user.home") + "/.android/debug.keystore")\n'
+                          '            storePassword = "android"\n'
+                          '            keyAlias = "androiddebugkey"\n'
+                          '            keyPassword = "android"\n'
+                          '        }\n'
+                          '    }\n'
+                          '    buildTypes {\n'
+                          '        getByName("debug") {\n'
+                          '            signingConfig = signingConfigs.getByName("sagePermanentSigning")\n'
+                          '        }\n'
+                          '    }\n'
+                          '}\n'
+                      )
+                  else:
+                      signing = (
+                          '\n\nandroid {\n'
+                          '    signingConfigs {\n'
+                          '        sagePermanentSigning {\n'
+                          "            storeFile rootProject.file(System.getProperty('user.home') + '/.android/debug.keystore')\n"
+                          "            storePassword 'android'\n"
+                          "            keyAlias 'androiddebugkey'\n"
+                          "            keyPassword 'android'\n"
+                          '        }\n'
+                          '    }\n'
+                          '    buildTypes {\n'
+                          '        debug {\n'
+                          '            signingConfig signingConfigs.sagePermanentSigning\n'
+                          '        }\n'
+                          '    }\n'
+                          '}\n'
+                      )
+                  text = text.rstrip() + signing
+
+              path.write_text(text)
+              print(path.read_text())
+              break
+          else:
+              raise SystemExit('No app Gradle file found')
+
+          manifest = Path('sage_build/app/src/main/AndroidManifest.xml')
+          manifest_text = manifest.read_text()
+          permissions = [
+              '<uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />',
+              '<uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />',
+          ]
+          for permission in permissions:
+              permission_name = permission.split('"')[1]
+              if permission_name not in manifest_text:
+                  manifest_text = manifest_text.replace('<application', permission + '\n    <application', 1)
+          manifest.write_text(manifest_text)
+
+          for xml in Path('sage_build/app/src/main').rglob('*.xml'):
+              text = xml.read_text()
+              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.20', text)
+              if updated != text:
+                  xml.write_text(updated)
+          PY
+
+      - name: Add offline wake-word model
+        run: |
+          rm -rf sage_build/app/src/main/assets/model-en-us /tmp/vosk-model
+          mkdir -p sage_build/app/src/main/assets /tmp/vosk-model
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o /tmp/vosk-model.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/vosk-model.zip -d /tmp/vosk-model
+          mv /tmp/vosk-model/vosk-model-small-en-us-0.15 sage_build/app/src/main/assets/model-en-us
+          cat /proc/sys/kernel/random/uuid > sage_build/app/src/main/assets/model-en-us/uuid
+          test -f sage_build/app/src/main/assets/model-en-us/conf/model.conf
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install permanent Sage signing identity
+        run: |
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Install Android SDK 35 and native toolchain
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Verify signing identity
+        working-directory: sage_build
+        run: gradle :app:signingReport
+
+      - name: Build debug APK
+        working-directory: sage_build
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Upload Sage APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Tablet-Control-v1.20-wake-hotfix
+          path: sage_build/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

@@ -1,0 +1,541 @@
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -142,6 +142,13 @@
+         accessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+         root.addView(accessibility, spacedSmall());
+ 
++        Button clearScreenNumbers = makeButton("Clear screen numbers");
++        clearScreenNumbers.setOnClickListener(v -> {
++            SageAccessibilityService.clearNumberOverlay();
++            Toast.makeText(this, "Screen numbers cleared.", Toast.LENGTH_LONG).show();
++        });
++        root.addView(clearScreenNumbers, spacedSmall());
++
+         Button notifications = makeButton("Notification access");
+         notifications.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
+         root.addView(notifications, spacedSmall());
+@@ -815,6 +822,7 @@
+     @Override
+     protected void onResume() {
+         super.onResume();
++        SageAccessibilityService.clearNumberOverlay();
+         refreshStatus(null);
+         refreshConversationModeButton();
+         refreshTeachingSummary();
+--- a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
++++ b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
+@@ -8,6 +8,9 @@
+ import android.graphics.Rect;
+ import android.graphics.drawable.GradientDrawable;
+ import android.os.Bundle;
++import android.os.Handler;
++import android.os.Looper;
++import android.os.SystemClock;
+ import android.util.DisplayMetrics;
+ import android.view.Gravity;
+ import android.view.View;
+@@ -26,10 +29,18 @@
+ import java.util.Set;
+ 
+ public class SageAccessibilityService extends AccessibilityService {
++    private static final long NUMBER_OVERLAY_TIMEOUT_MS = 25000L;
++    private static final long NUMBER_OVERLAY_EVENT_GRACE_MS = 650L;
+     private static volatile SageAccessibilityService instance;
+     private WindowManager windowManager;
++    private final Handler mainHandler = new Handler(Looper.getMainLooper());
++    private final Runnable clearNumberOverlayRunnable = this::clearNumberOverlayInternal;
+     private final List<View> numberOverlayViews = new ArrayList<>();
+-    private final List<Rect> numberedTargets = new ArrayList<>();
++    private final List<ScreenTarget> numberedTargets = new ArrayList<>();
++    private String numberedTargetType = "generic";
++    private String numberedPackageName = "";
++    private int numberedWindowId = -1;
++    private long numberOverlayShownAtMs;
+ 
+     private static final class ScreenTarget {
+         final AccessibilityNodeInfo node;
+@@ -73,32 +84,66 @@
+ 
+     @Override
+     public void onAccessibilityEvent(AccessibilityEvent event) {
+-        // Commands are user-initiated. No background screen scraping is performed here.
++        if (event == null || numberOverlayViews.isEmpty()) {
++            return;
++        }
++        if (SystemClock.uptimeMillis() - numberOverlayShownAtMs
++                < NUMBER_OVERLAY_EVENT_GRACE_MS) {
++            return;
++        }
++        String eventPackage = event.getPackageName() == null
++                ? ""
++                : event.getPackageName().toString();
++        int eventWindowId = event.getWindowId();
++        boolean differentPackage = eventWindowId >= 0
++                && !numberedPackageName.isEmpty()
++                && !eventPackage.isEmpty()
++                && !numberedPackageName.equals(eventPackage);
++        boolean differentWindow = numberedWindowId >= 0
++                && eventWindowId >= 0
++                && numberedWindowId != eventWindowId;
++        int type = event.getEventType();
++        boolean screenMoved = type == AccessibilityEvent.TYPE_VIEW_SCROLLED
++                || type == AccessibilityEvent.TYPE_VIEW_CLICKED
++                || type == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED
++                || type == AccessibilityEvent.TYPE_WINDOWS_CHANGED;
++        if (differentPackage || differentWindow || screenMoved) {
++            clearNumberOverlayInternal();
++        }
+     }
+ 
+     @Override
+     public void onInterrupt() {
+-        // Nothing persistent to interrupt.
++        clearNumberOverlayInternal();
+     }
+ 
+     public static boolean goBack() {
+-        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_BACK);
++        return performGlobalActionAndClear(GLOBAL_ACTION_BACK);
+     }
+ 
+     public static boolean goHome() {
+-        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_HOME);
++        return performGlobalActionAndClear(GLOBAL_ACTION_HOME);
+     }
+ 
+     public static boolean showRecents() {
+-        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_RECENTS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_RECENTS);
+     }
+ 
+     public static boolean showNotifications() {
+-        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_NOTIFICATIONS);
+     }
+ 
+     public static boolean showQuickSettings() {
+-        return instance != null && instance.performGlobalAction(GLOBAL_ACTION_QUICK_SETTINGS);
++        return performGlobalActionAndClear(GLOBAL_ACTION_QUICK_SETTINGS);
++    }
++
++    private static boolean performGlobalActionAndClear(int action) {
++        SageAccessibilityService service = instance;
++        if (service == null) {
++            return false;
++        }
++        service.clearNumberOverlayInternal();
++        return service.performGlobalAction(action);
+     }
+ 
+     public static boolean scroll(boolean down) {
+@@ -106,6 +151,7 @@
+         if (service == null) {
+             return false;
+         }
++        service.clearNumberOverlayInternal();
+         AccessibilityNodeInfo root = service.getRootInActiveWindow();
+         AccessibilityNodeInfo scrollable = findScrollable(root);
+         if (scrollable != null) {
+@@ -124,6 +170,7 @@
+         if (service == null || requestedText == null || requestedText.trim().isEmpty()) {
+             return false;
+         }
++        service.clearNumberOverlayInternal();
+         AccessibilityNodeInfo root = service.getRootInActiveWindow();
+         if (root == null) {
+             return false;
+@@ -142,6 +189,7 @@
+         if (service == null || itemNumber < 1) {
+             return false;
+         }
++        service.clearNumberOverlayInternal();
+         AccessibilityNodeInfo root = service.getRootInActiveWindow();
+         if (root == null) {
+             return false;
+@@ -169,13 +217,37 @@
+             return 0;
+         }
+         DisplayMetrics metrics = service.getResources().getDisplayMetrics();
++        String packageName = root.getPackageName() == null
++                ? ""
++                : root.getPackageName().toString();
++        String requestedType = type == null
++                ? "generic"
++                : type.toLowerCase(Locale.US);
+         List<ScreenTarget> candidates = findInteractiveTargets(
+                 root,
+-                type == null ? "generic" : type,
++                requestedType,
+                 metrics.widthPixels,
+                 metrics.heightPixels
+         );
+-        return service.showNumberOverlayInternal(candidates);
++        if (requestedType.equals("generic")
++                && packageName.toLowerCase(Locale.US).contains("youtube")) {
++            List<ScreenTarget> videoCandidates = findInteractiveTargets(
++                    root,
++                    "video",
++                    metrics.widthPixels,
++                    metrics.heightPixels
++            );
++            if (!videoCandidates.isEmpty()) {
++                candidates = videoCandidates;
++                requestedType = "video";
++            }
++        }
++        return service.showNumberOverlayInternal(
++                candidates,
++                requestedType,
++                packageName,
++                root.getWindowId()
++        );
+     }
+ 
+     public static boolean hasNumberOverlay() {
+@@ -188,9 +260,26 @@
+         if (service == null || number < 1 || number > service.numberedTargets.size()) {
+             return false;
+         }
+-        Rect bounds = new Rect(service.numberedTargets.get(number - 1));
++        AccessibilityNodeInfo root = service.getRootInActiveWindow();
++        if (root == null || !service.isOverlayForRoot(root)) {
++            service.clearNumberOverlayInternal();
++            return false;
++        }
++        ScreenTarget savedTarget = service.numberedTargets.get(number - 1);
++        DisplayMetrics metrics = service.getResources().getDisplayMetrics();
++        List<ScreenTarget> currentTargets = findInteractiveTargets(
++                root,
++                service.numberedTargetType,
++                metrics.widthPixels,
++                metrics.heightPixels
++        );
++        ScreenTarget currentTarget = resolveCurrentTarget(
++                savedTarget,
++                currentTargets,
++                metrics.widthPixels
++        );
+         service.clearNumberOverlayInternal();
+-        return service.tapBounds(bounds);
++        return currentTarget != null && service.clickNodeOrTap(currentTarget.node);
+     }
+ 
+     public static void clearNumberOverlay() {
+@@ -205,6 +294,7 @@
+         if (service == null || text == null) {
+             return false;
+         }
++        service.clearNumberOverlayInternal();
+         AccessibilityNodeInfo root = service.getRootInActiveWindow();
+         if (root == null) {
+             return false;
+@@ -311,11 +401,22 @@
+         return dispatchGesture(gesture, null, null);
+     }
+ 
+-    private int showNumberOverlayInternal(List<ScreenTarget> candidates) {
++    private int showNumberOverlayInternal(
++            List<ScreenTarget> candidates,
++            String targetType,
++            String packageName,
++            int windowId
++    ) {
+         clearNumberOverlayInternal();
+         if (windowManager == null || candidates == null || candidates.isEmpty()) {
+             return 0;
+         }
++        numberedTargetType = targetType == null
++                ? "generic"
++                : targetType.toLowerCase(Locale.US);
++        numberedPackageName = packageName == null ? "" : packageName;
++        numberedWindowId = windowId;
++        numberOverlayShownAtMs = SystemClock.uptimeMillis();
+         int limit = Math.min(12, candidates.size());
+         for (int index = 0; index < limit; index++) {
+             ScreenTarget target = candidates.get(index);
+@@ -324,7 +425,7 @@
+                 continue;
+             }
+             TextView marker = new TextView(this);
+-            marker.setText(String.valueOf(index + 1));
++            marker.setText(String.valueOf(numberedTargets.size() + 1));
+             marker.setTextColor(Color.WHITE);
+             marker.setTextSize(16f);
+             marker.setGravity(Gravity.CENTER);
+@@ -350,14 +451,23 @@
+             try {
+                 windowManager.addView(marker, params);
+                 numberOverlayViews.add(marker);
+-                numberedTargets.add(bounds);
++                numberedTargets.add(new ScreenTarget(
++                        target.node,
++                        new Rect(bounds),
++                        target.text,
++                        target.score
++                ));
+             } catch (RuntimeException ignored) {
+             }
+         }
++        if (!numberedTargets.isEmpty()) {
++            mainHandler.postDelayed(clearNumberOverlayRunnable, NUMBER_OVERLAY_TIMEOUT_MS);
++        }
+         return numberedTargets.size();
+     }
+ 
+     private void clearNumberOverlayInternal() {
++        mainHandler.removeCallbacks(clearNumberOverlayRunnable);
+         if (windowManager != null) {
+             for (View view : new ArrayList<>(numberOverlayViews)) {
+                 try {
+@@ -368,6 +478,71 @@
+         }
+         numberOverlayViews.clear();
+         numberedTargets.clear();
++        numberedTargetType = "generic";
++        numberedPackageName = "";
++        numberedWindowId = -1;
++        numberOverlayShownAtMs = 0L;
++    }
++
++    private boolean isOverlayForRoot(AccessibilityNodeInfo root) {
++        if (root == null || numberedTargets.isEmpty()) {
++            return false;
++        }
++        String currentPackage = root.getPackageName() == null
++                ? ""
++                : root.getPackageName().toString();
++        return (numberedPackageName.isEmpty() || numberedPackageName.equals(currentPackage))
++                && (numberedWindowId < 0 || numberedWindowId == root.getWindowId());
++    }
++
++    private static ScreenTarget resolveCurrentTarget(
++            ScreenTarget saved,
++            List<ScreenTarget> currentTargets,
++            int screenWidth
++    ) {
++        if (saved == null || currentTargets == null || currentTargets.isEmpty()) {
++            return null;
++        }
++        String savedText = normalizeTargetText(saved.text);
++        ScreenTarget best = null;
++        int bestScore = Integer.MIN_VALUE;
++        int nearbyDistance = Math.max(72, screenWidth / 14);
++        for (ScreenTarget current : currentTargets) {
++            String currentText = normalizeTargetText(current.text);
++            int score = 0;
++            if (!savedText.isEmpty() && savedText.equals(currentText)) {
++                score += 120;
++            } else if (savedText.length() >= 5
++                    && currentText.length() >= 5
++                    && (savedText.contains(currentText) || currentText.contains(savedText))) {
++                score += 70;
++            }
++            Rect overlap = new Rect(saved.bounds);
++            if (overlap.intersect(current.bounds)) {
++                score += 45;
++            }
++            int distance = Math.abs(saved.bounds.centerX() - current.bounds.centerX())
++                    + Math.abs(saved.bounds.centerY() - current.bounds.centerY());
++            if (distance <= nearbyDistance) {
++                score += 35;
++            } else if (distance <= nearbyDistance * 2) {
++                score += 15;
++            }
++            if (score > bestScore) {
++                best = current;
++                bestScore = score;
++            }
++        }
++        return bestScore >= 35 ? best : null;
++    }
++
++    private static String normalizeTargetText(String value) {
++        return value == null
++                ? ""
++                : value.toLowerCase(Locale.US)
++                        .replaceAll("[^a-z0-9 ]", " ")
++                        .replaceAll("\\s+", " ")
++                        .trim();
+     }
+ 
+     private static List<ScreenTarget> findInteractiveTargets(
+@@ -422,31 +597,37 @@
+             }
+         }
+ 
+-        targets.sort((left, right) -> {
+-            int scoreDifference = Integer.compare(right.score, left.score);
+-            if (!requestedType.equals("generic") && scoreDifference != 0) {
+-                return scoreDifference;
+-            }
+-            int rowTolerance = Math.max(32, screenHeight / 28);
+-            int rowDifference = left.bounds.centerY() - right.bounds.centerY();
+-            if (Math.abs(rowDifference) <= rowTolerance) {
+-                return Integer.compare(left.bounds.left, right.bounds.left);
+-            }
+-            return Integer.compare(left.bounds.top, right.bounds.top);
+-        });
+-
+         if (!requestedType.equals("generic")) {
+-            int bestScore = targets.isEmpty() ? -1 : targets.get(0).score;
++            int bestScore = -1;
++            for (ScreenTarget target : targets) {
++                bestScore = Math.max(bestScore, target.score);
++            }
+             if (bestScore > 0) {
+                 List<ScreenTarget> filtered = new ArrayList<>();
++                int scoreFloor;
++                if (requestedType.equals("video")) {
++                    scoreFloor = Math.max(5, bestScore - 9);
++                } else if (requestedType.equals("link")) {
++                    scoreFloor = Math.max(3, bestScore - 7);
++                } else {
++                    scoreFloor = Math.max(1, bestScore - 6);
++                }
+                 for (ScreenTarget target : targets) {
+-                    if (target.score >= Math.max(1, bestScore - 4)) {
++                    if (target.score >= scoreFloor) {
+                         filtered.add(target);
+                     }
+                 }
+                 targets = filtered;
+             }
+         }
++        targets.sort((left, right) -> {
++            int rowTolerance = Math.max(32, screenHeight / 28);
++            int rowDifference = left.bounds.centerY() - right.bounds.centerY();
++            if (Math.abs(rowDifference) <= rowTolerance) {
++                return Integer.compare(left.bounds.left, right.bounds.left);
++            }
++            return Integer.compare(left.bounds.top, right.bounds.top);
++        });
+         return targets;
+     }
+ 
+@@ -467,7 +648,8 @@
+             if (value.contains(" views") || value.contains(" watching") || value.contains(" ago")) score += 6;
+             if (value.contains("play ") || value.startsWith("play")) score += 5;
+             if (value.matches(".*\\b\\d{1,2}:\\d{2}(:\\d{2})?\\b.*")) score += 5;
+-            if (packageName.contains("youtube")) score += 4;
++            if (score > 0 && packageName.contains("youtube")) score += 3;
++            if (score == 0) score = -1;
+         } else if (type.equals("link")) {
+             score = 0;
+             if (viewId.contains("link") || viewId.contains("result")) score += 8;
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -83,6 +83,7 @@
+     public void cancelFollowUp() {
+         pendingAction = "";
+         pendingTeachingPhrase = "";
++        SageAccessibilityService.clearNumberOverlay();
+     }
+ 
+     public Result execute(String spokenText) {
+@@ -120,9 +121,21 @@
+         int numberedChoice = extractOrdinal(lower);
+         if (SageAccessibilityService.hasNumberOverlay() && numberedChoice > 0
+                 && (isStandaloneNumber(lower) || containsAnyPhrase(lower, "number", "click", "tap", "pick", "choose", "select", "open"))) {
+-            return SageAccessibilityService.tapNumberedTarget(numberedChoice)
+-                    ? Result.quiet("Opening number " + numberedChoice + ".")
+-                    : new Result("That numbered item is not available anymore. Say show numbers again.");
++            if (SageAccessibilityService.tapNumberedTarget(numberedChoice)) {
++                pendingAction = "";
++                return Result.quiet("Opening number " + numberedChoice + ".");
++            }
++            pendingAction = SageAccessibilityService.hasNumberOverlay()
++                    ? "screen_number"
++                    : "";
++            return new Result("That number is not available on this screen. Say one of the red numbers, or say clear numbers.");
++        }
++        if (pendingAction.equals("screen_number")) {
++            pendingAction = "";
++            SageAccessibilityService.clearNumberOverlay();
++            if (numberedChoice > 0) {
++                return new Result("Those screen numbers already cleared. Say show video numbers to make a fresh set.");
++            }
+         }
+ 
+         if (!pendingAction.isEmpty()) {
+@@ -155,13 +168,25 @@
+             return new Result("Sleeping. Tap Listen when you need me.", true);
+         }
+         if (isAny(lower, "help", "commands", "what can you do")) {
+-            return new Result("I wait for the word Sage before each command unless you turn on conversation mode. Say remember this to teach me a phrase, or say when I say movie time, it means open YouTube. You can also link command phrases to voice clips in the app. I can translate, control the tablet, open apps and websites, search, scroll, type, control media, and read notifications.");
++            return new Result("I wait for the word Sage before each command unless you turn on conversation mode. Say remember this to teach me a phrase, or say when I say movie time, it means open YouTube. You can also link command phrases to voice clips in the app. For screen choices, say play the second video. If I need red numbers, they clear automatically. I can translate, control the tablet, open apps and websites, search, scroll, type, control media, and read notifications.");
+         }
+ 
+         if (isAny(lower, "show numbers", "number the screen", "put numbers on the screen", "label the screen", "number everything")) {
+             return showScreenNumbers("generic");
+         }
+-        if (containsAnyPhrase(lower, "number the videos", "show video numbers", "number videos", "label the videos")) {
++        if (containsAnyPhrase(
++                lower,
++                "number the videos",
++                "number the video",
++                "number videos",
++                "number video",
++                "show video numbers",
++                "show numbers on videos",
++                "show numbers on the videos",
++                "label the videos",
++                "label videos",
++                "show video choices"
++        )) {
+             return showScreenNumbers("video");
+         }
+         if (containsAnyPhrase(lower, "number the links", "show link numbers", "number links", "label the links")) {
+@@ -376,7 +401,7 @@
+                 "click", "tap", "open", "choose", "pick", "select", "play", "press",
+                 "take me to", "go into", "go on", "hit", "grab");
+ 
+-        if (number > 0 && (selectionThing || selectionVerb || isStandaloneNumber(lower))) {
++        if (number > 0 && (selectionThing || selectionVerb)) {
+             return openScreenItem(number, inferScreenItemType(lower));
+         }
+ 
+@@ -665,7 +690,10 @@
+         if (count <= 0) {
+             return new Result("I could not find clickable things to number on this screen.");
+         }
+-        return new Result("I numbered " + count + " things. Say the number you want.");
++        pendingAction = "screen_number";
++        String itemName = type.equals("video") ? "videos" : "things";
++        return new Result("I numbered " + count + " " + itemName
++                + " from top to bottom. Say the red number you want. The numbers clear automatically.");
+     }
+ 
+     private Result openScreenItem(int number, String type) {
+@@ -677,7 +705,8 @@
+         }
+         int count = SageAccessibilityService.showNumberOverlay(type);
+         if (count > 0) {
+-            return new Result("I was not confident which one you meant, so I numbered the screen. Say the number you want.");
++            pendingAction = "screen_number";
++            return new Result("I was not confident which one you meant, so I numbered the screen from top to bottom. Say the red number you want.");
+         }
+         return new Result("I could not find that " + type + " on this screen.");
+     }
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -819,11 +819,18 @@
+                     if (partials == null) {
+                         return;
+                     }
++                    ArrayList<String> latestPartials = new ArrayList<>();
+                     for (String partial : partials) {
+-                        if (partial != null && !partial.trim().isEmpty() && !partialChoices.contains(partial)) {
+-                            partialChoices.add(partial);
++                        if (partial != null
++                                && !partial.trim().isEmpty()
++                                && !latestPartials.contains(partial)) {
++                            latestPartials.add(partial);
+                         }
+                     }
++                    if (!latestPartials.isEmpty()) {
++                        partialChoices.clear();
++                        partialChoices.addAll(latestPartials);
++                    }
+                     for (String partial : partials) {
+                         if (partial != null && !partial.trim().isEmpty()) {
+                             String visible = partial.trim();

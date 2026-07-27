@@ -1,0 +1,214 @@
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -35,0 +36 @@
++    public static final String ACTION_LISTEN_NOW = "com.pineapple.sage.LISTEN_NOW";
+@@ -45,0 +47,5 @@
++    private static final String[] BUILT_IN_WAKE_PREFIXES = {
++            "hey sage", "okay sage", "ok sage", "sage",
++            "hey stage", "okay stage", "ok stage", "stage",
++            "hey say age", "okay say age", "ok say age", "say age"
++    };
+@@ -66,0 +73 @@
++    private boolean commandStartPending;
+@@ -68,0 +76 @@
++    private int commandBusyRetries;
+@@ -104,0 +113,4 @@
++        } else if (ACTION_LISTEN_NOW.equals(action)) {
++            broadcastStatus("Getting ready to listen");
++            updateNotification("Getting ready to listen");
++            startCommandRecognition(550);
+@@ -148 +160,2 @@
+-        if (stopRequested || speaking || commandListening || !wakeModelReady || wakeModel == null) {
++        if (stopRequested || speaking || commandListening || commandStartPending
++                || !wakeModelReady || wakeModel == null) {
+@@ -152 +165,2 @@
+-            if (stopRequested || speaking || commandListening || wakeListening || wakeModel == null) {
++            if (stopRequested || speaking || commandListening || commandStartPending
++                    || wakeListening || wakeModel == null) {
+@@ -255,4 +269,4 @@
+-        if (normalized.equals("sage") || normalized.startsWith("sage ")
+-                || normalized.startsWith("hey sage") || normalized.startsWith("okay sage")
+-                || normalized.startsWith("ok sage")) {
+-            return true;
++        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
++            if (normalized.equals(prefix) || normalized.startsWith(prefix + " ")) {
++                return true;
++            }
+@@ -274,2 +288 @@
+-        String[] prefixes = {"hey sage", "okay sage", "ok sage", "sage"};
+-        for (String prefix : prefixes) {
++        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
+@@ -342 +355,5 @@
+-        if (stopRequested || speaking || commandListening) {
++        startCommandRecognition(delayMs, false);
++    }
++
++    private void startCommandRecognition(long delayMs, boolean retryingBusyRecognizer) {
++        if (stopRequested || speaking || commandListening || commandStartPending) {
+@@ -344,0 +362,4 @@
++        if (!retryingBusyRecognizer) {
++            commandBusyRetries = 0;
++        }
++        commandStartPending = true;
+@@ -347,0 +369 @@
++                commandStartPending = false;
+@@ -351 +373,3 @@
+-                broadcastLine("Sage", "Android speech recognition is not available on this tablet.");
++                commandStartPending = false;
++                broadcastLine("Sage", "Android voice typing is unavailable. Make sure the tablet's Speech Services are enabled, then tap Talk to Sage again.");
++                broadcastStatus("Voice typing unavailable");
+@@ -356 +380,9 @@
+-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
++            try {
++                speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
++            } catch (RuntimeException error) {
++                commandStartPending = false;
++                broadcastLine("Sage", "Android voice typing could not open. Tap Talk to Sage and try again.");
++                broadcastStatus("Tap Talk to Sage");
++                startWakeListening(700);
++                return;
++            }
+@@ -362,0 +395 @@
++                    updateNotification("Listening for your command");
+@@ -379,0 +413 @@
++                    ArrayList<String> heardBeforeError = new ArrayList<>(partialChoices);
+@@ -381,0 +416,18 @@
++                    String partialCandidate = chooseBestCandidate(heardBeforeError);
++                    if (!partialCandidate.isEmpty()
++                            && (error == SpeechRecognizer.ERROR_NO_MATCH
++                            || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT)) {
++                        commandBusyRetries = 0;
++                        handleCommand(partialCandidate);
++                        return;
++                    }
++                    if (error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
++                            && commandBusyRetries < 2
++                            && !stopRequested
++                            && !speaking) {
++                        commandBusyRetries++;
++                        broadcastStatus("Switching microphone");
++                        updateNotification("Switching microphone");
++                        startCommandRecognition(900, true);
++                        return;
++                    }
+@@ -383 +435,4 @@
+-                        broadcastStatus("Waiting for Sage");
++                        commandBusyRetries = 0;
++                        broadcastLine("Sage", recognitionErrorMessage(error));
++                        broadcastStatus("Tap Talk to Sage");
++                        updateNotification("Tap Talk to Sage, or say Sage");
+@@ -398,0 +454 @@
++                    commandBusyRetries = 0;
+@@ -402 +458 @@
+-                        broadcastLine("Sage", "I did not catch that. Say Sage and try it your normal way again.");
++                        broadcastLine("Sage", "I did not catch that. Tap Talk to Sage and try again.");
+@@ -417,0 +474,11 @@
++                    for (int index = partials.size() - 1; index >= 0; index--) {
++                        String partial = partials.get(index);
++                        if (partial != null && !partial.trim().isEmpty()) {
++                            String visible = partial.trim();
++                            if (visible.length() > 72) {
++                                visible = visible.substring(0, 72) + "…";
++                            }
++                            broadcastStatus("Hearing: " + visible);
++                            break;
++                        }
++                    }
+@@ -423,0 +491 @@
++                commandStartPending = false;
+@@ -426,0 +495 @@
++                commandStartPending = false;
+@@ -428 +497,9 @@
+-                startWakeListening(800);
++                if (commandBusyRetries < 2) {
++                    commandBusyRetries++;
++                    startCommandRecognition(900, true);
++                } else {
++                    commandBusyRetries = 0;
++                    broadcastLine("Sage", "The microphone opened, but Android voice typing did not start. Tap Talk to Sage and try once more.");
++                    broadcastStatus("Tap Talk to Sage");
++                    startWakeListening(800);
++                }
+@@ -432,0 +510,22 @@
++    private String recognitionErrorMessage(int error) {
++        if (error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
++                || error == SpeechRecognizer.ERROR_NO_MATCH) {
++            return "I did not hear enough words. Tap Talk to Sage and speak after it says Listening for command.";
++        }
++        if (error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS) {
++            return "Android blocked microphone access. Allow Sage to use the microphone, then tap Talk to Sage.";
++        }
++        if (error == SpeechRecognizer.ERROR_NETWORK
++                || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
++                || error == SpeechRecognizer.ERROR_SERVER) {
++            return "Android voice typing could not connect. Check the tablet's connection, then tap Talk to Sage again.";
++        }
++        if (error == SpeechRecognizer.ERROR_AUDIO) {
++            return "Android could not read the microphone audio. Close any other voice app, then tap Talk to Sage.";
++        }
++        if (error == SpeechRecognizer.ERROR_CLIENT) {
++            return "Android stopped the voice listener. Tap Talk to Sage to restart it.";
++        }
++        return "Voice typing stopped before it returned your words. Tap Talk to Sage and try again.";
++    }
++
+@@ -625,0 +725 @@
++        commandStartPending = false;
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -35,0 +36 @@
++    private Button wakeButton;
+@@ -37,0 +39 @@
++    private boolean talkAfterPermission;
+@@ -100 +102 @@
+-        listenButton = makeButton("Start listening");
++        listenButton = makeButton("Talk to Sage");
+@@ -103 +105 @@
+-        listenButton.setOnClickListener(v -> toggleListening());
++        listenButton.setOnClickListener(v -> listenNow());
+@@ -105,0 +108,4 @@
++        wakeButton = makeButton("Start background listening");
++        wakeButton.setOnClickListener(v -> toggleListening());
++        root.addView(wakeButton, spacedSmall());
++
+@@ -137 +143 @@
+-        conversationText.setText("Say Sage, then talk normally.\n\nTry: Sage, open YouTube\nSage, click the second video\nSage, show numbers\nSage, two\n\nTeach a phrase: when I say grab that second one, I mean open the second video");
++        conversationText.setText("Tap Talk to Sage and speak when the status says Listening for command.\n\nBackground mode also waits for: Sage, then your command.\n\nTry: open YouTube\nclick the second video\nshow numbers\ntwo");
+@@ -163,0 +170 @@
++            talkAfterPermission = false;
+@@ -169,0 +177,15 @@
++    private void listenNow() {
++        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
++            talkAfterPermission = true;
++            requestPermissions(new String[]{Manifest.permission.RECORD_AUDIO}, MICROPHONE_PERMISSION);
++            return;
++        }
++        Intent listen = new Intent(this, SageVoiceService.class).setAction(SageVoiceService.ACTION_LISTEN_NOW);
++        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
++            startForegroundService(listen);
++        } else {
++            startService(listen);
++        }
++        refreshStatus("Getting ready to listen");
++    }
++
+@@ -286 +308,4 @@
+-        listenButton.setText(SageVoiceService.isRunning() ? "Stop listening" : "Start listening");
++        listenButton.setText("Talk to Sage");
++        wakeButton.setText(SageVoiceService.isRunning()
++                ? "Stop background listening"
++                : "Start background listening");
+@@ -335 +360,6 @@
+-            startSageService();
++            if (talkAfterPermission) {
++                talkAfterPermission = false;
++                listenNow();
++            } else {
++                startSageService();
++            }
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -12,0 +13,3 @@
++            <action android:name="android.speech.RecognitionService" />
++        </intent>
++        <intent>
