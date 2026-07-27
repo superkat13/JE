@@ -40,8 +40,9 @@ jobs:
           patch -d sage_build -p1 < sage_patches/conversation_voice_v1_13.patch
           patch -d sage_build -p1 < sage_patches/translation_v1_14.patch
           patch -d sage_build -p1 < sage_patches/wake_learning_v1_15.patch
+          patch -d sage_build -p1 < sage_patches/media_responses_v1_16.patch
 
-      - name: Give Sage 1.15 permanent update identity
+      - name: Give Sage 1.16 permanent update identity
         run: |
           python3 - <<'PY'
           from pathlib import Path
@@ -60,13 +61,13 @@ jobs:
               )
               text, code_count = re.subn(
                   r'versionCode\s*(?:=\s*)?\d+',
-                  'versionCode = 25',
+                  'versionCode = 26',
                   text,
                   count=1,
               )
               text, name_count = re.subn(
                   r'versionName\s*(?:=\s*)?["\'][^"\']+["\']',
-                  'versionName = "1.15"',
+                  'versionName = "1.16"',
                   text,
                   count=1,
               )
@@ -168,7 +169,7 @@ jobs:
 
           for xml in Path('sage_build/app/src/main').rglob('*.xml'):
               text = xml.read_text()
-              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.15', text)
+              updated = re.sub(r'Sage Commander(?:\s+\d+\.\d+)?', 'Sage Commander 1.16', text)
               if updated != text:
                   xml.write_text(updated)
           PY
@@ -219,6 +220,6 @@ jobs:
       - name: Upload Sage APK
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Tablet-Control-v1.15-wake-learning
+          name: Sage-Tablet-Control-v1.16-custom-voice
           path: sage_build/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
