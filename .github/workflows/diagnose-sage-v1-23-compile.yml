@@ -25,7 +25,9 @@ jobs:
           python3 sage_patches/fix_android_lint_v1_21.py sage_build
           python3 sage_patches/brain_watchdog_v1_22.py sage_build
           python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build
           python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build
 
       - name: Add pinned llama.cpp engine
         run: |
