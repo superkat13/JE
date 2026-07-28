@@ -157,7 +157,7 @@ jobs:
           unzip -l "$APK" | tee apk-file-list.txt
           grep -F "lib/arm64-v8a/libsage-brain.so" apk-file-list.txt
           grep -F "classes.dex" apk-file-list.txt
-          unzip -p "$APK" classes.dex | strings | grep -F "Sage Brain timed out" | tee apk-watchdog-string.txt
+          unzip -p "$APK" 'classes*.dex' | strings | grep -F "Sage Brain timed out" | tee apk-watchdog-string.txt
           sha256sum "$APK" | tee apk-sha256.txt
           find sage_build/app/src/main -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | tee source-tree-sha256.txt
           cp "$APK" Sage-Commander-1.22-brain-watchdog.apk
