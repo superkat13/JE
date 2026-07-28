@@ -2,6 +2,9 @@ name: Diagnose Sage 1.23 compilation
 
 on:
   workflow_dispatch:
+  pull_request:
+    branches:
+      - sage-tablet-control-v1
   push:
     branches:
       - agent/sage-stabilization-v1-21
