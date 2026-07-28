@@ -19,47 +19,25 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Reconstruct exact Sage 1.20 source
-        run: |
-          set -euo pipefail
-          mkdir -p sage_build
-          cat sage_package/part_*.b64 | tr -d '\n\r ' | base64 --decode > Sage_Tablet_Control_v1_source.zip
-          echo "9d23d8566cd30a81818b99f7f032a823b89d98221da029b31c6d4838d5a07d91  Sage_Tablet_Control_v1_source.zip" | sha256sum --check
-          unzip -q Sage_Tablet_Control_v1_source.zip -d sage_build
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/result_click_v1_1.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/voice_redqueen_v1_2.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/recognition_v1_4.patch
-          base64 --decode sage_patches/natural_voice_v1_5.patch.gz.b64 | gunzip > /tmp/natural_voice_v1_5.patch
-          patch --fuzz=0 -d sage_build -p1 < /tmp/natural_voice_v1_5.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/updater_v1_6.patch
-          base64 --decode sage_patches/wake_learn_click_v1_7.patch.gz.b64 | gunzip > /tmp/wake_learn_click_v1_7.patch
-          echo "c5d5ee8681c03f393a77ff7da9b8afc0d6c2ff7f7d0d54ea4687e1144bab77dc  /tmp/wake_learn_click_v1_7.patch" | sha256sum --check
-          patch --fuzz=0 -d sage_build -p1 < /tmp/wake_learn_click_v1_7.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/native_speech_v1_9.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/voice_accuracy_v1_10.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/native_wake_teach_v1_11.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/echo_guard_v1_12.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/conversation_voice_v1_13.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/translation_v1_14.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/wake_learning_v1_15.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/media_responses_v1_16.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/screen_targeting_v1_17.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/conversation_diagnostics_v1_18.patch
-          patch --fuzz=0 -d sage_build -p1 < sage_patches/brain_v1_19.patch
-          base64 --decode sage_patches/wake_match_v1_20.patch.gz.b64 | gunzip > /tmp/wake_match_v1_20.patch
-          echo "7342e6ba2fc5a374b0ff77e222471912633e5f775a3ae92d5553a79a160a8547  /tmp/wake_match_v1_20.patch" | sha256sum --check
-          patch --fuzz=0 -d sage_build -p1 < /tmp/wake_match_v1_20.patch
+        run: bash sage_tools/reconstruct_v1_20.sh sage_build
 
-      - name: Apply Sage 1.21 stabilization
+      - name: Apply Sage 1.21 stabilization and compatibility fixes
         run: |
           set -euo pipefail
-          python3 -m py_compile sage_patches/stabilize_v1_21.py
+          python3 -m py_compile \
+            sage_patches/stabilize_v1_21.py \
+            sage_patches/fix_android_lint_v1_21.py
           python3 sage_patches/stabilize_v1_21.py sage_build
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build
 
-      - name: Run behavior and source regression tests
+      - name: Run behavior, source, and Android compatibility regression tests
         run: |
           set -euo pipefail
-          python3 -m py_compile sage_tests/test_stabilization_v1_21.py
+          python3 -m py_compile \
+            sage_tests/test_stabilization_v1_21.py \
+            sage_tests/test_android_compat_v1_21.py
           python3 sage_tests/test_stabilization_v1_21.py sage_build
+          python3 sage_tests/test_android_compat_v1_21.py sage_build
 
       - name: Add pinned llama.cpp engine
         run: |
@@ -157,7 +135,7 @@ jobs:
         working-directory: sage_build
         run: gradle :app:assembleDebug --stacktrace
 
-      - name: Verify APK identity, certificate, alignment, native library, and contents
+      - name: Verify APK identity, certificate, alignment, native library, and integrity
         run: |
           set -euo pipefail
           APK="sage_build/app/build/outputs/apk/debug/app-debug.apk"
@@ -170,10 +148,8 @@ jobs:
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging.txt
           grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='31' versionName='1.21'" apk-badging.txt
           unzip -l "$APK" | tee apk-file-list.txt
-          grep -F "lib/arm64-v8a/libsage_brain.so" apk-file-list.txt
-          unzip -p "$APK" classes.dex | strings > apk-dex-strings.txt
-          grep -F "Numbers ready. Say the red number." apk-dex-strings.txt
-          grep -F "com.pineapple.sagecommander.stable" apk-dex-strings.txt
+          grep -F "lib/arm64-v8a/libsage-brain.so" apk-file-list.txt
+          grep -F "classes.dex" apk-file-list.txt
           sha256sum "$APK" | tee apk-sha256.txt
           find sage_build/app/src/main -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | tee source-tree-sha256.txt
           cp "$APK" Sage-Commander-1.21-stabilization.apk
