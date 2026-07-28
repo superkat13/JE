@@ -1,4 +1,4 @@
-name: Build and verify Sage 1.21 stabilization
+name: Build and verify Sage 1.22 brain watchdog
 
 on:
   workflow_dispatch:
@@ -21,23 +21,30 @@ jobs:
       - name: Reconstruct exact Sage 1.20 source
         run: bash sage_tools/reconstruct_v1_20.sh sage_build
 
-      - name: Apply Sage 1.21 stabilization and compatibility fixes
+      - name: Apply and test Sage 1.21 stabilization foundation
         run: |
           set -euo pipefail
           python3 -m py_compile \
             sage_patches/stabilize_v1_21.py \
-            sage_patches/fix_android_lint_v1_21.py
-          python3 sage_patches/stabilize_v1_21.py sage_build
-          python3 sage_patches/fix_android_lint_v1_21.py sage_build
-
-      - name: Run behavior, source, and Android compatibility regression tests
-        run: |
-          set -euo pipefail
-          python3 -m py_compile \
+            sage_patches/fix_android_lint_v1_21.py \
             sage_tests/test_stabilization_v1_21.py \
             sage_tests/test_android_compat_v1_21.py
+          python3 sage_patches/stabilize_v1_21.py sage_build
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build
           python3 sage_tests/test_stabilization_v1_21.py sage_build
           python3 sage_tests/test_android_compat_v1_21.py sage_build
+
+      - name: Apply Sage 1.22 cancellable brain watchdog
+        run: |
+          set -euo pipefail
+          python3 -m py_compile sage_patches/brain_watchdog_v1_22.py
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build
+
+      - name: Run Sage 1.22 brain watchdog regression tests
+        run: |
+          set -euo pipefail
+          python3 -m py_compile sage_tests/test_brain_watchdog_v1_22.py
+          python3 sage_tests/test_brain_watchdog_v1_22.py sage_build
 
       - name: Add pinned llama.cpp engine
         run: |
@@ -60,7 +67,7 @@ jobs:
             https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
           unzip -q /tmp/vosk-model.zip -d /tmp/vosk-model
           mv /tmp/vosk-model/vosk-model-small-en-us-0.15 sage_build/app/src/main/assets/model-en-us
-          printf 'sage-v1.21-stabilization\n' > sage_build/app/src/main/assets/model-en-us/uuid
+          printf 'sage-v1.22-brain-watchdog\n' > sage_build/app/src/main/assets/model-en-us/uuid
           test -f sage_build/app/src/main/assets/model-en-us/conf/model.conf
 
       - name: Set up JDK 17
@@ -117,7 +124,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-1.21-android-lint-diagnostics
+          name: Sage-1.22-android-lint-diagnostics
           path: |
             android-lint-console.txt
             android-lint-exit-code.txt
@@ -146,25 +153,27 @@ jobs:
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apk-signing.txt
           grep -qi "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" apk-signing.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging.txt
-          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='31' versionName='1.21'" apk-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='32' versionName='1.22'" apk-badging.txt
           unzip -l "$APK" | tee apk-file-list.txt
           grep -F "lib/arm64-v8a/libsage-brain.so" apk-file-list.txt
           grep -F "classes.dex" apk-file-list.txt
+          unzip -p "$APK" classes.dex | strings | grep -F "Sage Brain timed out" | tee apk-watchdog-string.txt
           sha256sum "$APK" | tee apk-sha256.txt
           find sage_build/app/src/main -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | tee source-tree-sha256.txt
-          cp "$APK" Sage-Commander-1.21-stabilization.apk
+          cp "$APK" Sage-Commander-1.22-brain-watchdog.apk
 
-      - name: Upload verified Sage 1.21 APK and reports
+      - name: Upload verified Sage 1.22 APK and reports
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.21-stabilization-verified
+          name: Sage-Commander-1.22-brain-watchdog-verified
           path: |
-            Sage-Commander-1.21-stabilization.apk
+            Sage-Commander-1.22-brain-watchdog.apk
             apk-zip-test.txt
             apk-zipalign.txt
             apk-signing.txt
             apk-badging.txt
             apk-file-list.txt
+            apk-watchdog-string.txt
             apk-sha256.txt
             source-tree-sha256.txt
           if-no-files-found: error
