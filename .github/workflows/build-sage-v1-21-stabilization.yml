@@ -48,10 +48,14 @@ jobs:
           set -euo pipefail
           python3 -m py_compile \
             sage_patches/wake_profiles_and_recognition_v1_23.py \
-            sage_tests/test_wake_profiles_and_recognition_v1_23.py
+            sage_patches/fix_wake_profiles_compile_v1_23.py \
+            sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+            sage_tests/test_wake_profiles_compile_repair_v1_23.py
           test -f sage_patches/SageWakeProfileStore.java
           python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build
           python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build
 
       - name: Add pinned llama.cpp engine
         run: |
