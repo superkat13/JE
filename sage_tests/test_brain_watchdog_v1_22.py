@@ -42,8 +42,8 @@ checks = {
     "permanent package remains unchanged": (
         'applicationId = "com.pineapple.sagecommander.stable"' in gradle
     ),
-    "version advanced to 1.22": (
-        "versionCode = 32" in gradle and 'versionName = "1.22"' in gradle
+    "current release identity is 1.24": (
+        "versionCode = 34" in gradle and 'versionName = "1.24"' in gradle
     ),
 }
 
