@@ -122,8 +122,8 @@ class SourceRegressionTests(unittest.TestCase):
 
     def test_permanent_update_identity(self):
         self.assertIn('applicationId = "com.pineapple.sagecommander.stable"', self.gradle)
-        self.assertIn('versionCode = 31', self.gradle)
-        self.assertIn('versionName = "1.21"', self.gradle)
+        self.assertIn('versionCode = 34', self.gradle)
+        self.assertIn('versionName = "1.24"', self.gradle)
         self.assertIn('sagePermanentSigning', self.gradle)
         self.assertIn('android.permission.REQUEST_INSTALL_PACKAGES', self.manifest)
 
@@ -156,18 +156,21 @@ class SourceRegressionTests(unittest.TestCase):
             'private String commandAfterWake', 1)[0]
         self.assertLess(method.index('if (!finalResult)'), method.index('SAFE_PREFIXED_WAKE_SOUNDALIKES'))
 
-    def test_command_engine_runs_before_brain(self):
+    def test_command_engine_runs_before_generic_brain_fallback(self):
         method = self.voice.split('private void handleCommand', 1)[1].split(
             'private boolean isOpenEndedBrainRequest', 1)[0]
-        self.assertLess(method.index('commandEngine.execute(cleaned)'), method.index('brainManager.canAnswer()'))
+        self.assertIn('if (forceBrainForNextCommand)', method)
+        execute_index = method.index('SageCommandEngine.Result result = commandEngine.execute(cleaned)')
+        fallback_index = method.index('if (!result.matched && brainManager != null && brainManager.canAnswer())')
+        self.assertLess(execute_index, fallback_index)
 
     def test_custom_voice_response_cancels_stale_followup(self):
         self.assertIn('commandEngine.cancelFollowUp();\n            playVoiceResponse', self.voice)
 
-    def test_faster_but_not_zero_speech_silence_thresholds(self):
-        self.assertIn('MINIMUM_LENGTH_MILLIS, 800L', self.voice)
-        self.assertIn('COMPLETE_SILENCE_LENGTH_MILLIS, 650L', self.voice)
-        self.assertIn('POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 400L', self.voice)
+    def test_current_nonzero_speech_silence_thresholds(self):
+        self.assertIn('MINIMUM_LENGTH_MILLIS, 1300L', self.voice)
+        self.assertIn('COMPLETE_SILENCE_LENGTH_MILLIS, 1100L', self.voice)
+        self.assertIn('POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 750L', self.voice)
 
 
 if __name__ == '__main__':
