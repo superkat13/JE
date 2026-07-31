@@ -1,0 +1,179 @@
+name: Build and verify Sage 1.24 continuity update
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - sage-tablet-control-v1
+  push:
+    branches:
+      - agent/sage-continuity-v1-24
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct Sage 1.23 source chain
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build
+          python3 sage_patches/stabilize_v1_21.py sage_build
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build
+          python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build
+
+      - name: First Sage 1.24 source test
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            sage_patches/continuity_report_v1_24.py \
+            sage_tests/test_continuity_report_v1_24.py
+          python3 sage_patches/continuity_report_v1_24.py sage_build
+          python3 sage_tests/test_stabilization_v1_21.py sage_build
+          python3 sage_tests/test_android_compat_v1_21.py sage_build
+          python3 sage_tests/test_brain_watchdog_v1_22.py sage_build
+          python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build
+          python3 sage_tests/test_continuity_report_v1_24.py sage_build
+
+      - name: Second clean reconstruction and deterministic comparison
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build_second
+          python3 sage_patches/stabilize_v1_21.py sage_build_second
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build_second
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build_second
+          python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build_second
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build_second
+          python3 sage_patches/continuity_report_v1_24.py sage_build_second
+          python3 sage_tests/test_continuity_report_v1_24.py sage_build_second
+          diff -qr \
+            --exclude=build \
+            --exclude=.gradle \
+            sage_build/app/src \
+            sage_build_second/app/src
+          cmp sage_build/app/build.gradle.kts sage_build_second/app/build.gradle.kts
+
+      - name: Add pinned llama.cpp engine
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build/third_party/llama.cpp
+          git -C sage_build/third_party/llama.cpp init
+          git -C sage_build/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build/third_party/llama.cpp rev-parse HEAD)" = "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"
+
+      - name: Add offline wake-word model
+        run: |
+          set -euo pipefail
+          rm -rf sage_build/app/src/main/assets/model-en-us /tmp/vosk-model
+          mkdir -p sage_build/app/src/main/assets /tmp/vosk-model
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o /tmp/vosk-model.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/vosk-model.zip -d /tmp/vosk-model
+          mv /tmp/vosk-model/vosk-model-small-en-us-0.15 sage_build/app/src/main/assets/model-en-us
+          printf 'sage-v1.24-continuity\n' > sage_build/app/src/main/assets/model-en-us/uuid
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install permanent Sage signing identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Install Android SDK 35 and native toolchain
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile Java and native code
+        working-directory: sage_build
+        run: gradle :app:compileDebugJavaWithJavac --stacktrace
+
+      - name: Run Android unit tests
+        working-directory: sage_build
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Run Android lint
+        working-directory: sage_build
+        run: gradle :app:lintDebug --stacktrace
+
+      - name: Build signed permanent-update APK
+        working-directory: sage_build
+        run: gradle :app:assembleDebug --stacktrace
+
+      - name: Verify APK twice
+        run: |
+          set -euo pipefail
+          APK="sage_build/app/build/outputs/apk/debug/app-debug.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -f "$APK"
+
+          unzip -t "$APK" | tee apk-zip-test-pass-1.txt
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee apk-zipalign-pass-1.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apk-signing-pass-1.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging-pass-1.txt
+
+          unzip -t "$APK" | tee apk-zip-test-pass-2.txt
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee apk-zipalign-pass-2.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apk-signing-pass-2.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging-pass-2.txt
+
+          grep -qi "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" apk-signing-pass-1.txt
+          grep -qi "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" apk-signing-pass-2.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='34' versionName='1.24'" apk-badging-pass-1.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='34' versionName='1.24'" apk-badging-pass-2.txt
+
+          unzip -l "$APK" | tee apk-file-list.txt
+          grep -F "lib/arm64-v8a/libsage-brain.so" apk-file-list.txt
+          unzip -p "$APK" 'classes*.dex' | strings > apk-dex-strings.txt
+          grep -F "Sage Diagnostics and Continuity" apk-dex-strings.txt
+          grep -F "Continuity identity: one Sage, same package and saved app data" apk-dex-strings.txt
+          grep -F "Custom wake profiles" apk-dex-strings.txt
+          sha256sum "$APK" | tee apk-sha256.txt
+          cp "$APK" Sage-Commander-1.24-continuity-verified.apk
+
+      - name: Upload verified Sage 1.24 APK and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.24-continuity-verified
+          path: |
+            Sage-Commander-1.24-continuity-verified.apk
+            apk-zip-test-pass-1.txt
+            apk-zip-test-pass-2.txt
+            apk-zipalign-pass-1.txt
+            apk-zipalign-pass-2.txt
+            apk-signing-pass-1.txt
+            apk-signing-pass-2.txt
+            apk-badging-pass-1.txt
+            apk-badging-pass-2.txt
+            apk-file-list.txt
+            apk-dex-strings.txt
+            apk-sha256.txt
+          if-no-files-found: error
