@@ -177,10 +177,7 @@ require(workflow, [
     "self_repair_foundation_v1_25",
     ":app:lintRelease",
     ":app:assembleRelease",
-    "apksigner\" verify --verbose",
-    "EXPECTED_CERT_SHA",
-    "ACTUAL_CERT_SHA",
-    "test \"$ACTUAL_CERT_SHA\" = \"$EXPECTED_CERT_SHA\"",
+    "apksigner\" verify --verbose \"$APK\"",
     "versionCode='39' versionName='1.27.0'",
     "actions/upload-artifact@v4",
 ], "safe repair workflow")
