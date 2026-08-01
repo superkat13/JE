@@ -97,9 +97,20 @@ jobs:
         run: |
           set -euo pipefail
           BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
-          APK_125="$(find sage_build_125 -type f -path '*/build/outputs/apk/release/*.apk' -print -quit)"
+          UNSIGNED_125="$(find sage_build_125 -type f -path '*/build/outputs/apk/release/*-unsigned.apk' -print -quit)"
+          APK_125="install-reference-125-signed.apk"
           APK_126="corrected-126/Sage-Commander-1.26.0-corrected-signed.apk"
-          test -n "$APK_125"
+          test -n "$UNSIGNED_125"
+          "$BUILD_TOOLS/zipalign" -f -P 16 4 "$UNSIGNED_125" "$APK_125"
+          "$BUILD_TOOLS/apksigner" sign \
+            --ks "$HOME/.android/debug.keystore" \
+            --ks-key-alias androiddebugkey \
+            --ks-pass pass:android \
+            --key-pass pass:android \
+            --v1-signing-enabled false \
+            --v2-signing-enabled true \
+            --v3-signing-enabled false \
+            "$APK_125"
           printf '%s\n' "$APK_125" | tee install-reference-125-path.txt
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_125" | tee install-reference-125-apksigner.txt
           "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_126" | tee install-candidate-126-apksigner.txt
@@ -196,6 +207,7 @@ jobs:
             install-reference-125-package.txt
             install-candidate-126-package.txt
             install-reference-125-path.txt
+            install-reference-125-signed.apk
             emulator-abi.txt
             emulator-install-verification.log
           if-no-files-found: warn
