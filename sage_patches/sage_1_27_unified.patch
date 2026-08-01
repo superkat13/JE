@@ -1,0 +1,722 @@
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/build.gradle.kts sage_build/app/build.gradle.kts
+--- sage_build_second/app/build.gradle.kts	2026-08-01 05:33:08.645116984 +0100
++++ sage_build/app/build.gradle.kts	2026-08-01 06:19:20.481019873 +0100
+@@ -11,8 +11,8 @@
+         applicationId = "com.pineapple.sagecommander.stable"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 38
+-        versionName = "1.26.0"
++        versionCode = 39
++        versionName = "1.27.0"
+ 
+         ndk {
+             abiFilters += listOf("arm64-v8a")
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageBrainManager.java sage_build/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-01 05:43:55.541094320 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-01 06:19:20.489019873 +0100
+@@ -161,8 +161,7 @@
+     }
+ 
+     public boolean isConfigured() {
+-        File model = modelFile();
+-        return model.isFile() && model.length() >= MIN_MODEL_BYTES;
++        return modelFileProblem().isEmpty();
+     }
+ 
+     public boolean isEnabled() {
+@@ -186,7 +185,9 @@
+             return "Brain engine unavailable in this build: " + NATIVE_LOAD_ERROR;
+         }
+         if (!isConfigured()) {
+-            return "No model installed. Recommended: "
++            String problem = modelFileProblem();
++            return (modelFile().exists() ? "Brain model needs attention: " + problem + " "
++                    : "No model installed. ") + "Recommended: "
+                     + RECOMMENDED_MODEL_NAME
+                     + " (1.83 GB). Free app storage: "
+                     + formatBytes(availableStorageBytes())
+@@ -565,9 +566,10 @@
+             return fail("Sage Brain is turned off.");
+         }
+         File model = modelFile();
+-        if (!model.isFile() || model.length() < MIN_MODEL_BYTES) {
++        String verificationProblem = modelFileProblem();
++        if (!verificationProblem.isEmpty()) {
+             state = State.NOT_CONFIGURED;
+-            return fail("Choose a local GGUF model under Sage Brain first.");
++            return fail(verificationProblem);
+         }
+         if (state == State.READY) {
+             return "";
+@@ -678,6 +680,7 @@
+ 
+     private String buildUserPrompt(String userText) {
+         StringBuilder prompt = new StringBuilder();
++        prompt.append(SageIntentCoordinator.promptContext(context, userText)).append('\n');
+         String memories = memorySummary();
+         if (!memories.isEmpty()) {
+             prompt.append("Saved user notes: ").append(memories).append('\n');
+@@ -745,6 +748,33 @@
+         return new File(brainDirectory(), "sage-brain.gguf");
+     }
+ 
++    private String modelFileProblem() {
++        File model = modelFile();
++        if (!model.isFile()) return "Choose a local GGUF model under Sage Brain first.";
++        long actual = model.length();
++        if (actual < MIN_MODEL_BYTES) {
++            return "The selected model is truncated or too small: " + formatBytes(actual) + ".";
++        }
++        if (actual > MAX_MODEL_BYTES) {
++            return "The selected model exceeds Sage's 3.5 GB model limit.";
++        }
++        long recorded = preferences.getLong(KEY_MODEL_SIZE, 0L);
++        if (recorded > 0L && recorded != actual) {
++            return "The model file size changed after import: recorded " + recorded
++                    + " bytes, actual " + actual + " bytes. Re-import it in Model Manager.";
++        }
++        byte[] header = new byte[4];
++        try (FileInputStream input = new FileInputStream(model)) {
++            if (input.read(header) != 4 || header[0] != 'G' || header[1] != 'G'
++                    || header[2] != 'U' || header[3] != 'F') {
++                return "The selected model is not a valid GGUF file. Re-import a verified model.";
++            }
++        } catch (Exception problem) {
++            return "The model file could not be verified: " + safeProblem(problem);
++        }
++        return "";
++    }
++
+     private long availableStorageBytes() {
+         try {
+             return new StatFs(context.getFilesDir().getAbsolutePath()).getAvailableBytes();
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageCommandEngine.java sage_build/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-01 05:43:55.541094320 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-01 06:19:20.493019873 +0100
+@@ -131,6 +131,11 @@
+         }
+         preferences.edit().putString("last_heard", raw).apply();
+ 
++        if (isAny(lower, "what do you understand", "what is my goal",
++                "what am i trying to accomplish", "show current goal")) {
++            return new Result(SageIntentCoordinator.lastSummary(context));
++        }
++
+         String learnedCommand = resolveLearnedAlias(raw);
+         if (!learnedCommand.equals(raw)) {
+             raw = learnedCommand;
+@@ -497,7 +502,8 @@
+         }
+         if (lower.startsWith("i prefer ")
+                 || lower.startsWith("use this app for ")
+-                || lower.startsWith("this device is ")) {
++                || lower.startsWith("this device is ")
++                || lower.startsWith("this project is ")) {
+             return remember(raw);
+         }
+         if (isAny(
+@@ -519,6 +525,12 @@
+             int prefix = lower.startsWith("forget memory ") ? 14 : 14;
+             return deleteMemory(raw.substring(Math.min(prefix, raw.length())));
+         }
++        if (isAny(lower, "forget this", "delete this memory")) {
++            String last = SageMemoryStore.recallLast(context);
++            return last.isEmpty()
++                    ? new Result("I do not have a most recent memory to forget.")
++                    : deleteMemory(last);
++        }
+         Matcher memoryEdit = Pattern.compile(
+                 "(?i)^(?:edit|change|update)\\s+memory\\s+(.+?)\\s+to\\s+(.+)$"
+         ).matcher(raw);
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java sage_build/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java	1970-01-01 01:00:00.000000000 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java	2026-08-01 06:19:20.485019873 +0100
+@@ -0,0 +1,257 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++
++import java.util.Locale;
++
++/**
++ * Deterministic goal and route coordinator. It never executes privileged work itself; it chooses
++ * among Sage's existing allowlisted command engine, local Brain, paired Forge surface, or fallback.
++ */
++final class SageIntentCoordinator {
++    enum Specialist {
++        COORDINATOR,
++        PLANNER,
++        ENGINEER,
++        RESEARCHER,
++        QA,
++        MEMORY_MANAGER,
++        RECOVERY_HANDLER,
++        MEDIA_NAVIGATOR,
++        PACKAGE_INSPECTOR,
++        MODEL_ROUTER,
++        FORGE_MANAGER
++    }
++
++    static final class Plan {
++        final String request;
++        final String executionRequest;
++        final String goal;
++        final String intent;
++        final String tool;
++        final String routeHint;
++        final String verification;
++        final Specialist specialist;
++        final float confidence;
++        final boolean contextualFollowUp;
++        final boolean correction;
++
++        Plan(String request, String executionRequest, String goal, String intent,
++             String tool, String routeHint, String verification, Specialist specialist,
++             float confidence, boolean contextualFollowUp, boolean correction) {
++            this.request = clean(request);
++            this.executionRequest = clean(executionRequest);
++            this.goal = clean(goal);
++            this.intent = clean(intent);
++            this.tool = clean(tool);
++            this.routeHint = clean(routeHint);
++            this.verification = clean(verification);
++            this.specialist = specialist;
++            this.confidence = Math.max(0f, Math.min(1f, confidence));
++            this.contextualFollowUp = contextualFollowUp;
++            this.correction = correction;
++        }
++    }
++
++    private static final String PREFS = "sage_goal_coordinator_v1";
++
++    private SageIntentCoordinator() {}
++
++    static Plan understand(Context context, String request, boolean brainAvailable,
++                           boolean forgePaired) {
++        SharedPreferences preferences = prefs(context);
++        String cleaned = clean(request);
++        String normalized = normalize(cleaned);
++        String previousRequest = preferences.getString("last_execution_request", "");
++        String previousRoute = preferences.getString("last_route", "");
++
++        boolean correction = startsWithAny(normalized,
++                "no i meant ", "actually ", "instead ", "correction ");
++        boolean followUp = isFollowUp(normalized);
++        String execution = cleaned;
++        if (followUp && safeRepeat(previousRequest, previousRoute)) {
++            execution = previousRequest;
++        }
++
++        String goal = goalFor(cleaned, execution, correction, followUp);
++        String intent = intentFor(execution);
++        Specialist specialist = specialistFor(intent, execution);
++        String tool = toolFor(intent);
++        String route = routeFor(intent, brainAvailable, forgePaired);
++        String verification = verificationFor(intent);
++        float confidence = followUp && execution.equals(cleaned) ? 0.55f
++                : correction ? 0.92f : 0.96f;
++
++        Plan plan = new Plan(cleaned, execution, goal, intent, tool, route, verification,
++                specialist, confidence, followUp, correction);
++        preferences.edit()
++                .putString("last_request", cleaned)
++                .putString("last_execution_request", execution)
++                .putString("last_goal", goal)
++                .putString("last_intent", intent)
++                .putString("last_route_hint", route)
++                .putString("last_specialist", specialist.name())
++                .putLong("last_planned_at", System.currentTimeMillis())
++                .apply();
++        SageDiagnostics.appendEvent(context, "COORDINATOR",
++                "goal=" + goal + " intent=" + intent + " specialist=" + specialist.name()
++                        + " tool=" + tool + " route_hint=" + route
++                        + " confidence=" + String.format(Locale.US, "%.2f", confidence)
++                        + " follow_up=" + followUp + " correction=" + correction);
++        return plan;
++    }
++
++    static void recordOutcome(Context context, Plan plan, String route, boolean verified,
++                              String detail) {
++        String cleanRoute = clean(route);
++        prefs(context).edit()
++                .putString("last_route", cleanRoute)
++                .putBoolean("last_verified", verified)
++                .putString("last_outcome", clean(detail))
++                .putLong("last_completed_at", System.currentTimeMillis())
++                .apply();
++        SageDiagnostics.appendEvent(context, "COORDINATOR RESULT",
++                "goal=" + (plan == null ? "unknown" : plan.goal)
++                        + " route=" + cleanRoute + " verified=" + verified
++                        + " detail=" + clean(detail));
++    }
++
++    static String promptContext(Context context, String currentRequest) {
++        SharedPreferences preferences = prefs(context);
++        String goal = preferences.getString("last_goal", clean(currentRequest));
++        String intent = preferences.getString("last_intent", "conversation");
++        return "Current user goal: " + goal + "\n"
++                + "Intent: " + intent + "\n"
++                + "Answer the goal, not merely the literal wording. Do not claim an action succeeded "
++                + "unless Sage reports verified execution.";
++    }
++
++    static String lastSummary(Context context) {
++        SharedPreferences preferences = prefs(context);
++        String goal = preferences.getString("last_goal", "");
++        if (goal.isEmpty()) return "I do not have a current goal yet.";
++        return "I understand what you want to accomplish: " + goal
++                + ". Route: " + preferences.getString("last_route",
++                preferences.getString("last_route_hint", "fallback"))
++                + ". Verification: "
++                + (preferences.getBoolean("last_verified", false) ? "completed" : "not completed");
++    }
++
++    private static String goalFor(String request, String execution, boolean correction,
++                                  boolean followUp) {
++        if (followUp && !execution.equals(request)) return "repeat: " + execution;
++        String normalized = normalize(request);
++        if (correction) {
++            return "correct the previous understanding to: " + request.replaceFirst(
++                    "(?i)^(?:no[, ]+i meant|actually|instead|correction)\\s+", "");
++        }
++        if (normalized.startsWith("can you ")) return request.substring(8).trim();
++        if (normalized.startsWith("could you ")) return request.substring(10).trim();
++        if (normalized.startsWith("would you ")) return request.substring(10).trim();
++        if (normalized.startsWith("please ")) return request.substring(7).trim();
++        return request;
++    }
++
++    private static String intentFor(String request) {
++        String value = normalize(request);
++        if (containsAny(value, "remember", "memory", "prefer", "when i say",
++                "this device", "this project", "forget")) return "memory";
++        if (containsAny(value, "brain", "model", "gguf", "first token")) return "model";
++        if (containsAny(value, "apk", "package", "signer", "certificate")) return "package";
++        if (containsAny(value, "forge", "dell", "job", "repair", "diagnose")) return "recovery";
++        if (containsAny(value, "play", "pause", "song", "video", "media", "next")) return "media";
++        if (containsAny(value, "tap", "click", "open", "choose", "select", "screen",
++                "scroll", "type", "home", "back")) return "device_action";
++        if (containsAny(value, "surprise me", "bored", "idea", "creative", "prompt")) {
++            return "creative";
++        }
++        if (containsAny(value, "test", "verify", "check", "compare")) return "quality";
++        if (containsAny(value, "how", "why", "what", "who", "where", "explain")) {
++            return "knowledge";
++        }
++        return "conversation";
++    }
++
++    private static Specialist specialistFor(String intent, String request) {
++        switch (intent) {
++            case "memory": return Specialist.MEMORY_MANAGER;
++            case "model": return Specialist.MODEL_ROUTER;
++            case "package": return Specialist.PACKAGE_INSPECTOR;
++            case "recovery": return normalize(request).contains("forge")
++                    ? Specialist.FORGE_MANAGER : Specialist.RECOVERY_HANDLER;
++            case "media": return Specialist.MEDIA_NAVIGATOR;
++            case "quality": return Specialist.QA;
++            case "knowledge": return Specialist.RESEARCHER;
++            case "creative": return Specialist.PLANNER;
++            case "device_action": return Specialist.COORDINATOR;
++            default: return Specialist.COORDINATOR;
++        }
++    }
++
++    private static String toolFor(String intent) {
++        switch (intent) {
++            case "memory": return "Memory 2.0";
++            case "model": return "Model Router";
++            case "package": return "Package Lab";
++            case "recovery": return "Recovery / Forge";
++            case "media": return "Media Lab";
++            case "quality": return "QA diagnostics";
++            case "device_action": return "Android command engine";
++            default: return "conversation";
++        }
++    }
++
++    private static String routeFor(String intent, boolean brainAvailable, boolean forgePaired) {
++        if (intent.equals("recovery") && forgePaired) return "Dell Forge";
++        if (intent.equals("knowledge") || intent.equals("conversation") || intent.equals("creative")) {
++            return brainAvailable ? "tablet Brain" : "fallback";
++        }
++        return "command engine";
++    }
++
++    private static String verificationFor(String intent) {
++        if (intent.equals("device_action")) return "Android action result";
++        if (intent.equals("memory")) return "persistent storage commit";
++        if (intent.equals("model")) return "Brain health metrics";
++        if (intent.equals("package")) return "parsed identity and cryptographic hashes";
++        if (intent.equals("recovery")) return "signed Forge job status or local repair report";
++        return "displayed response";
++    }
++
++    private static boolean isFollowUp(String value) {
++        return value.equals("do that again") || value.equals("do it again")
++                || value.equals("same again") || value.equals("repeat that")
++                || value.equals("try that again") || value.equals("one more time");
++    }
++
++    private static boolean safeRepeat(String previous, String route) {
++        String value = normalize(previous);
++        if (value.isEmpty() || !"command engine".equals(route)) return false;
++        return !startsWithAny(value, "type ", "write ", "install ", "delete ",
++                "forget ", "clear memory", "scan ", "pair ", "revoke ");
++    }
++
++    private static boolean startsWithAny(String value, String... prefixes) {
++        for (String prefix : prefixes) if (value.startsWith(prefix)) return true;
++        return false;
++    }
++
++    private static boolean containsAny(String value, String... pieces) {
++        for (String piece : pieces) if (value.contains(piece)) return true;
++        return false;
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++
++    private static String normalize(String value) {
++        return clean(value).toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]", " ")
++                .replaceAll("\\s+", " ").trim();
++    }
++
++    private static String clean(String value) {
++        return value == null ? "" : value.replaceAll("\\s+", " ").trim();
++    }
++}
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageMemoryStore.java sage_build/app/src/main/java/com/pineapple/sage/SageMemoryStore.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageMemoryStore.java	2026-08-01 05:43:55.541094320 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageMemoryStore.java	2026-08-01 06:19:20.493019873 +0100
+@@ -18,16 +18,40 @@
+     private static final String ITEMS = "memory_items";
+     private static final String LAST = "last_saved_memory";
+     private static final String SEPARATOR = "\t";
++    private static final String VERSION = "v2";
++
++    private static final class Record {
++        final String category;
++        final String value;
++        final float confidence;
++        final String source;
++        final long createdAt;
++
++        Record(String category, String value, float confidence, String source, long createdAt) {
++            this.category = cleanCategory(category);
++            this.value = clean(value);
++            this.confidence = Math.max(0f, Math.min(1f, confidence));
++            this.source = cleanSource(source);
++            this.createdAt = Math.max(0L, createdAt);
++        }
++    }
+ 
+     private SageMemoryStore() {
+     }
+ 
+     static SaveResult save(Context context, String input) {
+         String value = clean(input).replaceFirst("(?i)^that\\s+", "");
+-        return saveCategory(context, categoryFor(value), value);
++        return saveCategory(context, categoryFor(value), value, "owner_statement", 1.0f);
+     }
+ 
+     static SaveResult saveCategory(Context context, String category, String input) {
++        return saveCategory(context, category, input,
++                "alias".equals(cleanCategory(category)) ? "correction_learning" : "owner_statement",
++                "alias".equals(cleanCategory(category)) ? 0.95f : 1.0f);
++    }
++
++    static SaveResult saveCategory(Context context, String category, String input,
++                                   String source, float confidence) {
+         String value = clean(input);
+         if (value.isEmpty()) {
+             return SaveResult.FAILED;
+@@ -44,7 +68,8 @@
+                 return SaveResult.DUPLICATE;
+             }
+         }
+-        current.add(key + SEPARATOR + cleanCategory(category) + SEPARATOR + value);
++        current.add(encode(key, cleanCategory(category), confidence, source,
++                System.currentTimeMillis(), value));
+         boolean saved = preferences.edit()
+                 .putStringSet(ITEMS, current)
+                 .putString(LAST, value)
+@@ -71,11 +96,11 @@
+         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+         Set<String> current = new HashSet<>(preferences.getStringSet(ITEMS, new HashSet<>()));
+         String found = null;
+-        String foundCategory = "factual_memory";
++        Record foundRecord = null;
+         for (String entry : current) {
+             if (normalize(decode(entry)).equals(oldKey)) {
+                 found = entry;
+-                foundCategory = category(entry);
++                foundRecord = parse(entry);
+                 break;
+             }
+         }
+@@ -87,7 +112,11 @@
+             }
+         }
+         current.remove(found);
+-        current.add(replacementKey + SEPARATOR + foundCategory + SEPARATOR + replacement);
++        current.add(encode(replacementKey,
++                foundRecord == null ? "factual_memory" : foundRecord.category,
++                1.0f, "owner_edit",
++                foundRecord == null ? System.currentTimeMillis() : foundRecord.createdAt,
++                replacement));
+         boolean saved = preferences.edit().putStringSet(ITEMS, current)
+                 .putString(LAST, replacement).commit();
+         return saved ? EditResult.UPDATED : EditResult.FAILED;
+@@ -120,8 +149,12 @@
+         List<String> items = new ArrayList<>();
+         if (stored != null) {
+             for (String entry : stored) {
+-                String value = decode(entry);
+-                if (!value.isEmpty()) items.add("[" + category(entry) + "] " + value);
++                Record record = parse(entry);
++                if (!record.value.isEmpty()) {
++                    items.add("[" + record.category + " • confidence "
++                            + String.format(Locale.US, "%.2f", record.confidence)
++                            + " • source " + record.source + "] " + record.value);
++                }
+             }
+         }
+         items.sort(String.CASE_INSENSITIVE_ORDER);
+@@ -129,21 +162,39 @@
+     }
+ 
+     private static String decode(String entry) {
+-        if (entry == null) return "";
+-        int first = entry.indexOf(SEPARATOR);
+-        if (first < 0) return clean(entry);
+-        int second = entry.indexOf(SEPARATOR, first + SEPARATOR.length());
+-        return clean(second >= 0 ? entry.substring(second + SEPARATOR.length())
+-                : entry.substring(first + SEPARATOR.length()));
++        return parse(entry).value;
+     }
+ 
+     private static String category(String entry) {
+-        if (entry == null) return "factual_memory";
+-        int first = entry.indexOf(SEPARATOR);
+-        if (first < 0) return "factual_memory";
+-        int second = entry.indexOf(SEPARATOR, first + SEPARATOR.length());
+-        if (second < 0) return "factual_memory";
+-        return cleanCategory(entry.substring(first + SEPARATOR.length(), second));
++        return parse(entry).category;
++    }
++
++    private static Record parse(String entry) {
++        String value = clean(entry);
++        if (value.isEmpty()) return new Record("factual_memory", "", 0f, "legacy", 0L);
++        String[] parts = entry.split("\\t", -1);
++        if (parts.length >= 7 && VERSION.equals(parts[0])) {
++            float confidence = 1.0f;
++            long createdAt = 0L;
++            try { confidence = Float.parseFloat(parts[3]); } catch (NumberFormatException ignored) {}
++            try { createdAt = Long.parseLong(parts[5]); } catch (NumberFormatException ignored) {}
++            return new Record(parts[2], parts[6], confidence, parts[4], createdAt);
++        }
++        if (parts.length >= 3) {
++            return new Record(parts[1], parts[2], 1.0f, "legacy_owner_memory", 0L);
++        }
++        if (parts.length == 2) {
++            return new Record("factual_memory", parts[1], 1.0f, "legacy_owner_memory", 0L);
++        }
++        return new Record("factual_memory", entry, 1.0f, "legacy_owner_memory", 0L);
++    }
++
++    private static String encode(String key, String category, float confidence, String source,
++                                 long createdAt, String value) {
++        return VERSION + SEPARATOR + key + SEPARATOR + cleanCategory(category) + SEPARATOR
++                + String.format(Locale.US, "%.2f", Math.max(0f, Math.min(1f, confidence)))
++                + SEPARATOR + cleanSource(source) + SEPARATOR + Math.max(0L, createdAt)
++                + SEPARATOR + clean(value).replace('\t', ' ');
+     }
+ 
+     static String categoryFor(String value) {
+@@ -154,6 +205,7 @@
+             return "device";
+         }
+         if (normalized.startsWith("when i say ")) return "alias";
++        if (normalized.startsWith("this project is ")) return "project";
+         if (normalized.startsWith("for now ") || normalized.startsWith("temporarily ")) {
+             return "temporary_context";
+         }
+@@ -195,6 +247,11 @@
+                 .trim();
+     }
+ 
++    private static String cleanSource(String value) {
++        String source = normalize(value).replace(' ', '_');
++        return source.isEmpty() ? "unknown" : source;
++    }
++
+     private static String clean(String value) {
+         return value == null ? "" : value.trim().replaceAll("\\s+", " ");
+     }
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageRepairManager.java sage_build/app/src/main/java/com/pineapple/sage/SageRepairManager.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageRepairManager.java	2026-08-01 05:43:55.541094320 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageRepairManager.java	2026-08-01 06:21:54.681014471 +0100
+@@ -69,7 +69,7 @@
+         write(jsonFile, packet.toString(2));
+         write(markdownFile, markdown);
+         write(logFile, logs);
+-        File zipFile = new File(directory, "Sage-1.26.0-repair-bundle.zip");
++        File zipFile = new File(directory, "Sage-1.27.0-repair-bundle.zip");
+         zip(zipFile, jsonFile, markdownFile, logFile);
+         SageDiagnostics.appendEvent(
+                 context, "SELF REPAIR",
+@@ -137,7 +137,7 @@
+         packet.put("packet_id", "sage-" + System.currentTimeMillis());
+         packet.put("created_at", timestamp());
+         packet.put("repository", "superkat13/JE");
+-        packet.put("base_branch", "agent/sage-1-26-recovery-20260731");
++        packet.put("base_branch", "agent/sage-1-27-unified-20260801");
+         packet.put("package_name", context.getPackageName());
+         packet.put("version_name", info.versionName);
+         packet.put("version_code", Build.VERSION.SDK_INT >= 28
+diff -ruN '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_second/app/src/main/java/com/pineapple/sage/SageVoiceService.java sage_build/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+--- sage_build_second/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-01 05:43:55.541094320 +0100
++++ sage_build/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-01 06:19:20.501019873 +0100
+@@ -1226,16 +1226,24 @@
+         } else if (isConversationOpen()) {
+             extendConversationWindow();
+         }
++        SageIntentCoordinator.Plan intentPlan = SageIntentCoordinator.understand(
++                this, cleaned, brainManager != null && brainManager.canAnswer(),
++                SageForgeStore.isPaired(this));
++        String executionCommand = intentPlan.executionRequest;
+         SageMediaResponseStore.Entry voiceResponse =
+-                SageMediaResponseStore.find(preferences, cleaned);
++                SageMediaResponseStore.find(preferences, executionCommand);
+         if (voiceResponse != null) {
+             commandEngine.cancelFollowUp();
++            SageIntentCoordinator.recordOutcome(this, intentPlan,
++                    "command engine", true, "custom voice response started");
+             playVoiceResponse(voiceResponse);
+             return;
+         }
+-        SageTranslationManager.Request translationRequest = translationManager.parse(cleaned);
++        SageTranslationManager.Request translationRequest = translationManager.parse(executionCommand);
+         if (translationRequest != null) {
+             if (translationRequest.isValid()) {
++                SageIntentCoordinator.recordOutcome(this, intentPlan,
++                        "command engine", true, "translation accepted");
+                 beginTranslation(translationRequest);
+             } else {
+                 broadcastLine("Sage", translationRequest.errorMessage);
+@@ -1248,16 +1256,17 @@
+             forceBrainForNextCommand = false;
+             if (brainManager != null && brainManager.canAnswer()) {
+                 beginBrainRequest(
+-                        cleaned,
++                        executionCommand,
+                         SageCommandEngine.Result.unmatched(
+                                 "I heard " + cleaned
+                                         + " but my local brain could not answer it."
+-                        )
++                        ),
++                        intentPlan
+                 );
+                 return;
+             }
+         }
+-        SageCommandEngine.Result result = commandEngine.execute(cleaned);
++        SageCommandEngine.Result result = commandEngine.execute(executionCommand);
+         SageDiagnostics.recognitionDecision(
+                 this,
+                 "[" + cleaned + "]",
+@@ -1268,9 +1277,17 @@
+                 result.matched ? "" : "no_deterministic_match"
+         );
+         if (!result.matched && brainManager != null && brainManager.canAnswer()) {
+-            beginBrainRequest(cleaned, result);
++            beginBrainRequest(executionCommand, result, intentPlan);
+             return;
+         }
++        if (!result.matched) {
++            result = SageCommandEngine.Result.unmatched(
++                    "I understand what you want to accomplish: " + intentPlan.goal
++                            + ". I could not complete it with an available route.");
++        }
++        SageIntentCoordinator.recordOutcome(this, intentPlan,
++                result.matched ? "command engine" : "fallback",
++                result.matched, result.message);
+         deliverCommandResult(result);
+     }
+ 
+@@ -1365,7 +1382,8 @@
+ 
+     private void beginBrainRequest(
+             String originalCommand,
+-            SageCommandEngine.Result fallbackResult
++            SageCommandEngine.Result fallbackResult,
++            SageIntentCoordinator.Plan intentPlan
+     ) {
+         brainInProgress = true;
+         final long requestGeneration = ++brainRequestGeneration;
+@@ -1382,9 +1400,9 @@
+ 
+         final boolean[] generationStage = {brainManager.isReady()};
+         final Runnable loadTimeout = () -> brainTimedOut(requestGeneration,
+-                fallbackResult, "loading", BRAIN_LOAD_TIMEOUT_MS);
++                fallbackResult, intentPlan, "loading", BRAIN_LOAD_TIMEOUT_MS);
+         final Runnable generationTimeout = () -> brainTimedOut(requestGeneration,
+-                fallbackResult, "generation", BRAIN_GENERATION_TIMEOUT_MS);
++                fallbackResult, intentPlan, "generation", BRAIN_GENERATION_TIMEOUT_MS);
+         if (generationStage[0]) {
+             handler.postDelayed(generationTimeout, BRAIN_GENERATION_TIMEOUT_MS);
+         } else {
+@@ -1436,6 +1454,8 @@
+                                 reply.text
+                         );
+                         deliverCommandResult(interpreted, "tablet Brain");
++                        SageIntentCoordinator.recordOutcome(SageVoiceService.this, intentPlan,
++                                "tablet Brain", true, interpreted.message);
+                         return;
+                     }
+                     SageDiagnostics.recordError(
+@@ -1445,8 +1465,12 @@
+                     SageBrainHealth.fallback(SageVoiceService.this,
+                             "action_validation", "Brain action did not match the command allowlist");
+                     deliverCommandResult(fallbackResult, "fallback");
++                    SageIntentCoordinator.recordOutcome(SageVoiceService.this, intentPlan,
++                            "fallback", false, "Brain action failed allowlist validation");
+                     return;
+                 }
++                SageIntentCoordinator.recordOutcome(SageVoiceService.this, intentPlan,
++                        "tablet Brain", true, reply.text);
+                 deliverCommandResult(new SageCommandEngine.Result(reply.text), "tablet Brain");
+             }
+ 
+@@ -1460,6 +1484,8 @@
+                         "Sage Brain request: " + message
+                 );
+                 SageBrainHealth.fallback(SageVoiceService.this, "generation", message);
++                SageIntentCoordinator.recordOutcome(SageVoiceService.this, intentPlan,
++                        "fallback", false, message);
+                 deliverCommandResult(fallbackResult, "fallback");
+             }
+         });
+@@ -1467,6 +1493,7 @@
+ 
+     private void brainTimedOut(long requestGeneration,
+                                SageCommandEngine.Result fallbackResult,
++                               SageIntentCoordinator.Plan intentPlan,
+                                String stage,
+                                long timeoutMs) {
+         if (stopRequested || !brainInProgress
+@@ -1481,6 +1508,8 @@
+                         + " ms at native stage " + nativeStage);
+         broadcastStatus("Sage Brain " + stage + " timed out — fallback used");
+         updateNotification("Brain timed out — fallback used");
++        SageIntentCoordinator.recordOutcome(this, intentPlan,
++                "fallback", false, "Brain " + stage + " timeout at " + nativeStage);
+         deliverCommandResult(fallbackResult, "fallback");
+     }
+ 

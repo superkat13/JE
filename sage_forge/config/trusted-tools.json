@@ -1,0 +1,42 @@
+{
+  "schema_version": "1.0",
+  "tools": [
+    {
+      "tool_id": "system.info",
+      "display_name": "Dell system information",
+      "purpose": "Return harmless OS, host, CPU, storage, and local-address facts",
+      "supported_platform": ["windows", "linux", "darwin"],
+      "implementation": "trusted:sage_forge.tools.collect_system_info",
+      "input_schema": {
+        "type": "object", "additionalProperties": false, "properties": {}, "required": []
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "schema_version": {},
+          "observed_at": {},
+          "hostname": {},
+          "operating_system": {},
+          "python": {},
+          "cpu": {},
+          "storage_root": {},
+          "local_addresses": {},
+          "confidence": {}
+        },
+        "required": [
+          "schema_version", "observed_at", "hostname", "operating_system",
+          "python", "cpu", "storage_root", "local_addresses", "confidence"
+        ]
+      },
+      "required_permissions": ["read_local_system_metadata"],
+      "risk_level": "low",
+      "confirmation_policy": "always",
+      "timeout_seconds": 15,
+      "concurrency_limit": 1,
+      "network_scope": "local_device",
+      "data_leaves_device": true,
+      "audit_requirements": ["owner_approval", "job_lifecycle", "result_recipient"]
+    }
+  ]
+}

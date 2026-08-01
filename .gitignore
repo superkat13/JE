@@ -1,0 +1,10 @@
+Sage_Tablet_Control_v1_source.zip
+sage_build/
+sage_build_*/
+sage_build_*.*
+__pycache__/
+*.pyc
+.gradle/
+app/build/
+Sage-Commander-*.zip
+Sage-Commander-*/

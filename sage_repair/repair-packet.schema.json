@@ -1,0 +1,64 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/superkat13/JE/sage_repair/repair-packet.schema.json",
+  "title": "Sage supervised repair packet",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "packet_id",
+    "created_at",
+    "repository",
+    "base_branch",
+    "package_name",
+    "version_name",
+    "version_code",
+    "signing_certificate_sha256",
+    "classification",
+    "device",
+    "android_version",
+    "android_api",
+    "authority_states",
+    "brain_status",
+    "wake_status",
+    "reproduction_steps",
+    "confirmed_evidence",
+    "theories",
+    "requested_operations",
+    "owner_approval_required",
+    "arbitrary_commands"
+  ],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "packet_id": {"type": "string", "pattern": "^sage-[0-9]{10,}$", "maxLength": 64},
+    "created_at": {"type": "string", "maxLength": 64},
+    "repository": {"const": "superkat13/JE"},
+    "base_branch": {"const": "agent/sage-1-27-unified-20260801"},
+    "package_name": {"const": "com.pineapple.sagecommander.stable"},
+    "version_name": {"const": "1.27.0"},
+    "version_code": {"const": 39},
+    "signing_certificate_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "classification": {
+      "enum": ["configuration", "permission", "transient_runtime_issue", "likely_code_defect"]
+    },
+    "device": {"type": "string", "maxLength": 160},
+    "android_version": {"type": "string", "maxLength": 32},
+    "android_api": {"type": "integer", "minimum": 26, "maximum": 100},
+    "authority_states": {"type": "array", "maxItems": 16, "items": {"type": "object"}},
+    "brain_status": {"type": "string", "maxLength": 2000},
+    "wake_status": {"type": "string", "maxLength": 6000},
+    "reproduction_steps": {"type": "string", "maxLength": 6000},
+    "confirmed_evidence": {"type": "array", "maxItems": 30, "items": {"type": "string", "maxLength": 1000}},
+    "theories": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 1000}},
+    "requested_operations": {
+      "type": "array",
+      "uniqueItems": true,
+      "maxItems": 3,
+      "items": {
+        "enum": ["inspect_sage_diagnostics", "modify_sage_source", "add_regression_tests"]
+      }
+    },
+    "owner_approval_required": {"const": true},
+    "arbitrary_commands": {"type": "array", "maxItems": 0}
+  }
+}

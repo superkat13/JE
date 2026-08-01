@@ -1,0 +1,267 @@
+name: Build and verify Sage 1.27.0 unified intelligence release
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - sage-tablet-control-v1
+  push:
+    branches:
+      - agent/sage-1-27-unified-20260801
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct Sage 1.23 source chain
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build
+          python3 sage_patches/stabilize_v1_21.py sage_build
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build
+          python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build
+
+      - name: First Sage 1.27.0 source test
+        run: |
+          set -euo pipefail
+          python3 -m py_compile \
+            sage_patches/continuity_report_v1_24.py \
+            sage_patches/number_overlay_release_v1_24_1.py \
+            sage_patches/sage_release_v1_24_2.py \
+            sage_patches/self_repair_foundation_v1_25.py \
+            sage_patches/workbench_v1_25.py \
+            sage_patches/sage_forge_v1_25.py \
+            sage_patches/creative_studio_v1_27.py \
+            sage_tests/test_number_overlay_release_v1_24_1.py \
+            sage_tests/test_sage_release_v1_24_2.py \
+            sage_tests/test_self_repair_v1_25.py \
+            sage_tests/test_workbench_v1_25.py \
+            sage_tests/test_sage_forge_v1_25.py \
+            sage_tests/test_reliability_toolbelt_v1_26.py \
+            sage_tests/test_continuity_finish_v1_26.py \
+            sage_tests/test_intelligence_memory_v1_27.py \
+            sage_tests/test_public_disclosure_v1_27.py \
+            sage_tests/test_continuity_report_v1_24.py
+          python3 sage_tests/test_public_disclosure_v1_27.py
+          python3 sage_patches/continuity_report_v1_24.py sage_build
+          python3 sage_patches/number_overlay_release_v1_24_1.py sage_build
+          python3 sage_patches/sage_release_v1_24_2.py sage_build
+          python3 sage_patches/self_repair_foundation_v1_25.py sage_build
+          python3 sage_patches/workbench_v1_25.py sage_build
+          python3 sage_patches/sage_forge_v1_25.py sage_build
+          patch --fuzz=0 -p1 -d sage_build < SAGE_1_26_UNIFIED.diff
+          patch --fuzz=0 -p1 -d sage_build < sage_patches/continuity_finish_v1_26.patch
+          patch --fuzz=0 -p1 -d sage_build < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build
+          python3 -m unittest -v sage_forge.tests.test_forge
+          python3 sage_tests/test_stabilization_v1_21.py sage_build
+          python3 sage_tests/test_android_compat_v1_21.py sage_build
+          python3 sage_tests/test_brain_watchdog_v1_22.py sage_build
+          python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build
+          python3 sage_tests/test_continuity_report_v1_24.py sage_build
+          python3 sage_tests/test_number_overlay_release_v1_24_1.py sage_build
+          python3 sage_tests/test_sage_release_v1_24_2.py sage_build
+          python3 sage_tests/test_self_repair_v1_25.py sage_build
+          python3 sage_tests/test_workbench_v1_25.py sage_build
+          python3 sage_tests/test_sage_forge_v1_25.py sage_build
+          python3 sage_tests/test_reliability_toolbelt_v1_26.py sage_build
+          python3 sage_tests/test_continuity_finish_v1_26.py sage_build
+          python3 sage_tests/test_intelligence_memory_v1_27.py sage_build
+          python3 sage_tests/test_public_disclosure_v1_27.py
+
+      - name: Second clean reconstruction and deterministic comparison
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build_second
+          python3 sage_patches/stabilize_v1_21.py sage_build_second
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build_second
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build_second
+          python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build_second
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build_second
+          python3 sage_patches/continuity_report_v1_24.py sage_build_second
+          python3 sage_patches/number_overlay_release_v1_24_1.py sage_build_second
+          python3 sage_patches/sage_release_v1_24_2.py sage_build_second
+          python3 sage_patches/self_repair_foundation_v1_25.py sage_build_second
+          python3 sage_patches/workbench_v1_25.py sage_build_second
+          python3 sage_patches/sage_forge_v1_25.py sage_build_second
+          patch --fuzz=0 -p1 -d sage_build_second < SAGE_1_26_UNIFIED.diff
+          patch --fuzz=0 -p1 -d sage_build_second < sage_patches/continuity_finish_v1_26.patch
+          patch --fuzz=0 -p1 -d sage_build_second < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build_second
+          python3 sage_tests/test_continuity_report_v1_24.py sage_build_second
+          python3 sage_tests/test_number_overlay_release_v1_24_1.py sage_build_second
+          python3 sage_tests/test_sage_release_v1_24_2.py sage_build_second
+          python3 sage_tests/test_self_repair_v1_25.py sage_build_second
+          python3 sage_tests/test_workbench_v1_25.py sage_build_second
+          python3 sage_tests/test_sage_forge_v1_25.py sage_build_second
+          python3 sage_tests/test_reliability_toolbelt_v1_26.py sage_build_second
+          python3 sage_tests/test_continuity_finish_v1_26.py sage_build_second
+          python3 sage_tests/test_intelligence_memory_v1_27.py sage_build_second
+          python3 sage_tests/test_public_disclosure_v1_27.py
+          diff -qr \
+            --exclude=build \
+            --exclude=.gradle \
+            sage_build/app/src \
+            sage_build_second/app/src
+          cmp sage_build/app/build.gradle.kts sage_build_second/app/build.gradle.kts
+
+      - name: Add pinned llama.cpp engine
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build/third_party/llama.cpp
+          git -C sage_build/third_party/llama.cpp init
+          git -C sage_build/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build/third_party/llama.cpp rev-parse HEAD)" = "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"
+
+      - name: Add offline wake-word model
+        run: |
+          set -euo pipefail
+          rm -rf sage_build/app/src/main/assets/model-en-us /tmp/vosk-model
+          mkdir -p sage_build/app/src/main/assets /tmp/vosk-model
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o /tmp/vosk-model.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/vosk-model.zip -d /tmp/vosk-model
+          mv /tmp/vosk-model/vosk-model-small-en-us-0.15 sage_build/app/src/main/assets/model-en-us
+          printf 'sage-v1.27.0-unified-intelligence\n' > sage_build/app/src/main/assets/model-en-us/uuid
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Run executable conversation harness with JDK 17
+        run: python3 sage_tests/test_reliability_toolbelt_v1_26.py sage_build
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install permanent Sage signing identity
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Install Android SDK 35 and native toolchain
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile release Java and native code
+        working-directory: sage_build
+        run: gradle :app:compileReleaseJavaWithJavac --stacktrace
+
+      - name: Run Android unit tests
+        working-directory: sage_build
+        run: gradle :app:testReleaseUnitTest --stacktrace
+
+      - name: Run Android lint
+        working-directory: sage_build
+        run: gradle :app:lintRelease --stacktrace
+
+      - name: Build signed permanent-update APK
+        working-directory: sage_build
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Verify APK twice
+        run: |
+          set -euo pipefail
+          APK="sage_build/app/build/outputs/apk/release/app-release.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -f "$APK"
+
+          unzip -t "$APK" | tee apk-zip-test-pass-1.txt
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee apk-zipalign-pass-1.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK" | tee apk-signing-pass-1.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging-pass-1.txt
+
+          unzip -t "$APK" | tee apk-zip-test-pass-2.txt
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee apk-zipalign-pass-2.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK" | tee apk-signing-pass-2.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging-pass-2.txt
+
+          EXPECTED_CERT_SHA="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > /tmp/sage-apk-certs.txt
+          ACTUAL_CERT_SHA="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/sage-apk-certs.txt | tr '[:upper:]' '[:lower:]')"
+          test -n "$EXPECTED_CERT_SHA"
+          test "$ACTUAL_CERT_SHA" = "$EXPECTED_CERT_SHA"
+          rm -f /tmp/sage-apk-certs.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='39' versionName='1.27.0'" apk-badging-pass-1.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='39' versionName='1.27.0'" apk-badging-pass-2.txt
+
+          unzip -l "$APK" | tee apk-file-list.txt
+          grep -F "lib/arm64-v8a/libsage-brain.so" apk-file-list.txt
+          unzip -p "$APK" 'classes*.dex' | strings > apk-dex-strings.txt
+          grep -F "Sage Diagnostics and Continuity" apk-dex-strings.txt
+          grep -F "Continuity identity: one Sage, same package and saved app data" apk-dex-strings.txt
+          grep -F "Custom wake profiles" apk-dex-strings.txt
+          grep -F "Approve and export repair bundle" apk-dex-strings.txt
+          grep -F "Authority & Permissions" apk-dex-strings.txt
+          grep -F "SAGE WORKBENCH" apk-dex-strings.txt
+          grep -F "Approve installer handoff" apk-dex-strings.txt
+          grep -F "Confirm and scan displayed local subnet" apk-dex-strings.txt
+          grep -F "Review and pair this tablet" apk-dex-strings.txt
+          grep -F "Approve Dell system-information job" apk-dex-strings.txt
+          grep -F "Forge certificate pin mismatch" apk-dex-strings.txt
+          grep -F "Test Sage Brain" apk-dex-strings.txt
+          grep -F "SAGE TOOLBELT" apk-dex-strings.txt
+          grep -F "single_container markers=" apk-dex-strings.txt
+          grep -F "I understand what you want to accomplish:" apk-dex-strings.txt
+          grep -F "Memory 2.0" apk-dex-strings.txt
+          grep -F "Brain model needs attention:" apk-dex-strings.txt
+          grep -F "surprise_rotation" apk-dex-strings.txt
+          sha256sum "$APK" | tee apk-sha256.txt
+          cp "$APK" Sage-Commander-1.27.0-unified-intelligence.apk
+
+      - name: Upload first successful signed Sage 1.27.0 APK immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.27.0-unified-intelligence
+          path: |
+            Sage-Commander-1.27.0-unified-intelligence.apk
+            SAGE_1_27_CHANGE_REPORT.md
+            SAGE_1_26_VERIFICATION_REPORT.md
+            SAGE_1_26_ROOT_CAUSE_REPORT.md
+            SAGE_1_26_SPEECH_STATE_ARCHITECTURE.md
+            SAGE_1_26_CONTINUITY_FINISH_REPORT.md
+            SAGE_1_26_BRAIN_BENCHMARK_REPORT.md
+            SAGE_1_26_TABLET_ACCEPTANCE_CHECKLIST.md
+            SAGE_AGENT_FACTORY_AUDIT.md
+            SAGE_FORGE_ARCHITECTURE.md
+            SAGE_FORGE_PAIRING_PROTOCOL.md
+            SAGE_FORGE_THREAT_MODEL.md
+            THIRD_PARTY_NOTICES.md
+            sage_forge/schemas/*.json
+            apk-zip-test-pass-1.txt
+            apk-zip-test-pass-2.txt
+            apk-zipalign-pass-1.txt
+            apk-zipalign-pass-2.txt
+            apk-signing-pass-1.txt
+            apk-signing-pass-2.txt
+            apk-badging-pass-1.txt
+            apk-badging-pass-2.txt
+            apk-file-list.txt
+            apk-dex-strings.txt
+            apk-sha256.txt
+          if-no-files-found: error
