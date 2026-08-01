@@ -230,7 +230,7 @@ jobs:
           grep -F "I understand what you want to accomplish:" apk-dex-strings.txt
           grep -F "Memory 2.0" apk-dex-strings.txt
           grep -F "Brain model needs attention:" apk-dex-strings.txt
-          grep -F "Command engine • Creative Planner •" apk-dex-strings.txt
+          grep -F "surprise_rotation" apk-dex-strings.txt
           sha256sum "$APK" | tee apk-sha256.txt
           cp "$APK" Sage-Commander-1.27.0-unified-intelligence.apk
 
