@@ -1,0 +1,198 @@
+name: Verify Sage 1.26.0 installs over Sage 1.25.0
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/sage-1-26-install-verification-20260801
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  install-over-existing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout sanitized recovery source
+        uses: actions/checkout@v4
+
+      - name: Reconstruct Sage 1.25.0 update baseline
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build_125
+          for patcher in \
+            stabilize_v1_21 fix_android_lint_v1_21 brain_watchdog_v1_22 \
+            wake_profiles_and_recognition_v1_23 fix_wake_profiles_compile_v1_23 \
+            continuity_report_v1_24 number_overlay_release_v1_24_1 \
+            sage_release_v1_24_2 self_repair_foundation_v1_25 \
+            workbench_v1_25 sage_forge_v1_25; do
+            python3 "sage_patches/${patcher}.py" sage_build_125
+          done
+          grep -F 'applicationId = "com.pineapple.sagecommander.stable"' sage_build_125/app/build.gradle.kts
+          grep -F 'versionCode = 37' sage_build_125/app/build.gradle.kts
+          grep -F 'versionName = "1.25.0"' sage_build_125/app/build.gradle.kts
+
+      - name: Add pinned Brain engine and wake model
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_125/third_party/llama.cpp
+          git -C sage_build_125/third_party/llama.cpp init
+          git -C sage_build_125/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_125/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_125/third_party/llama.cpp checkout --detach FETCH_HEAD
+          mkdir -p sage_build_125/app/src/main/assets /tmp/sage-vosk-125
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o /tmp/sage-vosk-125.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-125.zip -d /tmp/sage-vosk-125
+          mv /tmp/sage-vosk-125/vosk-model-small-en-us-0.15 sage_build_125/app/src/main/assets/model-en-us
+          printf 'sage-v1.25.0-install-baseline\n' > sage_build_125/app/src/main/assets/model-en-us/uuid
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android build and ARM64 emulator toolchains
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "emulator" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358" \
+            "system-images;android-30;google_apis;arm64-v8a"
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Build signed Sage 1.25.0 baseline
+        working-directory: sage_build_125
+        run: gradle :app:assembleRelease --stacktrace
+
+      - name: Download exact corrected Sage 1.26.0 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Sage-Commander-1.26.0-corrected-signed
+          path: corrected-126
+          repository: superkat13/JE
+          run-id: 30690274238
+          github-token: ${{ github.token }}
+
+      - name: Verify both install inputs and matching signers
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          APK_125="sage_build_125/app/build/outputs/apk/release/app-release.apk"
+          APK_126="corrected-126/Sage-Commander-1.26.0-corrected-signed.apk"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_125" | tee install-reference-125-apksigner.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_126" | tee install-candidate-126-apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK_125" | tee install-reference-125-package.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK_126" | tee install-candidate-126-package.txt
+          CERT_125="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' install-reference-125-apksigner.txt)"
+          CERT_126="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' install-candidate-126-apksigner.txt)"
+          test "$CERT_125" = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35"
+          test "$CERT_126" = "$CERT_125"
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='37' versionName='1.25.0'" install-reference-125-package.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='38' versionName='1.26.0'" install-candidate-126-package.txt
+
+      - name: Create and boot ARM64 Android target
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/sage-avd
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | avdmanager create avd \
+            --force \
+            --name sage_arm64_api30 \
+            --package "system-images;android-30;google_apis;arm64-v8a" \
+            --device pixel \
+            --path "$ANDROID_AVD_HOME/sage_arm64_api30.avd"
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd sage_arm64_api30 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            -accel off \
+            -no-metrics \
+            > emulator-install-verification.log 2>&1 &
+          timeout 300 adb wait-for-device
+          booted=false
+          for attempt in $(seq 1 240); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=true
+              break
+            fi
+            sleep 5
+          done
+          test "$booted" = true
+          adb shell getprop ro.product.cpu.abi | tee emulator-abi.txt
+          grep -F 'arm64-v8a' emulator-abi.txt
+
+      - name: Install Sage 1.25.0 then update in place to 1.26.0
+        run: |
+          set -euo pipefail
+          PACKAGE="com.pineapple.sagecommander.stable"
+          APK_125="sage_build_125/app/build/outputs/apk/release/app-release.apk"
+          APK_126="corrected-126/Sage-Commander-1.26.0-corrected-signed.apk"
+
+          adb install -r "$APK_125" | tee adb-install-125.txt
+          grep -F 'Success' adb-install-125.txt
+          adb shell dumpsys package "$PACKAGE" | grep -E 'versionCode=|versionName=|firstInstallTime=|lastUpdateTime=' | tee package-before-update.txt
+          grep -F 'versionCode=37' package-before-update.txt
+          FIRST_INSTALL_BEFORE="$(sed -n 's/^[[:space:]]*firstInstallTime=//p' package-before-update.txt | head -1)"
+          test -n "$FIRST_INSTALL_BEFORE"
+
+          sleep 3
+          adb install -r "$APK_126" | tee adb-install-126-over-125.txt
+          grep -F 'Success' adb-install-126-over-125.txt
+          adb shell dumpsys package "$PACKAGE" | grep -E 'versionCode=|versionName=|firstInstallTime=|lastUpdateTime=' | tee package-after-update.txt
+          grep -F 'versionCode=38' package-after-update.txt
+          grep -F 'versionName=1.26.0' package-after-update.txt
+          FIRST_INSTALL_AFTER="$(sed -n 's/^[[:space:]]*firstInstallTime=//p' package-after-update.txt | head -1)"
+          test "$FIRST_INSTALL_AFTER" = "$FIRST_INSTALL_BEFORE"
+
+          {
+            echo 'install_1_25=Success'
+            echo 'install_1_26_over_1_25=Success'
+            echo 'uninstall_used=false'
+            echo 'first_install_time_preserved=true'
+            echo 'final_package=com.pineapple.sagecommander.stable'
+            echo 'final_versionName=1.26.0'
+            echo 'final_versionCode=38'
+          } | tee install-over-existing-result.txt
+
+      - name: Upload install-over-existing evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.26.0-install-over-1.25-evidence
+          path: |
+            adb-install-125.txt
+            adb-install-126-over-125.txt
+            package-before-update.txt
+            package-after-update.txt
+            install-over-existing-result.txt
+            install-reference-125-apksigner.txt
+            install-candidate-126-apksigner.txt
+            install-reference-125-package.txt
+            install-candidate-126-package.txt
+            emulator-abi.txt
+            emulator-install-verification.log
+          if-no-files-found: warn
