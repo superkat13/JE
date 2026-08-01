@@ -29,6 +29,7 @@ jobs:
           python3 sage_tests/test_red_queen_v1_28.py sage_build_128
           python3 sage_tests/test_orchestrator_registry_v1_28.py sage_build_128
           python3 sage_tests/test_package_file_labs_v1_28.py sage_build_128
+          python3 sage_tests/test_network_operations_v1_28.py sage_build_128
 
       - name: Run inherited and 1.28 host regressions
         run: |
@@ -53,7 +54,8 @@ jobs:
             sage_tests/test_living_sage_v1_28.py \
             sage_tests/test_red_queen_v1_28.py \
             sage_tests/test_orchestrator_registry_v1_28.py \
-            sage_tests/test_package_file_labs_v1_28.py; do
+            sage_tests/test_package_file_labs_v1_28.py \
+            sage_tests/test_network_operations_v1_28.py; do
             python3 "$test_file" sage_build_128
           done
           python3 sage_tests/test_public_disclosure_v1_27.py
@@ -201,6 +203,7 @@ jobs:
           grep -F 'red_queen_private_vault.bin' apk-dex-strings.txt
           grep -F 'FILE LAB REPORT' apk-dex-strings.txt
           grep -F 'Exported surfaces' apk-dex-strings.txt
+          grep -F 'PRIVATE-LAN SELECTED HOST' apk-dex-strings.txt
 
       - name: Record honest physical-install acceptance boundary
         run: |
