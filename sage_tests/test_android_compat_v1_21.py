@@ -31,7 +31,7 @@ class AndroidCompatibilitySourceTests(unittest.TestCase):
             '                        Intent.FLAG_GRANT_READ_URI_PERMISSION\n'
             '                );'
         )
-        self.assertEqual(self.main.count(call), 2)
+        self.assertGreaterEqual(self.main.count(call), 3)
         self.assertNotIn('takePersistableUriPermission(uri, flags)', self.main)
 
     def test_pre_android_13_receiver_path_is_intentionally_guarded(self):

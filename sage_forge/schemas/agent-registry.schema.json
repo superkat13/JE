@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sage.local/schemas/agent-registry.schema.json",
+  "title": "Sage Forge non-executable agent registry",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "agents"],
+  "properties": {
+    "schema_version": {"const": "1.0"},
+    "agents": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/agent"}
+    }
+  },
+  "$defs": {
+    "agent": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "agent_id", "display_name", "role_id", "domain_ids", "description",
+        "instructions", "requested_tools", "input_schema", "output_schema",
+        "source", "content_sha256", "trust_state"
+      ],
+      "properties": {
+        "agent_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{2,95}$"},
+        "display_name": {"type": "string", "minLength": 1, "maxLength": 120},
+        "role_id": {"type": "string", "pattern": "^[a-z][a-z0-9_]{1,63}$"},
+        "domain_ids": {
+          "type": "array", "maxItems": 16, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-zA-Z0-9_.-]{1,100}$"}
+        },
+        "description": {"type": "string", "maxLength": 2000},
+        "instructions": {
+          "type": "string", "maxLength": 16000,
+          "description": "Declarative guidance only. It is untrusted data, never executable code."
+        },
+        "requested_tools": {
+          "type": "array", "maxItems": 32, "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{2,63}$"}
+        },
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+        "source": {
+          "type": "object", "additionalProperties": false,
+          "required": ["kind", "uri", "revision"],
+          "properties": {
+            "kind": {"enum": ["built_in", "owner_import", "generated"]},
+            "uri": {"type": "string", "maxLength": 1000},
+            "revision": {"type": "string", "maxLength": 200}
+          }
+        },
+        "content_sha256": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+        "trust_state": {"enum": ["built_in", "owner_reviewed", "untrusted", "disabled"]}
+      }
+    }
+  }
+}

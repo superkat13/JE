@@ -12,8 +12,8 @@ store = (JAVA / "SageWakeProfileStore.java").read_text()
 gradle = (ROOT / "app/build.gradle.kts").read_text()
 
 checks = {
-    "current_version_code_34": "versionCode = 34" in gradle,
-    "current_version_name_1_24": 'versionName = "1.24"' in gradle,
+    "current_version_code_39": "versionCode = 39" in gradle,
+    "current_version_name_1_27_0": 'versionName = "1.27.0"' in gradle,
     "wake_profile_store_present": "class SageWakeProfileStore" in store,
     "normal_mode_present": 'MODE_NORMAL = "normal"' in store,
     "red_queen_mode_present": 'MODE_RED_QUEEN = "red_queen"' in store,
@@ -30,7 +30,10 @@ checks = {
     "complete_minimum_speech_window": "EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 1300L" in voice,
     "complete_silence_window": "EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 1100L" in voice,
     "possible_silence_window": "EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 750L" in voice,
-    "final_partial_candidates_combined": "combinedChoices" in voice and "for (String partial : partialChoices)" in voice,
+    "final_results_preferred_over_partials": (
+        "String candidate = chooseBestCandidate(finalChoices);" in voice
+        and 'fallbackPartials.isEmpty() ? "empty_final" : "partial_without_final"' in voice
+    ),
     "incomplete_stem_penalty": "isIncompleteCommandStem" in voice and "score -= 45" in voice,
     "longer_candidate_bonus": "wordCount * 9" in voice,
     "follow_up_escape": "shouldReplaceActionFollowUp" in commands,

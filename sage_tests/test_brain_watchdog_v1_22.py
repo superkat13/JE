@@ -10,11 +10,11 @@ cpp = (ROOT / "app/src/main/cpp/sage_brain.cpp").read_text()
 gradle = (ROOT / "app/build.gradle.kts").read_text()
 
 checks = {
-    "30-second brain watchdog": "BRAIN_REQUEST_TIMEOUT_MS = 30000L" in voice,
+    "30-second brain watchdog": "BRAIN_GENERATION_TIMEOUT_MS = 30000L" in voice,
     "request generation prevents stale callbacks": "requestGeneration != brainRequestGeneration" in voice,
     "timeout restores listening through fallback delivery": (
-        "Sage Brain timed out — listening restored" in voice
-        and "deliverCommandResult(fallbackResult);" in voice
+        "Brain timed out — fallback used" in voice
+        and 'deliverCommandResult(fallbackResult, "fallback");' in voice
     ),
     "timeout cancels native generation": "brainManager.cancelCurrentRequest();" in voice,
     "service shutdown cancels brain": (
@@ -42,8 +42,8 @@ checks = {
     "permanent package remains unchanged": (
         'applicationId = "com.pineapple.sagecommander.stable"' in gradle
     ),
-    "current release identity is 1.24": (
-        "versionCode = 34" in gradle and 'versionName = "1.24"' in gradle
+    "current release identity is 1.27.0": (
+        "versionCode = 39" in gradle and 'versionName = "1.27.0"' in gradle
     ),
 }
 
@@ -53,7 +53,7 @@ for name, passed in checks.items():
 
 # The timeout callback must invalidate its request before delivering the fallback.
 timeout_block = re.search(
-    r"final Runnable timeout = \(\) -> \{(?P<body>.*?)\n        \};",
+    r"private void brainTimedOut\(.*?\) \{(?P<body>.*?)\n    \}",
     voice,
     re.DOTALL,
 )
@@ -65,7 +65,7 @@ else:
         body.find("brainInProgress = false;"),
         body.find("++brainRequestGeneration;"),
         body.find("brainManager.cancelCurrentRequest();"),
-        body.find("deliverCommandResult(fallbackResult);")
+        body.find('deliverCommandResult(fallbackResult, "fallback");')
     ]
     if any(index < 0 for index in order) or order != sorted(order):
         failed.append("timeout invalidates and cancels before fallback")

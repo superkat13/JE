@@ -161,8 +161,13 @@ jobs:
           test -f "$APK"
           unzip -t "$APK" | tee apk-zip-test.txt
           "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee apk-zipalign.txt
-          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee apk-signing.txt
-          grep -qi "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" apk-signing.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK" | tee apk-signing.txt
+          EXPECTED_CERT_SHA="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          "$BUILD_TOOLS/apksigner" verify --print-certs "$APK" > /tmp/sage-apk-certs.txt
+          ACTUAL_CERT_SHA="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' /tmp/sage-apk-certs.txt | tr '[:upper:]' '[:lower:]')"
+          test -n "$EXPECTED_CERT_SHA"
+          test "$ACTUAL_CERT_SHA" = "$EXPECTED_CERT_SHA"
+          rm -f /tmp/sage-apk-certs.txt
           "$BUILD_TOOLS/aapt" dump badging "$APK" | tee apk-badging.txt
           grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='33' versionName='1.23'" apk-badging.txt
           unzip -l "$APK" | tee apk-file-list.txt

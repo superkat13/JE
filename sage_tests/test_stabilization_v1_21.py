@@ -122,18 +122,18 @@ class SourceRegressionTests(unittest.TestCase):
 
     def test_permanent_update_identity(self):
         self.assertIn('applicationId = "com.pineapple.sagecommander.stable"', self.gradle)
-        self.assertIn('versionCode = 34', self.gradle)
-        self.assertIn('versionName = "1.24"', self.gradle)
+        self.assertIn('versionCode = 39', self.gradle)
+        self.assertIn('versionName = "1.27.0"', self.gradle)
         self.assertIn('sagePermanentSigning', self.gradle)
         self.assertIn('android.permission.REQUEST_INSTALL_PACKAGES', self.manifest)
 
     def test_overlay_lifetime_and_event_policy(self):
-        self.assertIn('NUMBER_OVERLAY_TIMEOUT_MS = 120000L', self.access)
+        self.assertIn('DEFAULT_NUMBER_OVERLAY_TIMEOUT_MS = 60000L', self.access)
+        self.assertIn('"number_overlay_timeout_ms"', self.access)
         self.assertIn('NUMBER_OVERLAY_EVENT_GRACE_MS = 2500L', self.access)
         self.assertIn('eventPackage.equals(getPackageName())', self.access)
         event_method = self.access.split('public void onAccessibilityEvent', 1)[1].split('@Override', 1)[0]
-        self.assertNotIn('TYPE_WINDOW_STATE_CHANGED', event_method)
-        self.assertNotIn('TYPE_WINDOWS_CHANGED', event_method)
+        self.assertIn('"ignored_content_or_window_churn"', event_method)
         self.assertIn('TYPE_VIEW_SCROLLED', event_method)
         self.assertIn('TYPE_VIEW_CLICKED', event_method)
 
@@ -160,12 +160,15 @@ class SourceRegressionTests(unittest.TestCase):
         method = self.voice.split('private void handleCommand', 1)[1].split(
             'private boolean isOpenEndedBrainRequest', 1)[0]
         self.assertIn('if (forceBrainForNextCommand)', method)
-        execute_index = method.index('SageCommandEngine.Result result = commandEngine.execute(cleaned)')
+        execute_index = method.index('SageCommandEngine.Result result = commandEngine.execute(executionCommand)')
         fallback_index = method.index('if (!result.matched && brainManager != null && brainManager.canAnswer())')
         self.assertLess(execute_index, fallback_index)
 
     def test_custom_voice_response_cancels_stale_followup(self):
-        self.assertIn('commandEngine.cancelFollowUp();\n            playVoiceResponse', self.voice)
+        cancel = self.voice.index('commandEngine.cancelFollowUp();',
+                self.voice.index('if (voiceResponse != null)'))
+        play = self.voice.index('playVoiceResponse(voiceResponse);', cancel)
+        self.assertLess(cancel, play)
 
     def test_current_nonzero_speech_silence_thresholds(self):
         self.assertIn('MINIMUM_LENGTH_MILLIS, 1300L', self.voice)
