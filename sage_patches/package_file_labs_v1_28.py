@@ -8,10 +8,13 @@ import sys
 PACKAGE_INSPECTOR = r'''package com.pineapple.sage;
 
 import android.content.Context;
+import android.content.pm.ActivityInfo;
 import android.content.pm.ComponentInfo;
 import android.content.pm.FeatureInfo;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.ProviderInfo;
+import android.content.pm.ServiceInfo;
 import android.content.pm.Signature;
 import android.net.Uri;
 
@@ -192,8 +195,12 @@ final class SagePackageInspector {
     private static void addComponents(String type,ComponentInfo[] values,List<String> all,List<String> exported){
         if(values==null)return;
         for(ComponentInfo value:values){
+            String permission="";
+            if(value instanceof ActivityInfo)permission=((ActivityInfo)value).permission;
+            else if(value instanceof ServiceInfo)permission=((ServiceInfo)value).permission;
+            else if(value instanceof ProviderInfo)permission=((ProviderInfo)value).readPermission;
             String item=type+":"+value.name+" exported="+value.exported
-                    +(value.permission==null?"":" permission="+value.permission);
+                    +(permission==null||permission.isEmpty()?"":" permission="+permission);
             all.add(item);if(value.exported)exported.add(item);
         }
     }
