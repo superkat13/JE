@@ -133,7 +133,7 @@ public class SageHostInspectorActivity extends Activity implements SageOperation
     private View build(){ScrollView scroll=new ScrollView(this);LinearLayout root=new LinearLayout(this);root.setOrientation(LinearLayout.VERTICAL);root.setPadding(dp(18),dp(18),dp(18),dp(22));scroll.addView(root);
         root.addView(text("PRIVATE-LAN SELECTED HOST",27));root.addView(text("Enter one exact IP already present in Sage's saved private-LAN snapshot. After confirmation, Sage checks only eight conservative ports and records reverse DNS, reachability, latency, TLS certificate evidence, and HTTP headers where available.",14));
         root.addView(text("Public targets, broad port ranges, credentials, exploits, persistence, evasion, hidden scans, destructive actions, and denial of service are refused.",14));
-        ip=new EditText(this);ip.setHint("Exact saved private IP, for example 192.168.1.25");root.addView(ip);
+        ip=new EditText(this);ip.setHint("Exact private IP already present in Sage's saved map");root.addView(ip);
         Button run=button("Confirm selected-host inspection");run.setOnClickListener(v->confirm());root.addView(run);
         cancel=button("Cancel selected-host inspection");cancel.setEnabled(false);cancel.setOnClickListener(v->{if(operation!=null)operation.cancel();});root.addView(cancel);
         progress=new ProgressBar(this,null,android.R.attr.progressBarStyleHorizontal);progress.setMax(11);root.addView(progress);status=text("Idle",13);root.addView(status);report=text("",13);report.setTextIsSelectable(true);root.addView(report);SageAppearance.apply(this,scroll,root);return scroll;}

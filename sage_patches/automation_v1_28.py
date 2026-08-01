@@ -34,7 +34,7 @@ final class SageAutomationManager {
     static final String EVENT_APK = "downloaded_sage_apk_inspected";
     static final String EVENT_FORGE = "forge_job_finished";
     static final String EVENT_NETWORK = "network_new_device";
-    static final String PERMANENT_SIGNER = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35";
+    static final String EXPECTED_CERT_SHA256 = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35";
     private static final String CHANNEL = "sage_owner_automations";
     private static final String PREFS = "sage_automations";
 
@@ -97,7 +97,7 @@ final class SageAutomationManager {
     }
     static void recordApk(Context c,SagePackageInspector.Report report){
         if(!enabled(c,APK_SIGNER))return;
-        boolean signer=PERMANENT_SIGNER.equalsIgnoreCase(report.signerSha256);
+        boolean signer=EXPECTED_CERT_SHA256.equalsIgnoreCase(report.signerSha256);
         boolean identity="com.pineapple.sagecommander.stable".equals(report.packageName);
         String result="package="+report.packageName+" version="+report.versionName+" ("+report.versionCode+")"
                 +" signer_match="+signer+" identity_match="+identity+" file_sha256="+report.fileSha256;

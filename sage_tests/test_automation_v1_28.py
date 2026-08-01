@@ -15,7 +15,7 @@ command = (java / "SageCommandEngine.java").read_text()
 
 checks = {
     "exact compiled routines": all(v in manager for v in ("download.sage_apk_signer", "forge.job_finished", "network.new_device")),
-    "permanent signer": "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" in manager,
+    "permanent identity digest": "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" in manager,
     "complete declarations": all(v in manager for v in ("trigger", "conditions", "steps", "tools", "target", "permission", "risk", "confirmation", "timeout", "cancel", "logs", "rollback")),
     "compiled authority only": "COMPILED" in manager and "find(id)==null" in manager,
     "no arbitrary shell": all(v not in (manager+activity+receiver).lower() for v in ("runtime.exec", "processbuilder", "/bin/sh", "arbitrary shell")),
