@@ -181,6 +181,7 @@ jobs:
           grep -F "Signer #1 certificate SHA-256 digest: $EXPECTED_CERT_SHA" apksigner-full.txt
           grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='40' versionName='1.28.0'" \
             package-version-full.txt
+          grep -F "application-label:'Sage Commander 1.28.0'" package-version-full.txt
           if grep -F 'android:testOnly' apk-manifest-full.txt; then
             echo 'FAIL: packaged manifest contains android:testOnly' >&2
             exit 1

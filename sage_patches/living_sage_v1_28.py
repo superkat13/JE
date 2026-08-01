@@ -24,8 +24,10 @@ def main() -> None:
     root = Path(sys.argv[1])
     gradle_path = root / "app/build.gradle.kts"
     manifest_path = root / "app/src/main/AndroidManifest.xml"
+    strings_path = root / "app/src/main/res/values/strings.xml"
     gradle = gradle_path.read_text()
     manifest = manifest_path.read_text()
+    strings = strings_path.read_text()
 
     gradle = replace_once(
         gradle,
@@ -38,6 +40,12 @@ def main() -> None:
         r'versionName\s*=\s*"1\.27\.0"',
         'versionName = "1.28.0"',
         "Sage 1.27 versionName",
+    )
+    strings = replace_once(
+        strings,
+        r"<string name=\"app_name\">Sage Commander 1\.25\.0</string>",
+        '<string name="app_name">Sage Commander 1.28.0</string>',
+        "stale launcher label",
     )
 
     required_gradle = (
@@ -60,6 +68,7 @@ def main() -> None:
             raise SystemExit(f"production manifest contains forbidden marker: {marker}")
 
     gradle_path.write_text(gradle)
+    strings_path.write_text(strings)
     print("Applied Sage Commander 1.28.0 production identity")
 
 
