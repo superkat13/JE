@@ -25,5 +25,6 @@ patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/continuity_finish_v1_26.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/sage_1_27_unified.patch
 python3 sage_patches/creative_studio_v1_27.py "$OUTPUT"
 python3 sage_patches/living_sage_v1_28.py "$OUTPUT"
+python3 sage_patches/red_queen_v1_28.py "$OUTPUT"
 
 echo "Reconstructed Sage Commander 1.28.0 source in $OUTPUT"

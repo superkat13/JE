@@ -26,6 +26,7 @@ jobs:
           set -euo pipefail
           bash sage_tools/reconstruct_v1_28.sh sage_build_128
           python3 sage_tests/test_living_sage_v1_28.py sage_build_128
+          python3 sage_tests/test_red_queen_v1_28.py sage_build_128
 
       - name: Run inherited and 1.28 host regressions
         run: |
@@ -47,7 +48,8 @@ jobs:
             sage_tests/test_reliability_toolbelt_v1_26.py \
             sage_tests/test_continuity_finish_v1_26.py \
             sage_tests/test_intelligence_memory_v1_27.py \
-            sage_tests/test_living_sage_v1_28.py; do
+            sage_tests/test_living_sage_v1_28.py \
+            sage_tests/test_red_queen_v1_28.py; do
             python3 "$test_file" sage_build_128
           done
           python3 sage_tests/test_public_disclosure_v1_27.py
@@ -190,6 +192,9 @@ jobs:
           grep -F 'Test Sage Brain' apk-dex-strings.txt
           grep -F 'I understand what you want to accomplish:' apk-dex-strings.txt
           grep -F 'surprise_rotation' apk-dex-strings.txt
+          grep -F 'Owner authentication required.' apk-dex-strings.txt
+          grep -F 'Red Queen Mode activated.' apk-dex-strings.txt
+          grep -F 'red_queen_private_vault.bin' apk-dex-strings.txt
 
       - name: Record honest physical-install acceptance boundary
         run: |
