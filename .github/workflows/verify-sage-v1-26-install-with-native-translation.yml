@@ -1,0 +1,150 @@
+name: Verify Sage 1.26.0 update with Android native translation
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/sage-1-26-install-x86-translation-20260801
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  install-over-existing:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout verification workflow
+        uses: actions/checkout@v4
+
+      - name: Download exact corrected Sage 1.26.0 artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: Sage-Commander-1.26.0-corrected-signed
+          path: corrected-126
+          repository: superkat13/JE
+          run-id: 30690274238
+          github-token: ${{ github.token }}
+
+      - name: Download exact signed Sage 1.25.0 baseline
+        uses: actions/download-artifact@v4
+        with:
+          name: Sage-1.26.0-install-over-1.25-evidence
+          path: baseline-125
+          repository: superkat13/JE
+          run-id: 30691106370
+          github-token: ${{ github.token }}
+
+      - name: Set up JDK and Android SDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android verifier and x86_64 system image
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "emulator" \
+            "build-tools;35.0.0" \
+            "system-images;android-35;google_apis;x86_64"
+
+      - name: Verify exact inputs before install
+        run: |
+          set -euo pipefail
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          APK_125="baseline-125/install-reference-125-signed.apk"
+          APK_126="corrected-126/Sage-Commander-1.26.0-corrected-signed.apk"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_125" | tee translated-reference-125-apksigner.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK_126" | tee translated-candidate-126-apksigner.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK_125" | tee translated-reference-125-package.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK_126" | tee translated-candidate-126-package.txt
+          CERT_125="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' translated-reference-125-apksigner.txt)"
+          CERT_126="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' translated-candidate-126-apksigner.txt)"
+          test "$CERT_125" = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35"
+          test "$CERT_126" = "$CERT_125"
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='37' versionName='1.25.0'" translated-reference-125-package.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='38' versionName='1.26.0'" translated-candidate-126-package.txt
+
+      - name: Boot x86_64 Android target with native translation
+        env:
+          ANDROID_AVD_HOME: ${{ runner.temp }}/sage-x86-avd
+        run: |
+          set -euo pipefail
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | avdmanager create avd \
+            --force \
+            --name sage_x86_api35 \
+            --package "system-images;android-35;google_apis;x86_64" \
+            --device pixel \
+            --path "$ANDROID_AVD_HOME/sage_x86_api35.avd"
+          if [ -e /dev/kvm ]; then sudo chmod 666 /dev/kvm; fi
+          nohup "$ANDROID_HOME/emulator/emulator" \
+            -avd sage_x86_api35 \
+            -no-window \
+            -no-audio \
+            -no-boot-anim \
+            -no-snapshot \
+            -gpu swiftshader_indirect \
+            -no-metrics \
+            > translated-emulator.log 2>&1 &
+          timeout 300 adb wait-for-device
+          booted=false
+          for attempt in $(seq 1 120); do
+            if [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = "1" ]; then
+              booted=true
+              break
+            fi
+            sleep 5
+          done
+          test "$booted" = true
+          adb shell getprop ro.product.cpu.abilist | tee translated-abi-list.txt
+          adb shell getprop ro.dalvik.vm.native.bridge | tee translated-native-bridge.txt
+
+      - name: Install Sage 1.25.0 then update in place to 1.26.0
+        run: |
+          set -euo pipefail
+          PACKAGE="com.pineapple.sagecommander.stable"
+          APK_125="baseline-125/install-reference-125-signed.apk"
+          APK_126="corrected-126/Sage-Commander-1.26.0-corrected-signed.apk"
+
+          adb install -r "$APK_125" | tee translated-adb-install-125.txt
+          grep -F 'Success' translated-adb-install-125.txt
+          adb shell dumpsys package "$PACKAGE" | grep -E 'versionCode=|versionName=|firstInstallTime=|lastUpdateTime=' | tee translated-package-before.txt
+          grep -F 'versionCode=37' translated-package-before.txt
+          FIRST_INSTALL_BEFORE="$(sed -n 's/^[[:space:]]*firstInstallTime=//p' translated-package-before.txt | head -1)"
+          test -n "$FIRST_INSTALL_BEFORE"
+
+          sleep 3
+          adb install -r "$APK_126" | tee translated-adb-install-126-over-125.txt
+          grep -F 'Success' translated-adb-install-126-over-125.txt
+          adb shell dumpsys package "$PACKAGE" | grep -E 'versionCode=|versionName=|firstInstallTime=|lastUpdateTime=' | tee translated-package-after.txt
+          grep -F 'versionCode=38' translated-package-after.txt
+          grep -F 'versionName=1.26.0' translated-package-after.txt
+          FIRST_INSTALL_AFTER="$(sed -n 's/^[[:space:]]*firstInstallTime=//p' translated-package-after.txt | head -1)"
+          test "$FIRST_INSTALL_AFTER" = "$FIRST_INSTALL_BEFORE"
+          {
+            echo 'install_1_25=Success'
+            echo 'install_1_26_over_1_25=Success'
+            echo 'uninstall_used=false'
+            echo 'first_install_time_preserved=true'
+            echo 'final_package=com.pineapple.sagecommander.stable'
+            echo 'final_versionName=1.26.0'
+            echo 'final_versionCode=38'
+          } | tee translated-install-over-result.txt
+
+      - name: Upload native-translation install evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.26.0-native-translation-install-evidence
+          path: |
+            translated-*.txt
+            translated-emulator.log
+          if-no-files-found: warn
+
