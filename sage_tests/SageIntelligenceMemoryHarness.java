@@ -63,9 +63,24 @@ public final class SageIntelligenceMemoryHarness {
         require(summary.startsWith("I understand what you want to accomplish:"),
                 "goal summary did not use the required user-facing wording");
 
+        SageIntentCoordinator.Plan creativePlan = SageIntentCoordinator.understand(
+                context, "Sage surprise me", true, false);
+        require("creative".equals(creativePlan.intent)
+                        && "Creative Studio".equals(creativePlan.tool)
+                        && "command engine".equals(creativePlan.routeHint),
+                "creative request did not choose the offline Creative Planner route");
+        String firstIdea = SageCreativeEngine.respond(context, "Sage surprise me");
+        String secondIdea = SageCreativeEngine.respond(context, "Sage surprise me");
+        require(firstIdea.startsWith("Command engine • Creative Planner •")
+                        && !firstIdea.equals(secondIdea),
+                "surprise rotation repeated or hid its route");
+        require(SageCreativeEngine.respond(context, "I'm bored").contains("boredom cure"),
+                "boredom command did not return a bounded challenge");
+
         System.out.println("PASS: deterministic goal, tool, specialist, and route planning");
         System.out.println("PASS: safe contextual repeat and unsafe-repeat rejection");
         System.out.println("PASS: Memory 2.0 metadata, duplicate prevention, migration, edit, delete");
+        System.out.println("PASS: rotating offline surprise, boredom, and creative routes");
     }
 
     private static final class FakeContext extends Context {

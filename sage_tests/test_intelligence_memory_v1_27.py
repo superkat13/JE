@@ -17,6 +17,7 @@ files = {
     "brain": JAVA / "SageBrainManager.java",
     "memory": JAVA / "SageMemoryStore.java",
     "commands": JAVA / "SageCommandEngine.java",
+    "creative": JAVA / "SageCreativeEngine.java",
 }
 source = {name: path.read_text() for name, path in files.items()}
 
@@ -43,6 +44,12 @@ checks = {
     "legacy memory migration": "legacy_owner_memory" in source["memory"] and "parts.length >= 3" in source["memory"],
     "project memory": 'startsWith("this project is ")' in source["memory"] and 'lower.startsWith("this project is ")' in source["commands"],
     "forget this": '"forget this"' in source["commands"] and "recallLast(context)" in source["commands"],
+    "creative commands": all(value in source["commands"] for value in (
+        '"surprise me"', '"cure boredom"', '"video idea"', "SageCreativeEngine.respond")),
+    "rotating creative engine": all(value in source["creative"] for value in (
+        "surprise_rotation", "Creative Planner", "boredom cure", "route=command engine")),
+    "creative route visibility": 'case "creative": return "Creative Studio"' in source["coordinator"]
+        and 'if (intent.equals("creative")) return "command engine"' in source["coordinator"],
 }
 
 failed = [name for name, passed in checks.items() if not passed]
@@ -59,7 +66,7 @@ with tempfile.TemporaryDirectory(prefix="sage-intelligence-") as target:
         str(REPO / "sage_tests/java_stubs/android/content/Context.java"),
         str(REPO / "sage_tests/java_stubs/android/content/SharedPreferences.java"),
         str(REPO / "sage_tests/java_stubs/com/pineapple/sage/SageDiagnostics.java"),
-        str(files["coordinator"]), str(files["memory"]),
+        str(files["coordinator"]), str(files["memory"]), str(files["creative"]),
         str(REPO / "sage_tests/SageIntelligenceMemoryHarness.java")], check=True)
     subprocess.run([java, "-cp", target,
         "com.pineapple.sage.SageIntelligenceMemoryHarness"], check=True)

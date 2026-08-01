@@ -38,6 +38,7 @@ jobs:
             sage_patches/self_repair_foundation_v1_25.py \
             sage_patches/workbench_v1_25.py \
             sage_patches/sage_forge_v1_25.py \
+            sage_patches/creative_studio_v1_27.py \
             sage_tests/test_number_overlay_release_v1_24_1.py \
             sage_tests/test_sage_release_v1_24_2.py \
             sage_tests/test_self_repair_v1_25.py \
@@ -58,6 +59,7 @@ jobs:
           patch --fuzz=0 -p1 -d sage_build < SAGE_1_26_UNIFIED.diff
           patch --fuzz=0 -p1 -d sage_build < sage_patches/continuity_finish_v1_26.patch
           patch --fuzz=0 -p1 -d sage_build < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build
           python3 -m unittest -v sage_forge.tests.test_forge
           python3 sage_tests/test_stabilization_v1_21.py sage_build
           python3 sage_tests/test_android_compat_v1_21.py sage_build
@@ -93,6 +95,7 @@ jobs:
           patch --fuzz=0 -p1 -d sage_build_second < SAGE_1_26_UNIFIED.diff
           patch --fuzz=0 -p1 -d sage_build_second < sage_patches/continuity_finish_v1_26.patch
           patch --fuzz=0 -p1 -d sage_build_second < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build_second
           python3 sage_tests/test_continuity_report_v1_24.py sage_build_second
           python3 sage_tests/test_number_overlay_release_v1_24_1.py sage_build_second
           python3 sage_tests/test_sage_release_v1_24_2.py sage_build_second
@@ -227,6 +230,7 @@ jobs:
           grep -F "I understand what you want to accomplish:" apk-dex-strings.txt
           grep -F "Memory 2.0" apk-dex-strings.txt
           grep -F "Brain model needs attention:" apk-dex-strings.txt
+          grep -F "Command engine • Creative Planner •" apk-dex-strings.txt
           sha256sum "$APK" | tee apk-sha256.txt
           cp "$APK" Sage-Commander-1.27.0-unified-intelligence.apk
 

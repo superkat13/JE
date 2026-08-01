@@ -29,6 +29,9 @@ Identity: `com.pineapple.sagecommander.stable` / `1.27.0` / `versionCode 39`
   ignored local configuration or environment variables.
 - A disclosure regression rejects concrete non-localhost addresses, credential/key patterns,
   certificate fingerprints, device IDs, and tracked private deployment files.
+- Added an offline Creative Planner for `Sage, surprise me`, `I'm bored`, and direct video,
+  image, music, or project idea requests. Responses identify the command-engine route and rotate
+  persistently to avoid immediate repetition.
 
 ## Verification status
 

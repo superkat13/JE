@@ -69,6 +69,7 @@ jobs:
           patch --fuzz=0 -p1 -d sage_build < SAGE_1_26_UNIFIED.diff
           patch --fuzz=0 -p1 -d sage_build < sage_patches/continuity_finish_v1_26.patch
           patch --fuzz=0 -p1 -d sage_build < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build
 
       - name: Run complete source regressions
         run: |
