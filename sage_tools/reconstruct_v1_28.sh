@@ -27,5 +27,6 @@ python3 sage_patches/creative_studio_v1_27.py "$OUTPUT"
 python3 sage_patches/living_sage_v1_28.py "$OUTPUT"
 python3 sage_patches/red_queen_v1_28.py "$OUTPUT"
 python3 sage_patches/orchestrator_registry_v1_28.py "$OUTPUT"
+python3 sage_patches/package_file_labs_v1_28.py "$OUTPUT"
 
 echo "Reconstructed Sage Commander 1.28.0 source in $OUTPUT"

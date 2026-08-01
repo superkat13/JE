@@ -69,7 +69,7 @@ checks = {
     "single number container": '"single_container markers="' in source["accessibility"],
     "target revalidation": "resolveCurrentTarget" in source["accessibility"],
     "toolbelt package inspector": "Package Inspector" in source["toolbelt"],
-    "toolbelt file hasher": "File Hasher" in source["toolbelt"],
+    "toolbelt file lab": "File Lab" in source["toolbelt"],
     "toolbelt media inspector": "Media Inspector" in source["toolbelt"],
 }
 
