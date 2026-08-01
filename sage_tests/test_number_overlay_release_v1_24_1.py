@@ -24,7 +24,7 @@ build_gradle = (ROOT / "app/build.gradle.kts").read_text()
 
 if any(version in build_gradle for version in (
         'versionName = "1.24.2"', 'versionName = "1.25.0"', 'versionName = "1.26.0"',
-        'versionName = "1.27.0"')):
+        'versionName = "1.27.0"', 'versionName = "1.28.0"')):
     if "SageAccessibilityService.clearNumberOverlay();" in main_activity:
         raise SystemExit("1.24.2 activity lifecycle regressed to clearing overlays")
     cancel_body = command_engine[

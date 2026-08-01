@@ -150,7 +150,7 @@ if 'android.permission.BIND_DEVICE_ADMIN' in manifest:
 
 if 'applicationId = "com.pineapple.sagecommander.stable"' not in gradle:
     raise SystemExit("stable package identity changed")
-if 'versionCode = 39' not in gradle or 'versionName = "1.27.0"' not in gradle:
+if 'versionCode = 40' not in gradle or 'versionName = "1.28.0"' not in gradle:
     raise SystemExit("Sage 1.27.0 release identity missing")
 if "sagePermanentSigning" not in gradle:
     raise SystemExit("permanent signing configuration missing")

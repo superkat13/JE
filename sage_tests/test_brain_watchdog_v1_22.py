@@ -43,7 +43,7 @@ checks = {
         'applicationId = "com.pineapple.sagecommander.stable"' in gradle
     ),
     "current release identity is 1.27.0": (
-        "versionCode = 39" in gradle and 'versionName = "1.27.0"' in gradle
+        "versionCode = 40" in gradle and 'versionName = "1.28.0"' in gradle
     ),
 }
 

@@ -26,8 +26,8 @@ source = {name: path.read_text() for name, path in files.items()}
 
 checks = {
     "stable package": 'applicationId = "com.pineapple.sagecommander.stable"' in source["gradle"],
-    "version code 39": "versionCode = 39" in source["gradle"],
-    "version 1.27.0": 'versionName = "1.27.0"' in source["gradle"],
+    "version code 40": "versionCode = 40" in source["gradle"],
+    "version 1.28.0": 'versionName = "1.28.0"' in source["gradle"],
     "release signing": 'getByName("release")' in source["gradle"] and "sagePermanentSigning" in source["gradle"],
     "ten lifecycle states": all(value in source["state"] for value in (
         "IDLE_WAKE", "WAKE_ACCEPTED", "COMMAND_LISTENING", "FINALIZING",

@@ -54,7 +54,7 @@ require(manifest, [".SageForgeActivity", "android.permission.INTERNET"], "Forge 
 
 gradle = (ROOT / "app/build.gradle.kts").read_text()
 require(gradle, ['applicationId = "com.pineapple.sagecommander.stable"',
-                 "versionCode = 39", 'versionName = "1.27.0"'], "release identity")
+                 "versionCode = 40", 'versionName = "1.28.0"'], "release identity")
 
 repair_workflow = (ROOT.parent / ".github/workflows/sage-approved-repair.yml").read_text()
 require(repair_workflow, ["workbench_v1_25 sage_forge_v1_25",

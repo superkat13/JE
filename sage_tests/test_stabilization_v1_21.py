@@ -122,8 +122,8 @@ class SourceRegressionTests(unittest.TestCase):
 
     def test_permanent_update_identity(self):
         self.assertIn('applicationId = "com.pineapple.sagecommander.stable"', self.gradle)
-        self.assertIn('versionCode = 39', self.gradle)
-        self.assertIn('versionName = "1.27.0"', self.gradle)
+        self.assertIn('versionCode = 40', self.gradle)
+        self.assertIn('versionName = "1.28.0"', self.gradle)
         self.assertIn('sagePermanentSigning', self.gradle)
         self.assertIn('android.permission.REQUEST_INSTALL_PACKAGES', self.manifest)
 

@@ -28,7 +28,7 @@ specialists = (
 )
 checks = {
     "stable package": 'applicationId = "com.pineapple.sagecommander.stable"' in source["gradle"],
-    "version 1.27 code 39": 'versionName = "1.27.0"' in source["gradle"] and "versionCode = 39" in source["gradle"],
+    "version 1.28 code 40": 'versionName = "1.28.0"' in source["gradle"] and "versionCode = 40" in source["gradle"],
     "all internal specialists": all(value in source["coordinator"] for value in specialists),
     "goal planning": all(value in source["coordinator"] for value in (
         "executionRequest", "goal", "intent", "tool", "routeHint", "verification")),

@@ -157,11 +157,11 @@ require(main, [
     '"Persistent until action"',
 ], "appearance settings")
 
-if not re.search(r"versionCode\s*=\s*(36|37|38|39)\b", gradle):
+if not re.search(r"versionCode\s*=\s*(36|37|38|39|40)\b", gradle):
     raise SystemExit("compatible release versionCode missing")
 if not any(version in gradle for version in (
         'versionName = "1.24.2"', 'versionName = "1.25.0"', 'versionName = "1.26.0"',
-        'versionName = "1.27.0"')):
+        'versionName = "1.27.0"', 'versionName = "1.28.0"')):
     raise SystemExit("compatible release versionName missing")
 if 'applicationId = "com.pineapple.sagecommander.stable"' not in gradle:
     raise SystemExit("stable applicationId changed")

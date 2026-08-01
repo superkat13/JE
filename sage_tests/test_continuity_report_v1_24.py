@@ -27,10 +27,10 @@ for marker in required_report:
     if marker not in diagnostics:
         raise SystemExit(f"Missing Sage 1.24 continuity report marker: {marker}")
 
-if not re.search(r'versionCode\s*=\s*39\b', gradle):
-    raise SystemExit("Sage 1.27.0 versionCode 39 is missing")
-if not re.search(r'versionName\s*=\s*["\']1\.27\.0["\']', gradle):
-    raise SystemExit("Sage 1.27.0 versionName is missing")
+if not re.search(r'versionCode\s*=\s*40\b', gradle):
+    raise SystemExit("Sage 1.28.0 versionCode 40 is missing")
+if not re.search(r'versionName\s*=\s*["\']1\.28\.0["\']', gradle):
+    raise SystemExit("Sage 1.28.0 versionName is missing")
 
 if diagnostics.count('SageWakeProfileStore.summary(context)') != 1:
     raise SystemExit("Continuity wake-profile summary must be included exactly once")

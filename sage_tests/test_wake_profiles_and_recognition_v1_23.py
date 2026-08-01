@@ -12,8 +12,8 @@ store = (JAVA / "SageWakeProfileStore.java").read_text()
 gradle = (ROOT / "app/build.gradle.kts").read_text()
 
 checks = {
-    "current_version_code_39": "versionCode = 39" in gradle,
-    "current_version_name_1_27_0": 'versionName = "1.27.0"' in gradle,
+    "current_version_code_40": "versionCode = 40" in gradle,
+    "current_version_name_1_28_0": 'versionName = "1.28.0"' in gradle,
     "wake_profile_store_present": "class SageWakeProfileStore" in store,
     "normal_mode_present": 'MODE_NORMAL = "normal"' in store,
     "red_queen_mode_present": 'MODE_RED_QUEEN = "red_queen"' in store,

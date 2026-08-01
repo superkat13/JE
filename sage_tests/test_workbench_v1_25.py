@@ -85,7 +85,7 @@ for forbidden in ("BIND_DEVICE_ADMIN", "MANAGE_EXTERNAL_STORAGE"):
 
 gradle = (ROOT / "app/build.gradle.kts").read_text()
 require(gradle, ['applicationId = "com.pineapple.sagecommander.stable"',
-                 "versionCode = 39", 'versionName = "1.27.0"', "sagePermanentSigning"],
+                 "versionCode = 40", 'versionName = "1.28.0"', "sagePermanentSigning"],
         "release continuity")
 
 print("Sage Commander 1.25.0 Workbench regressions passed")
