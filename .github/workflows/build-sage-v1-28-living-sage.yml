@@ -30,6 +30,7 @@ jobs:
           python3 sage_tests/test_orchestrator_registry_v1_28.py sage_build_128
           python3 sage_tests/test_package_file_labs_v1_28.py sage_build_128
           python3 sage_tests/test_network_operations_v1_28.py sage_build_128
+          python3 sage_tests/test_automation_v1_28.py sage_build_128
 
       - name: Run inherited and 1.28 host regressions
         run: |
@@ -55,7 +56,8 @@ jobs:
             sage_tests/test_red_queen_v1_28.py \
             sage_tests/test_orchestrator_registry_v1_28.py \
             sage_tests/test_package_file_labs_v1_28.py \
-            sage_tests/test_network_operations_v1_28.py; do
+            sage_tests/test_network_operations_v1_28.py \
+            sage_tests/test_automation_v1_28.py; do
             python3 "$test_file" sage_build_128
           done
           python3 sage_tests/test_public_disclosure_v1_27.py
