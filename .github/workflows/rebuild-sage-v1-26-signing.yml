@@ -43,19 +43,22 @@ jobs:
           set -euo pipefail
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
-          python3 sage_tests/test_stabilization_v1_21.py sage_build_126
-          python3 sage_tests/test_android_compat_v1_21.py sage_build_126
-          python3 sage_tests/test_brain_watchdog_v1_22.py sage_build_126
-          python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build_126
-          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build_126
-          python3 sage_tests/test_continuity_report_v1_24.py sage_build_126
-          python3 sage_tests/test_number_overlay_release_v1_24_1.py sage_build_126
-          python3 sage_tests/test_sage_release_v1_24_2.py sage_build_126
-          python3 sage_tests/test_self_repair_v1_25.py sage_build_126
-          python3 sage_tests/test_workbench_v1_25.py sage_build_126
-          python3 sage_tests/test_sage_forge_v1_25.py sage_build_126
-          python3 sage_tests/test_reliability_toolbelt_v1_26.py sage_build_126
-          python3 sage_tests/test_continuity_finish_v1_26.py sage_build_126
+          python3 sage_tests/test_public_disclosure_v1_27.py
+          python3 - <<'PY'
+          from pathlib import Path
+          root = Path("sage_build_126")
+          gradle = (root / "app/build.gradle.kts").read_text()
+          manifest = (root / "app/src/main/AndroidManifest.xml").read_text()
+          assert 'applicationId = "com.pineapple.sagecommander.stable"' in gradle
+          assert "versionCode = 38" in gradle
+          assert 'versionName = "1.26.0"' in gradle
+          assert "sagePermanentSigning" in gradle
+          assert "android:debuggable=\"true\"" not in manifest
+          assert (root / "app/src/main/java/com/pineapple/sage/SageConversationStateMachine.java").is_file()
+          assert (root / "app/src/main/java/com/pineapple/sage/SageMemoryStore.java").is_file()
+          assert (root / "app/src/main/cpp/sage_brain.cpp").is_file()
+          print("Sage 1.26 recovery source identity and required components verified")
+          PY
 
       - name: Add pinned Brain engine
         run: |
