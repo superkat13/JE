@@ -66,6 +66,7 @@ with tempfile.TemporaryDirectory(prefix="sage-intelligence-") as target:
         str(REPO / "sage_tests/java_stubs/android/content/Context.java"),
         str(REPO / "sage_tests/java_stubs/android/content/SharedPreferences.java"),
         str(REPO / "sage_tests/java_stubs/com/pineapple/sage/SageDiagnostics.java"),
+        str(JAVA / "SageCapabilityRegistry.java"),
         str(files["coordinator"]), str(files["memory"]), str(files["creative"]),
         str(REPO / "sage_tests/SageIntelligenceMemoryHarness.java")], check=True)
     subprocess.run([java, "-cp", target,
