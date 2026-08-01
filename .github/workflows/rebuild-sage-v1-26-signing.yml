@@ -1,0 +1,166 @@
+name: Rebuild and verify Sage 1.26.0 permanent update APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/sage-1-26-signing-public-20260801
+
+permissions:
+  contents: read
+
+jobs:
+  build-verify-publish:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout recovery checkpoint
+        uses: actions/checkout@v4
+
+      - name: Reconstruct exact Sage 1.26.0 source
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build_126
+          for patcher in \
+            stabilize_v1_21 fix_android_lint_v1_21 brain_watchdog_v1_22 \
+            wake_profiles_and_recognition_v1_23 fix_wake_profiles_compile_v1_23 \
+            continuity_report_v1_24 number_overlay_release_v1_24_1 \
+            sage_release_v1_24_2 self_repair_foundation_v1_25 \
+            workbench_v1_25 sage_forge_v1_25; do
+            python3 "sage_patches/${patcher}.py" sage_build_126
+          done
+          patch --fuzz=0 -p1 -d sage_build_126 < SAGE_1_26_UNIFIED.diff
+          patch --fuzz=0 -p1 -d sage_build_126 < sage_patches/continuity_finish_v1_26.patch
+
+          grep -F 'applicationId = "com.pineapple.sagecommander.stable"' sage_build_126/app/build.gradle.kts
+          grep -F 'versionCode = 38' sage_build_126/app/build.gradle.kts
+          grep -F 'versionName = "1.26.0"' sage_build_126/app/build.gradle.kts
+          grep -F 'signingConfig = signingConfigs.getByName("sagePermanentSigning")' sage_build_126/app/build.gradle.kts
+
+      - name: Run Sage 1.26 source regressions
+        run: |
+          set -euo pipefail
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py
+          python3 -m unittest -v sage_forge.tests.test_forge
+          python3 sage_tests/test_stabilization_v1_21.py sage_build_126
+          python3 sage_tests/test_android_compat_v1_21.py sage_build_126
+          python3 sage_tests/test_brain_watchdog_v1_22.py sage_build_126
+          python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build_126
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build_126
+          python3 sage_tests/test_continuity_report_v1_24.py sage_build_126
+          python3 sage_tests/test_number_overlay_release_v1_24_1.py sage_build_126
+          python3 sage_tests/test_sage_release_v1_24_2.py sage_build_126
+          python3 sage_tests/test_self_repair_v1_25.py sage_build_126
+          python3 sage_tests/test_workbench_v1_25.py sage_build_126
+          python3 sage_tests/test_sage_forge_v1_25.py sage_build_126
+          python3 sage_tests/test_reliability_toolbelt_v1_26.py sage_build_126
+          python3 sage_tests/test_continuity_finish_v1_26.py sage_build_126
+
+      - name: Add pinned Brain engine
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_126/third_party/llama.cpp
+          git -C sage_build_126/third_party/llama.cpp init
+          git -C sage_build_126/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_126/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_126/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build_126/third_party/llama.cpp rev-parse HEAD)" = "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"
+
+      - name: Add offline wake-word model
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_126/app/src/main/assets /tmp/sage-vosk-126
+          curl -L --fail --retry 3 --retry-delay 2 \
+            -o /tmp/sage-vosk-126.zip \
+            https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-126.zip -d /tmp/sage-vosk-126
+          mv /tmp/sage-vosk-126/vosk-model-small-en-us-0.15 sage_build_126/app/src/main/assets/model-en-us
+          printf 'sage-v1.26.0-permanent-signing-rebuild\n' > sage_build_126/app/src/main/assets/model-en-us/uuid
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK, native toolchain, and exact permanent signing identity
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile, test, lint, and assemble signed release
+        working-directory: sage_build_126
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+          gradle :app:assembleRelease --stacktrace
+
+      - name: Verify package, alignment, v2 signature, and permanent signer
+        run: |
+          set -euo pipefail
+          APK="sage_build_126/app/build/outputs/apk/release/app-release.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          OUTPUT="Sage-Commander-1.26.0-corrected-signed.apk"
+          EXPECTED_CERT_SHA="99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35"
+
+          test -f "$APK"
+          cp "$APK" "$OUTPUT"
+          unzip -t "$OUTPUT" | tee zip-integrity.txt
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$OUTPUT" | tee zipalign-verification.txt
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$OUTPUT" | tee apksigner-verification.txt
+          "$BUILD_TOOLS/aapt" dump badging "$OUTPUT" | tee package-version-verification.txt
+
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' apksigner-verification.txt
+          grep -F "Signer #1 certificate SHA-256 digest: $EXPECTED_CERT_SHA" apksigner-verification.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='38' versionName='1.26.0'" package-version-verification.txt
+
+          KEYSTORE_CERT_SHA="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          APK_CERT_SHA="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' apksigner-verification.txt | tr '[:upper:]' '[:lower:]')"
+          test "$KEYSTORE_CERT_SHA" = "$EXPECTED_CERT_SHA"
+          test "$APK_CERT_SHA" = "$EXPECTED_CERT_SHA"
+          printf 'Verified Sage 1.25 APK signer SHA-256: %s\nSage 1.26 rebuilt APK signer SHA-256: %s\nMatch: true\n' \
+            "$EXPECTED_CERT_SHA" "$APK_CERT_SHA" | tee signer-comparison.txt
+
+          sha256sum "$OUTPUT" | tee apk-sha256.txt
+          {
+            echo 'package=com.pineapple.sagecommander.stable'
+            echo 'versionName=1.26.0'
+            echo 'versionCode=38'
+            echo 'zipalign=true'
+            echo 'signatureSchemeV2=true'
+            echo "signerCertificateSha256=$APK_CERT_SHA"
+          } | tee verification-summary.txt
+
+      - name: Upload corrected signed APK immediately
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.26.0-corrected-signed
+          path: |
+            Sage-Commander-1.26.0-corrected-signed.apk
+            apksigner-verification.txt
+            signer-comparison.txt
+            apk-sha256.txt
+            package-version-verification.txt
+            zipalign-verification.txt
+            zip-integrity.txt
+            verification-summary.txt
+          if-no-files-found: error
