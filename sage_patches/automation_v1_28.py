@@ -225,8 +225,6 @@ def main() -> None:
     (java / "SageDownloadAutomationReceiver.java").write_text(RECEIVER)
 
     manifest = root / "app/src/main/AndroidManifest.xml"
-    replace_once(manifest, '<uses-permission android:name="android.permission.INTERNET" />',
-        '<uses-permission android:name="android.permission.INTERNET" />\n    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />', "notification permission")
     replace_once(manifest, '        <activity android:name=".SageHostInspectorActivity" android:exported="false" />',
         '        <activity android:name=".SageHostInspectorActivity" android:exported="false" />\n'
         '        <activity android:name=".SageAutomationActivity" android:exported="false" />\n'
