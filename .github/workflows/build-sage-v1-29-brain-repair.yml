@@ -26,6 +26,7 @@ jobs:
           python3 sage_tests/test_confirmation_tone_v1_29.py sage_build_129
           python3 sage_tests/test_surprise_discovery_v1_29.py sage_build_129
           python3 sage_tests/test_brain_route_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_professional_brain_repair_v1_29.py sage_build_129
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
 

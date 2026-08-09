@@ -14,4 +14,5 @@ patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/intent_semantic_actions_v1_29.pat
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/confirmation_tone_v1_29.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/surprise_discovery_v1_29.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/brain_route_repair_v1_29.patch
-echo "Reconstructed Sage Commander 1.29.0 with request-scoped Brain route repair in $OUTPUT"
+patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/professional_brain_repair_v1_29.patch
+echo "Reconstructed Sage Commander 1.29.0 with professional deadline-aware Brain repair in $OUTPUT"
