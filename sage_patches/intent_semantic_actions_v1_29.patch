@@ -1,0 +1,635 @@
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -37,0 +38,9 @@
++        <package android:name="com.adobe.spark.post" />
++        <package android:name="com.adobe.spark.video" />
++        <package android:name="com.adobe.premiererush.videoeditor" />
++        <package android:name="com.adobe.photoshop.express" />
++        <package android:name="com.adobe.reader" />
++        <intent>
++            <action android:name="android.intent.action.EDIT" />
++            <data android:scheme="content" />
++        </intent>
+--- a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
++++ b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
+@@ -272 +272 @@
+-        if (current == null) return false;
++        if (current == null || !isActionable(current.node)) return false;
+@@ -429 +429 @@
+-        boolean opened = currentTarget != null
++        boolean opened = currentTarget != null && isActionable(currentTarget.node)
+@@ -536 +536 @@
+-        if (node == null) {
++        if (!isActionable(node)) {
+@@ -541 +541 @@
+-            if (current.isClickable()
++            if (isActionable(current)
+@@ -547 +547 @@
+-        if (node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
++        if (isActionable(node) && node.performAction(AccessibilityNodeInfo.ACTION_CLICK)) {
+@@ -939 +939 @@
+-                if (actionNode == null && node.isClickable()) {
++                if (actionNode == null && isActionable(node)) {
+@@ -1166 +1166 @@
+-            if (current.isClickable()) {
++            if (isActionable(current)) {
+@@ -1173,0 +1174,8 @@
++    private static boolean isActionable(AccessibilityNodeInfo node) {
++        if (node == null || !node.isVisibleToUser() || !node.isEnabled()
++                || !node.isClickable()) return false;
++        Rect bounds = new Rect();
++        node.getBoundsInScreen(bounds);
++        return !bounds.isEmpty();
++    }
++
+@@ -1267,2 +1275,2 @@
+-                if (action == null && node.isClickable()) action = node;
+-                if (action != null) {
++                if (action == null && isActionable(node)) action = node;
++                if (action != null && isActionable(action)) {
+@@ -1306,9 +1314,8 @@
+-        if (saved == null || current == null) return false;
+-        if (saved.node != null && current.node != null && saved.node.equals(current.node)) return true;
+-        if (!saved.resourceId.isEmpty() && saved.resourceId.equals(current.resourceId)) return true;
+-        String savedText = normalizeTargetText(saved.text);
+-        String currentText = normalizeTargetText(current.text);
+-        if (!savedText.isEmpty() && savedText.equals(currentText)) return true;
+-        String savedDescription = normalizeTargetText(saved.description);
+-        String currentDescription = normalizeTargetText(current.description);
+-        return !savedDescription.isEmpty() && savedDescription.equals(currentDescription);
++        if (saved == null || current == null || !isActionable(current.node)) return false;
++        return SageSemanticTargetPolicy.revalidate(
++                new SageSemanticTargetPolicy.Candidate(saved.text, saved.description,
++                        saved.resourceId, saved.role, true, true, true, false),
++                new SageSemanticTargetPolicy.Candidate(current.text, current.description,
++                        current.resourceId, current.role, current.node.isVisibleToUser(),
++                        current.node.isEnabled(), current.node.isClickable(),
++                        nearestClickable(current.node) != null));
+--- a/app/src/main/java/com/pineapple/sage/SageActionContextStore.java
++++ b/app/src/main/java/com/pineapple/sage/SageActionContextStore.java
+@@ -0,0 +1,66 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.net.Uri;
++
++/** Small local context bridge for safe natural follow-ups and owner app preferences. */
++final class SageActionContextStore {
++    private static final String PREFS = "sage_semantic_context_v1";
++    private static final String SUBJECT = "subject";
++    private static final String CONTENT_URI = "selected_content_uri";
++    private static final String CONTENT_MIME = "selected_content_mime";
++    private static final String VIDEO_EDITOR = "preferred_video_editor";
++
++    private SageActionContextStore() {}
++
++    static void rememberSubject(Context context, String subject) {
++        String value = clean(subject);
++        if (!value.isEmpty()) prefs(context).edit().putString(SUBJECT, value).apply();
++    }
++
++    static String subject(Context context) {
++        String value = prefs(context).getString(SUBJECT, "");
++        if (value == null || value.trim().isEmpty()) {
++            value = context.getSharedPreferences("sage_state", Context.MODE_PRIVATE)
++                    .getString("last_query", "");
++        }
++        return clean(value);
++    }
++
++    static boolean rememberSelectedContent(Context context, Uri uri, String mimeType) {
++        if (uri == null || !"content".equalsIgnoreCase(uri.getScheme())) return false;
++        return prefs(context).edit().putString(CONTENT_URI, uri.toString())
++                .putString(CONTENT_MIME, clean(mimeType)).commit();
++    }
++
++    static Uri selectedContent(Context context) {
++        String value = prefs(context).getString(CONTENT_URI, "");
++        return value == null || value.isEmpty() ? null : Uri.parse(value);
++    }
++
++    static String selectedMime(Context context) {
++        return prefs(context).getString(CONTENT_MIME, "application/octet-stream");
++    }
++
++    static boolean preferAdobeForVideo(Context context) {
++        return prefs(context).edit().putString(VIDEO_EDITOR, "adobe").commit();
++    }
++
++    static String videoEditorPreference(Context context) {
++        return prefs(context).getString(VIDEO_EDITOR, "");
++    }
++
++    static String contextSummary(Context context) {
++        Uri selected = selectedContent(context);
++        String subject = subject(context);
++        if (selected != null) return "selected_file=" + selected;
++        return subject.isEmpty() ? "" : "subject=" + subject;
++    }
++
++    private static SharedPreferences prefs(Context context) {
++        return context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
++    }
++
++    private static String clean(String value) { return value == null ? "" : value.trim(); }
++}
+--- a/app/src/main/java/com/pineapple/sage/SageCapabilityRegistry.java
++++ b/app/src/main/java/com/pineapple/sage/SageCapabilityRegistry.java
+@@ -114,0 +115,6 @@
++        values.add(entry("trusted.adobe", "Launch installed Adobe apps and hand owner-selected content URIs to declared edit activities",
++                "device_action,file,creative", "Open Adobe Express; Edit this in Adobe; Use Adobe whenever I edit videos", "Android",
++                "installed compiled Adobe package + owner-selected content URI", "launch or approved ACTION_EDIT handoff",
++                "temporary content URI grant only", "medium", "file selection supplies consent", "15 seconds",
++                "cancel before Android activity handoff", "selected file only through Android grant", "local device",
++                false, false, "SageTrustedAppRegistry + SageActionContextStore", SupportState.AVAILABLE));
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+@@ -71,0 +72 @@
++    private final SageMediaSessionBridge mediaSessionBridge;
+@@ -91,0 +93 @@
++        this.mediaSessionBridge = new SageMediaSessionBridge(this.context);
+@@ -118,0 +121,5 @@
++        Result semanticResult = executeSemanticSlice(raw, lower);
++        if (semanticResult != null) {
++            preferences.edit().putString("last_heard", raw).apply();
++            return semanticResult;
++        }
+@@ -595,0 +603,141 @@
++    private Result executeSemanticSlice(String raw, String lower) {
++        SageIntentActionPolicy.Decision decision = SageIntentActionPolicy.decide(raw,
++                SageActionContextStore.contextSummary(context),
++                SageActionContextStore.videoEditorPreference(context));
++        if (!decision.matched()) return null;
++        SageDiagnostics.appendEvent(context, "ACTION PIPELINE",
++                "trace=" + decision.trace + " intent=" + decision.intent
++                        + " entities=" + decision.entities + " context=" + decision.context
++                        + " preference=" + decision.rememberedPreference
++                        + " capability=" + decision.capability + " risk=" + decision.riskDecision);
++        if (!decision.clarification.isEmpty()) {
++            SageDiagnostics.appendEvent(context, "ACTION RESULT",
++                    "executed=false verified=false clarification_once=true action=" + decision.action);
++            return new Result(decision.clarification);
++        }
++        Result result;
++        boolean verified = false;
++        String route = decision.capability;
++        switch (decision.action) {
++            case OPEN_YOUTUBE:
++                result = openYouTubeDirect();
++                verified = result.matched && !result.message.toLowerCase(Locale.US).contains("could not");
++                break;
++            case OPEN_DOWNLOADS:
++                result = launchIntent(new Intent(Intent.ACTION_OPEN_DOCUMENT)
++                                .addCategory(Intent.CATEGORY_OPENABLE).setType("*/*"),
++                        "Opening Downloads in Android's file picker.");
++                verified = !result.message.contains("not available");
++                break;
++            case OPEN_ADOBE_EXPRESS:
++                result = openAdobeExpress();
++                verified = result.message.startsWith("Opening ");
++                break;
++            case EDIT_IN_ADOBE:
++                result = editSelectedInAdobe();
++                verified = result.message.startsWith("Opening the selected file");
++                break;
++            case FIND_RADIO_DIAGRAM:
++                String radio = SageActionContextStore.subject(context);
++                result = searchWeb(radio + " wiring diagram");
++                verified = result.message.startsWith("Searching for ");
++                break;
++            case FIND_VIDEO:
++                result = searchYouTube(SageActionContextStore.subject(context));
++                verified = result.message.startsWith("Searching YouTube");
++                break;
++            case PLAY:
++                verified = mediaSessionBridge.control("play");
++                route = verified ? "media.session_or_android_media_key" : "accessibility.semantic";
++                if (!verified) verified = SageAccessibilityService.tapText("play");
++                result = verified ? Result.quiet("Playing.")
++                        : new Result("I could not find an active media route or visible enabled Play control.");
++                break;
++            case CHOOSE_ITEM:
++                verified = SageAccessibilityService.tapIndexedItem(decision.ordinal, "generic");
++                result = verified ? Result.quiet("Opening the second item.")
++                        : new Result("I could not safely verify a second visible item.");
++                break;
++            case SHOW_TARGETS:
++                int targets = SageAccessibilityService.showTargetDrawer("generic");
++                verified = targets > 0;
++                result = verified ? new Result("Target drawer ready with " + targets + " controls.")
++                        : new Result("I could not find readable interactive controls.");
++                break;
++            case CHOOSE_GRID_REGION:
++                verified = SageAccessibilityService.chooseGridRegion("top right");
++                result = verified ? Result.quiet("Selected top right.")
++                        : new Result("Top right is still ambiguous. Say refine.");
++                break;
++            case REFINE_GRID:
++                verified = SageAccessibilityService.refineGrid();
++                result = verified ? new Result("Grid refined.")
++                        : new Result("Open the screen grid before refining it.");
++                break;
++            case SHOW_NUMBERS:
++                int numbers = SageAccessibilityService.showNumberOverlay("generic");
++                verified = numbers > 0;
++                result = verified ? new Result("Number fallback ready with " + numbers + " targets.")
++                        : new Result("I could not build the final numbered fallback.");
++                break;
++            case STORE_ADOBE_VIDEO_PREFERENCE:
++                verified = SageActionContextStore.preferAdobeForVideo(context)
++                        && SageMemoryStore.save(context,
++                        "I prefer Adobe whenever I edit videos") != SageMemoryStore.SaveResult.FAILED;
++                result = verified ? new Result("I will prefer an installed Adobe app for video editing.")
++                        : new Result("Android did not save that app preference.");
++                break;
++            case CLARIFY_DESTRUCTIVE:
++                result = new Result("Which exact item should I act on?");
++                break;
++            default:
++                return null;
++        }
++        SageDiagnostics.appendEvent(context, "ACTION RESULT",
++                "action=" + decision.action + " route=" + route + " executed=" + verified
++                        + " verified=" + verified + " result=" + result.message);
++        return result;
++    }
++
++    private Result openYouTubeDirect() {
++        Intent deepLink = new Intent(Intent.ACTION_VIEW, Uri.parse("vnd.youtube://"))
++                .setPackage("com.google.android.youtube")
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        if (deepLink.resolveActivity(packageManager) != null) {
++            try {
++                context.startActivity(deepLink);
++                return new Result("Opening YouTube.");
++            } catch (ActivityNotFoundException ignored) { }
++        }
++        if (launchPackage("com.google.android.youtube")) return new Result("Opening YouTube.");
++        return openUrl("https://www.youtube.com", "Opening YouTube in the browser.");
++    }
++
++    private Result openAdobeExpress() {
++        SageTrustedAppRegistry.InstalledApp adobe =
++                SageTrustedAppRegistry.bestAdobeApp(context, false);
++        if (adobe == null || !adobe.launch || !launchPackage(adobe.packageName)) {
++            return new Result("Adobe Express is not installed or has no launchable activity.");
++        }
++        return new Result("Opening " + adobe.label + ".");
++    }
++
++    private Result editSelectedInAdobe() {
++        Uri selected = SageActionContextStore.selectedContent(context);
++        if (selected == null) return new Result("Which selected file should I edit in Adobe?");
++        SageTrustedAppRegistry.InstalledApp adobe =
++                SageTrustedAppRegistry.bestAdobeApp(context, true);
++        if (adobe == null) return new Result("No installed Adobe app accepts this edit action.");
++        Intent edit = SageTrustedAppRegistry.buildAdobeEditIntent(selected,
++                SageActionContextStore.selectedMime(context), adobe.packageName);
++        if (edit == null || edit.resolveActivity(packageManager) == null) {
++            return new Result("The installed Adobe apps do not support editing this selected file type.");
++        }
++        try {
++            context.startActivity(edit);
++            return new Result("Opening the selected file in " + adobe.label + ".");
++        } catch (ActivityNotFoundException error) {
++            return new Result("The selected Adobe edit activity is unavailable.");
++        }
++    }
++
+@@ -904,0 +1053,8 @@
++        int drawerCount = SageAccessibilityService.showTargetDrawer(type);
++        if (drawerCount > 0) {
++            return new Result("I could not safely verify that ordinal. The labeled target drawer is ready.");
++        }
++        int gridCount = SageAccessibilityService.showGrid();
++        if (gridCount > 0) {
++            return new Result("I could not safely verify that ordinal. The screen grid is ready to refine.");
++        }
+@@ -908 +1064 @@
+-            return new Result("I was not confident which one you meant, so I numbered the screen from top to bottom. Say the red number you want.");
++            return new Result("Stronger routes had no safe match. The final numbered fallback is ready.");
+--- a/app/src/main/java/com/pineapple/sage/SageFileLabActivity.java
++++ b/app/src/main/java/com/pineapple/sage/SageFileLabActivity.java
+@@ -92,0 +93,2 @@
++        SageActionContextStore.rememberSelectedContent(this, data.getData(),
++                getContentResolver().getType(data.getData()));
+--- a/app/src/main/java/com/pineapple/sage/SageIntentActionPolicy.java
++++ b/app/src/main/java/com/pineapple/sage/SageIntentActionPolicy.java
+@@ -0,0 +1,133 @@
++package com.pineapple.sage;
++
++import java.util.Locale;
++
++/** Android-free compiled policy for the 1.29 intent-to-result action slice. */
++final class SageIntentActionPolicy {
++    enum Action {
++        OPEN_YOUTUBE, OPEN_DOWNLOADS, OPEN_ADOBE_EXPRESS, EDIT_IN_ADOBE,
++        FIND_RADIO_DIAGRAM, FIND_VIDEO, PLAY, CHOOSE_ITEM, SHOW_TARGETS,
++        CHOOSE_GRID_REGION, REFINE_GRID, SHOW_NUMBERS, STORE_ADOBE_VIDEO_PREFERENCE,
++        CLARIFY_DESTRUCTIVE, NONE
++    }
++
++    static final class Decision {
++        final String request;
++        final String intent;
++        final String entities;
++        final String context;
++        final String rememberedPreference;
++        final String capability;
++        final String riskDecision;
++        final Action action;
++        final int ordinal;
++        final String clarification;
++        final String trace;
++
++        Decision(String request, String intent, String entities, String context,
++                 String preference, String capability, String risk, Action action,
++                 int ordinal, String clarification) {
++            this.request = clean(request);
++            this.intent = clean(intent);
++            this.entities = clean(entities);
++            this.context = clean(context);
++            this.rememberedPreference = clean(preference);
++            this.capability = clean(capability);
++            this.riskDecision = clean(risk);
++            this.action = action == null ? Action.NONE : action;
++            this.ordinal = ordinal;
++            this.clarification = clean(clarification);
++            this.trace = "request → intent → entities → context → remembered preference → "
++                    + "capability selection → permission/risk check → execute → verify → concise result";
++        }
++
++        boolean matched() { return action != Action.NONE; }
++        boolean mayExecute() { return matched() && clarification.isEmpty(); }
++    }
++
++    private SageIntentActionPolicy() {}
++
++    static Decision decide(String request, String rememberedContext, String adobePreference) {
++        String raw = clean(request);
++        String value = normalize(raw);
++        String context = clean(rememberedContext);
++        String preference = clean(adobePreference);
++        if (value.equals("open youtube")) return action(raw, "launch_app", "app=youtube",
++                context, preference, "android.launch", "low; no confirmation",
++                Action.OPEN_YOUTUBE, 0);
++        if (value.equals("open downloads")) return action(raw, "open_documents",
++                "collection=downloads", context, preference, "android.documents",
++                "low; system document UI", Action.OPEN_DOWNLOADS, 0);
++        if (value.equals("open adobe express")) return action(raw, "launch_app",
++                "app=adobe express", context, preference, "trusted.adobe.launch",
++                "low; installed app only", Action.OPEN_ADOBE_EXPRESS, 0);
++        if (value.equals("edit this in adobe")) return action(raw, "edit_file",
++                "file=this app=adobe", context, preference, "trusted.adobe.edit",
++                "medium; owner-selected content URI only", Action.EDIT_IN_ADOBE, 0);
++        if (value.equals("find a wiring diagram for this radio")) return action(raw,
++                "web_search", "subject=this radio format=wiring diagram", context,
++                preference, "android.web_search", "low; public web query",
++                Action.FIND_RADIO_DIAGRAM, 0);
++        if (value.equals("find this video")) return action(raw, "video_search",
++                "subject=this video", context, preference, "android.youtube_search",
++                "low; direct app/deep link", Action.FIND_VIDEO, 0);
++        if (value.equals("tap play") || value.equals("play")) return action(raw,
++                "media_control", "control=play", context, preference,
++                "media.session_then_semantic", "low; no confirmation", Action.PLAY, 0);
++        if (value.equals("choose the second item")) return action(raw, "semantic_select",
++                "role=item ordinal=2", context, preference, "accessibility.semantic",
++                "low; visible enabled target", Action.CHOOSE_ITEM, 2);
++        if (value.equals("show targets")) return action(raw, "target_drawer", "screen=current",
++                context, preference, "accessibility.drawer", "low; display only",
++                Action.SHOW_TARGETS, 0);
++        if (value.equals("top right")) return action(raw, "grid_select", "region=top right",
++                context, preference, "accessibility.grid", "low; revalidated target",
++                Action.CHOOSE_GRID_REGION, 0);
++        if (value.equals("refine")) return action(raw, "grid_refine", "screen=current",
++                context, preference, "accessibility.grid", "low; display only",
++                Action.REFINE_GRID, 0);
++        if (value.equals("show numbers")) return action(raw, "number_fallback",
++                "screen=current explicit=true", context, preference,
++                "accessibility.number_fallback", "low; explicit final fallback",
++                Action.SHOW_NUMBERS, 0);
++        if (value.equals("use adobe whenever i edit videos")) return action(raw,
++                "store_preference", "task=video editing app=adobe", context, preference,
++                "memory.preference", "low; owner preference", Action.STORE_ADOBE_VIDEO_PREFERENCE, 0);
++        if (isAmbiguousDestructive(value)) {
++            return new Decision(raw, "destructive_action", "target=ambiguous", context,
++                    preference, "none", "high; clarification required", Action.CLARIFY_DESTRUCTIVE,
++                    0, "Which exact item should I act on?");
++        }
++        return new Decision(raw, "unmatched", "", context, preference, "legacy",
++                "not evaluated", Action.NONE, 0, "");
++    }
++
++    private static Decision action(String request, String intent, String entities,
++                                   String context, String preference, String capability,
++                                   String risk, Action action, int ordinal) {
++        String clarification = "";
++        if ((action == Action.FIND_RADIO_DIAGRAM || action == Action.FIND_VIDEO)
++                && !context.startsWith("subject=")) {
++            clarification = action == Action.FIND_RADIO_DIAGRAM
++                    ? "Which radio model do you mean?" : "Which video do you mean?";
++        }
++        if (action == Action.EDIT_IN_ADOBE && !context.startsWith("selected_file=")) {
++            clarification = "Which selected file should I edit in Adobe?";
++        }
++        return new Decision(request, intent, entities, context, preference, capability,
++                risk, action, ordinal, clarification);
++    }
++
++    private static boolean isAmbiguousDestructive(String value) {
++        return value.equals("delete it") || value.equals("remove it")
++                || value.equals("delete this") || value.equals("remove this")
++                || value.equals("erase it");
++    }
++
++    static String normalize(String value) {
++        return clean(value).toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]", " ")
++                .replaceAll("\\s+", " ").trim();
++    }
++
++    private static String clean(String value) { return value == null ? "" : value.trim(); }
++}
+--- a/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java
++++ b/app/src/main/java/com/pineapple/sage/SageIntentCoordinator.java
+@@ -81,0 +82,6 @@
++        if ((normalized.contains(" radio") || normalized.startsWith("radio "))
++                && !normalized.contains("this radio")) {
++            SageActionContextStore.rememberSubject(context, cleaned);
++        } else if (normalized.contains(" video") && !normalized.equals("find this video")) {
++            SageActionContextStore.rememberSubject(context, cleaned);
++        }
+--- a/app/src/main/java/com/pineapple/sage/SageSemanticTargetPolicy.java
++++ b/app/src/main/java/com/pineapple/sage/SageSemanticTargetPolicy.java
+@@ -0,0 +1,81 @@
++package com.pineapple.sage;
++
++import java.util.ArrayList;
++import java.util.List;
++import java.util.Locale;
++
++/** Android-free semantic ordering and identity policy shared by executable regressions. */
++final class SageSemanticTargetPolicy {
++    static final class Candidate {
++        final String text, description, resourceId, role;
++        final boolean visible, enabled, clickable, clickableAncestor;
++
++        Candidate(String text, String description, String resourceId, String role,
++                  boolean visible, boolean enabled, boolean clickable,
++                  boolean clickableAncestor) {
++            this.text = clean(text);
++            this.description = clean(description);
++            this.resourceId = clean(resourceId);
++            this.role = clean(role);
++            this.visible = visible;
++            this.enabled = enabled;
++            this.clickable = clickable;
++            this.clickableAncestor = clickableAncestor;
++        }
++    }
++
++    private SageSemanticTargetPolicy() {}
++
++    static boolean safe(Candidate value) {
++        return value != null && value.visible && value.enabled
++                && (value.clickable || value.clickableAncestor);
++    }
++
++    static int score(Candidate value, String query) {
++        if (!safe(value)) return -1;
++        String wanted = normalize(query);
++        if (wanted.isEmpty()) return -1;
++        int score = fieldScore(value.text, wanted, 120, 80)
++                + fieldScore(value.description, wanted, 115, 75)
++                + fieldScore(value.resourceId.replace('_', ' '), wanted, 90, 60)
++                + fieldScore(value.role, wanted, 35, 20);
++        if (value.clickableAncestor) score += 15;
++        return score;
++    }
++
++    static Candidate selectOrdinal(List<Candidate> ordered, String query, int ordinal) {
++        if (ordered == null || ordinal < 1) return null;
++        List<Candidate> matches = new ArrayList<>();
++        for (Candidate value : ordered) if (score(value, query) >= 55) matches.add(value);
++        return ordinal <= matches.size() ? matches.get(ordinal - 1) : null;
++    }
++
++    static boolean revalidate(Candidate saved, Candidate current) {
++        if (!safe(saved) || !safe(current)) return false;
++        String savedText = normalize(saved.text), currentText = normalize(current.text);
++        String savedDescription = normalize(saved.description);
++        String currentDescription = normalize(current.description);
++        if (!savedText.isEmpty() && !currentText.isEmpty() && !savedText.equals(currentText)) {
++            return false;
++        }
++        if (!savedDescription.isEmpty() && !currentDescription.isEmpty()
++                && !savedDescription.equals(currentDescription)) return false;
++        return (!savedText.isEmpty() && savedText.equals(currentText))
++                || (!savedDescription.isEmpty() && savedDescription.equals(currentDescription))
++                || (!saved.resourceId.isEmpty() && saved.resourceId.equals(current.resourceId)
++                    && normalize(saved.role).equals(normalize(current.role)));
++    }
++
++    private static int fieldScore(String field, String wanted, int exact, int contains) {
++        String value = normalize(field);
++        if (value.equals(wanted)) return exact;
++        return !value.isEmpty() && value.contains(wanted) ? contains : 0;
++    }
++
++    private static String normalize(String value) {
++        return clean(value).toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]", " ")
++                .replaceAll("\\s+", " ").trim();
++    }
++
++    private static String clean(String value) { return value == null ? "" : value.trim(); }
++}
+--- a/app/src/main/java/com/pineapple/sage/SageTrustedAppRegistry.java
++++ b/app/src/main/java/com/pineapple/sage/SageTrustedAppRegistry.java
+@@ -0,0 +1,87 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.Intent;
++import android.content.pm.ApplicationInfo;
++import android.content.pm.PackageManager;
++import android.net.Uri;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.Locale;
++
++/** Compiled trusted app capabilities; installed packages cannot add authority. */
++final class SageTrustedAppRegistry {
++    static final class InstalledApp {
++        final String packageName;
++        final String label;
++        final boolean launch;
++        final boolean edit;
++
++        InstalledApp(String packageName, String label, boolean launch, boolean edit) {
++            this.packageName = packageName;
++            this.label = label;
++            this.launch = launch;
++            this.edit = edit;
++        }
++    }
++
++    private static final String[] ADOBE_PACKAGES = {
++            "com.adobe.spark.post",       // Adobe Express
++            "com.adobe.spark.video",      // Express video where available
++            "com.adobe.premiererush.videoeditor",
++            "com.adobe.photoshop.express",
++            "com.adobe.reader"
++    };
++
++    private SageTrustedAppRegistry() {}
++
++    static List<InstalledApp> installedAdobeApps(Context context) {
++        if (context == null) return Collections.emptyList();
++        PackageManager packages = context.getPackageManager();
++        List<InstalledApp> found = new ArrayList<>();
++        for (String packageName : ADOBE_PACKAGES) {
++            try {
++                ApplicationInfo info = packages.getApplicationInfo(packageName, 0);
++                String label = String.valueOf(packages.getApplicationLabel(info));
++                boolean launch = packages.getLaunchIntentForPackage(packageName) != null;
++                boolean edit = resolves(packages, buildAdobeEditIntent(
++                        Uri.parse("content://com.pineapple.sage/selected"),
++                        "application/octet-stream", packageName));
++                found.add(new InstalledApp(packageName, label, launch, edit));
++            } catch (PackageManager.NameNotFoundException ignored) { }
++        }
++        return found;
++    }
++
++    static InstalledApp bestAdobeApp(Context context, boolean requireEdit) {
++        InstalledApp fallback = null;
++        for (InstalledApp app : installedAdobeApps(context)) {
++            String label = app.label.toLowerCase(Locale.US);
++            if (fallback == null && (!requireEdit || app.edit)) fallback = app;
++            if (label.contains("express") && app.launch && (!requireEdit || app.edit)) return app;
++        }
++        return fallback;
++    }
++
++    static Intent buildAdobeEditIntent(Uri contentUri, String mimeType, String packageName) {
++        if (contentUri == null || !"content".equalsIgnoreCase(contentUri.getScheme())) return null;
++        Intent edit = new Intent(Intent.ACTION_EDIT)
++                .setDataAndType(contentUri, cleanMime(mimeType))
++                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK
++                        | Intent.FLAG_GRANT_READ_URI_PERMISSION
++                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
++        if (packageName != null && !packageName.trim().isEmpty()) edit.setPackage(packageName);
++        return edit;
++    }
++
++    private static boolean resolves(PackageManager packages, Intent intent) {
++        return intent != null && intent.resolveActivity(packages) != null;
++    }
++
++    private static String cleanMime(String mimeType) {
++        return mimeType == null || mimeType.trim().isEmpty()
++                ? "application/octet-stream" : mimeType.trim();
++    }
++}
