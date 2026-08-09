@@ -1,0 +1,252 @@
+name: Build verified Sage Commander 1.29 physical acceptance APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build-verify-upload:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout exact recovery checkpoint
+        uses: actions/checkout@v4
+
+      - name: Reconstruct twice and run all host regressions
+        run: |
+          set -euo pipefail
+          RESULTS=TEST_AND_BUILD_RESULTS.txt
+          : > "$RESULTS"
+          {
+            echo 'Sage Commander 1.29.0 physical acceptance static verification'
+            echo "Commit: $GITHUB_SHA"
+            echo '=== FIRST COMPLETE 1.29 RECONSTRUCTION ==='
+            bash sage_tools/reconstruct_v1_29.sh sage_build_129
+            echo '=== BRAIN REPAIR TESTS ==='
+            python3 sage_tests/test_brain_repair_v1_29.py sage_build_129
+            echo '=== CONVERSATION / MEDIA / ECHO TESTS ==='
+            python3 sage_tests/test_conversation_media_echo_v1_29.py sage_build_129
+            echo '=== SEMANTIC ACTION TESTS ==='
+            python3 sage_tests/test_intent_semantic_actions_v1_29.py sage_build_129
+            echo '=== CONFIRMATION LEARNING / TONE TESTS ==='
+            python3 sage_tests/test_confirmation_tone_v1_29.py sage_build_129
+            echo '=== PYTHON COMPILE CHECK ==='
+            python3 -m py_compile sage_patches/*.py sage_tests/*.py
+            echo '=== FORGE TESTS ==='
+            python3 -m unittest -v sage_forge.tests.test_forge
+            echo '=== INHERITED SOURCE RECONSTRUCTION ==='
+            bash sage_tools/reconstruct_v1_28.sh sage_build_128
+            echo '=== INHERITED TESTS ==='
+            for test_file in \
+              sage_tests/test_stabilization_v1_21.py \
+              sage_tests/test_android_compat_v1_21.py \
+              sage_tests/test_brain_watchdog_v1_22.py \
+              sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+              sage_tests/test_wake_profiles_compile_repair_v1_23.py \
+              sage_tests/test_continuity_report_v1_24.py \
+              sage_tests/test_number_overlay_release_v1_24_1.py \
+              sage_tests/test_sage_release_v1_24_2.py \
+              sage_tests/test_self_repair_v1_25.py \
+              sage_tests/test_workbench_v1_25.py \
+              sage_tests/test_sage_forge_v1_25.py \
+              sage_tests/test_reliability_toolbelt_v1_26.py \
+              sage_tests/test_continuity_finish_v1_26.py \
+              sage_tests/test_intelligence_memory_v1_27.py \
+              sage_tests/test_living_sage_v1_28.py \
+              sage_tests/test_red_queen_v1_28.py \
+              sage_tests/test_orchestrator_registry_v1_28.py \
+              sage_tests/test_package_file_labs_v1_28.py \
+              sage_tests/test_network_operations_v1_28.py \
+              sage_tests/test_automation_v1_28.py; do
+              echo "--- $test_file ---"
+              python3 "$test_file" sage_build_128
+            done
+            python3 sage_tests/test_public_disclosure_v1_27.py
+            echo '=== SECOND COMPLETE 1.29 RECONSTRUCTION ==='
+            bash sage_tools/reconstruct_v1_29.sh sage_build_129_second
+            echo '=== BYTE-IDENTICAL SOURCE COMPARISON ==='
+            diff -qr --exclude=build --exclude=.gradle sage_build_129 sage_build_129_second
+            cmp sage_build_129/app/build.gradle.kts sage_build_129_second/app/build.gradle.kts
+            echo 'Byte-identical reconstruction: PASS'
+          } 2>&1 | tee -a "$RESULTS"
+
+      - name: Add exact pinned native Brain and offline wake model
+        run: |
+          set -euo pipefail
+          {
+            echo '=== PINNED LLAMA.CPP ==='
+            mkdir -p sage_build_129/third_party/llama.cpp
+            git -C sage_build_129/third_party/llama.cpp init
+            git -C sage_build_129/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+            git -C sage_build_129/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+            git -C sage_build_129/third_party/llama.cpp checkout --detach FETCH_HEAD
+            test "$(git -C sage_build_129/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+            git -C sage_build_129/third_party/llama.cpp rev-parse HEAD
+            echo '=== OFFLINE WAKE MODEL ==='
+            mkdir -p /tmp/sage-vosk-129 sage_build_129/app/src/main/assets
+            curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-129.zip \
+              https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+            unzip -q /tmp/sage-vosk-129.zip -d /tmp/sage-vosk-129
+            mv /tmp/sage-vosk-129/vosk-model-small-en-us-0.15 \
+              sage_build_129/app/src/main/assets/model-en-us
+            printf 'sage-v1.29.0-physical-acceptance\n' > \
+              sage_build_129/app/src/main/assets/model-en-us/uuid
+            test -s sage_build_129/app/src/main/assets/model-en-us/am/final.mdl
+            echo 'Pinned native engine and offline wake model: PASS'
+          } 2>&1 | tee -a TEST_AND_BUILD_RESULTS.txt
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install exact Android toolchain and preserved signing identity
+        run: |
+          set -euo pipefail
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358" 2>&1 | tee -a TEST_AND_BUILD_RESULTS.txt
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          EXPECTED=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          ACTUAL="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          test "$ACTUAL" = "$EXPECTED"
+          printf 'Expected signer certificate SHA-256: %s\nPreserved keystore certificate SHA-256: %s\nMatch: true\n' \
+            "$EXPECTED" "$ACTUAL" | tee -a TEST_AND_BUILD_RESULTS.txt
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile Java and native, test, lint, and assemble production release
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          {
+            echo '=== RELEASE JAVA COMPILATION ==='
+            gradle :app:compileReleaseJavaWithJavac --stacktrace
+            echo '=== RELEASE NATIVE COMPILATION ==='
+            gradle :app:externalNativeBuildRelease --stacktrace
+            echo '=== RELEASE UNIT TESTS ==='
+            gradle :app:testReleaseUnitTest --stacktrace
+            echo '=== RELEASE LINT ==='
+            gradle :app:lintRelease --stacktrace
+            echo '=== PRODUCTION RELEASE ASSEMBLY ==='
+            gradle :app:assembleRelease --stacktrace
+          } 2>&1 | tee -a ../TEST_AND_BUILD_RESULTS.txt
+
+      - name: Verify, gate, and record the production APK
+        run: |
+          set -euo pipefail
+          APK=Sage-Commander-1.29.0-noticeably-better-verified.apk
+          SOURCE_APK=sage_build_129/app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          EXPECTED_CERT_SHA=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          test -f "$SOURCE_APK"
+          cp "$SOURCE_APK" "$APK"
+
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" \
+            2>&1 | tee APKSIGNER_FULL.txt
+          ACTUAL_CERT_SHA="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' \
+            APKSIGNER_FULL.txt | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL_CERT_SHA" = "$EXPECTED_CERT_SHA"
+          printf 'Expected signer certificate SHA-256: %s\nAPK signer certificate SHA-256: %s\nMatch: true\n' \
+            "$EXPECTED_CERT_SHA" "$ACTUAL_CERT_SHA" | tee SIGNER_COMPARISON.txt
+
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" \
+            2>&1 | tee ZIPALIGN_FULL.txt
+
+          MERGED_MANIFEST="$(find sage_build_129/app/build/intermediates/merged_manifests/release \
+            -name AndroidManifest.xml -print -quit)"
+          test -n "$MERGED_MANIFEST"
+          {
+            echo '=== AAPT PACKAGE / VERSION BADGING ==='
+            "$BUILD_TOOLS/aapt" dump badging "$APK"
+            echo '=== PACKAGED BINARY MANIFEST ==='
+            "$BUILD_TOOLS/aapt" dump xmltree "$APK" AndroidManifest.xml
+            echo '=== MERGED RELEASE MANIFEST ==='
+            sed -n '1,2400p' "$MERGED_MANIFEST"
+          } 2>&1 | tee PACKAGE_VERSION_MANIFEST.txt
+
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='41' versionName='1.29.0'" \
+            PACKAGE_VERSION_MANIFEST.txt
+          if grep -F 'android:testOnly="true"' "$MERGED_MANIFEST"; then
+            echo 'FAIL: merged release manifest sets testOnly=true' >&2
+            exit 1
+          fi
+          if grep -F 'android:debuggable="true"' "$MERGED_MANIFEST"; then
+            echo 'FAIL: merged release manifest sets debuggable=true' >&2
+            exit 1
+          fi
+          if grep -E 'android:(testOnly|debuggable).*0xffffffff' PACKAGE_VERSION_MANIFEST.txt; then
+            echo 'FAIL: packaged manifest enables testOnly or debuggable' >&2
+            exit 1
+          fi
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' APKSIGNER_FULL.txt
+          sha256sum "$APK" | tee APK_SHA256.txt
+          unzip -t "$APK" 2>&1 | tee ZIP_INTEGRITY.txt
+          grep -F 'No errors detected in compressed data' ZIP_INTEGRITY.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | \
+            tee -a TEST_AND_BUILD_RESULTS.txt
+          {
+            echo '=== FINAL STATIC RELEASE GATES ==='
+            echo 'Production release APK exists: PASS'
+            echo 'Package com.pineapple.sagecommander.stable: PASS'
+            echo 'versionName 1.29.0: PASS'
+            echo 'versionCode 41: PASS'
+            echo 'android:testOnly true absent: PASS'
+            echo 'android:debuggable true absent: PASS'
+            echo 'Permanent signer exact match: PASS'
+            echo 'APK Signature Scheme v2: PASS'
+            echo 'zipalign page alignment: PASS'
+            echo 'ZIP integrity: PASS'
+            echo 'arm64 native Brain library packaged: PASS'
+          } | tee -a TEST_AND_BUILD_RESULTS.txt
+
+      - name: Write honest physical acceptance boundary
+        run: |
+          cat > PHYSICAL_ACCEPTANCE_TEST.md <<'EOF'
+          # Sage Commander 1.29.0 physical acceptance
+
+          Static release verification passed in GitHub Actions. No APK was installed by CI or ADB.
+
+          Still required on the owner's existing tablet:
+
+          1. Download the artifact and tap the APK from Android Files/Downloads.
+          2. Confirm Android offers an update to `com.pineapple.sagecommander.stable` without uninstalling.
+          3. Confirm installation completes and all existing app data remains present.
+          4. Run “Sage, test your brain” and capture real model/token diagnostics.
+          5. Exercise microphone confirmation learning, wake/echo/media rejection, accessibility actions, Adobe edit/share handling, tone persistence, memories, and stored Forge reconnect.
+
+          Install-over-existing eligibility, data preservation, microphone behavior, Brain token generation,
+          Adobe handling, accessibility behavior, and media rejection are not claimed until these owner-tablet checks pass.
+          EOF
+
+      - name: Upload verified physical acceptance bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.29.0-noticeably-better-verified
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            Sage-Commander-1.29.0-noticeably-better-verified.apk
+            APK_SHA256.txt
+            APKSIGNER_FULL.txt
+            SIGNER_COMPARISON.txt
+            ZIPALIGN_FULL.txt
+            PACKAGE_VERSION_MANIFEST.txt
+            ZIP_INTEGRITY.txt
+            TEST_AND_BUILD_RESULTS.txt
+            PHYSICAL_ACCEPTANCE_TEST.md
