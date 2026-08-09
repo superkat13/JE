@@ -1,0 +1,201 @@
+--- a/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
++++ b/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
+@@ -50,7 +50,8 @@
+         }
+         if(user.length()>userBudget){user.setLength(userBudget);cut=true;}
+         return new Prompt(mode,system,user.toString(),literal,budget,cut,selectedContext,selectedMemories,
+-                outputBudget(mode,literal,prefillMs,generationTps),mode==PromptMode.EXACT_LITERAL);
++                outputBudget(mode,literal,prefillMs,generationTps),
++                mode==PromptMode.EXACT_LITERAL||mode==PromptMode.CONCISE_ANSWER);
+     }
+     static PromptMode mode(String input){
+         String value=clean(input),lower=value.toLowerCase(Locale.US);
+@@ -59,14 +60,14 @@
+         if(lower.matches("^(open|tap|click|choose|select|scroll|search|find|type|play|pause|share|edit)\\b.*"))return PromptMode.ACTION_SELECTION;
+         return PromptMode.CONCISE_ANSWER;
+     }
+-    static String exactLiteral(String input){Matcher m=EXACT.matcher(clean(input));if(!m.matches())return "";String v=m.group(1).trim();if(v.length()>1&&v.endsWith(".")&&!v.endsWith(".."))v=v.substring(0,v.length()-1);return v;}
++    static String exactLiteral(String input){Matcher m=EXACT.matcher(clean(input));return m.matches()?unwrapLiteral(m.group(1)):"";}
+     static int outputBudget(PromptMode mode,String literal,long prefillMs,float tps){
+         if(mode==PromptMode.EXACT_LITERAL)return Math.max(4,Math.min(12,estimateLiteralTokens(literal)+3));
+         long reserve=Math.max(4000L,30000L-Math.max(0L,prefillMs)-2500L);float safe=tps>0f?tps:1f;
+         int measured=Math.max(6,(int)(reserve*safe/1000f));int cap=mode==PromptMode.CONCISE_ANSWER?16:mode==PromptMode.ACTION_SELECTION?20:24;
+         return Math.min(cap,measured);
+     }
+-    static boolean literalMatches(String generated,String expected){return clean(generated).replaceAll("^[\\\"']|[\\\"']$","").replaceAll("[.]+$","").equals(expected.replaceAll("[.]+$","").trim());}
++    static boolean literalMatches(String generated,String expected){return unwrapLiteral(generated).equals(unwrapLiteral(expected));}
+     private static String system(PromptMode mode,String tone,String request){
+         switch(mode){
+             case EXACT_LITERAL:return "Output only the requested literal. No explanation. /no_think";
+@@ -96,6 +97,6 @@
+     private static int score(String request,String value){String a=clean(request).toLowerCase(Locale.US),b=clean(value).toLowerCase(Locale.US);int score=0;for(String w:a.split("[^a-z0-9]+"))if(w.length()>=4&&b.contains(w))score++;return score;}
+     private static int budget(PromptMode mode){return mode==PromptMode.EXACT_LITERAL?EXACT_FORMATTED_BUDGET:mode==PromptMode.CONCISE_ANSWER?CONCISE_FORMATTED_BUDGET:mode==PromptMode.ACTION_SELECTION?ACTION_FORMATTED_BUDGET:CONVERSATIONAL_FORMATTED_BUDGET;}
+     private static int estimateLiteralTokens(String value){return Math.max(1,(clean(value).length()+3)/4);}
++    private static String unwrapLiteral(String value){String v=clean(value);if(v.length()>=2&&((v.startsWith("\"")&&v.endsWith("\""))||(v.startsWith("'")&&v.endsWith("'"))))return v.substring(1,v.length()-1);return v;}
+     private static String clean(String value){return value==null?"":value.trim().replaceAll("\\s+"," ");}
+ }
+-
+--- a/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java
++++ b/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java
+@@ -126,7 +126,7 @@
+                         handler.removeCallbacks(timeout);
+                         int tokens = brain.lastGeneratedTokenCount();
+                         boolean exact = tokens > 0
+-                                && "Brain online.".equalsIgnoreCase(reply.text.trim());
++                                && SageBrainRequestPolicy.literalMatches(reply.text,"Brain online.");
+                         SageBrainHealth.deterministicTest(SageBrainTestActivity.this,
+                                 exact, reply.text, tokens, brain.lastNativeStage());
+                         status.setText("[tablet Brain] " + reply.text
+--- a/app/src/main/java/com/pineapple/sage/SageBrainManager.java
++++ b/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+@@ -970,6 +970,8 @@
+         String value = raw == null ? "" : raw;
+         value = value.replaceAll("(?is)<think>.*?</think>", " ");
+         value = value.replaceAll("(?is)^.*?</think>", " ");
++        value = value.replaceAll("(?is)<\\|(?:im_start|im_end|assistant|user|system|endoftext)\\|>", " ");
++        value = value.replaceAll("(?is)</?(?:s|bos|eos)>", " ");
+         value = value.replace("```", " ").trim();
+         int doubleBreak = value.indexOf("\n\n");
+         if (doubleBreak > 0) {
+--- a/app/src/main/cpp/sage_brain.cpp
++++ b/app/src/main/cpp/sage_brain.cpp
+@@ -114,7 +114,7 @@
+             piece.data(),
+             static_cast<int>(piece.size()),
+             0,
+-            true
++            false
+     );
+     if (count < 0) {
+         piece.resize(static_cast<size_t>(-count));
+@@ -124,7 +124,7 @@
+                 piece.data(),
+                 static_cast<int>(piece.size()),
+                 0,
+-                true
++                false
+         );
+     }
+     if (count <= 0) {
+--- a/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
++++ b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+@@ -71,6 +71,15 @@
+         appendEvent(context, "ERROR", cleaned);
+     }
+ 
++    public static void clearBrainError(Context context) {
++        SharedPreferences stored = preferences(context);
++        String previous = stored.getString(KEY_LAST_ERROR, "");
++        if (previous != null && previous.toLowerCase(Locale.US).contains("brain")) {
++            stored.edit().remove(KEY_LAST_ERROR).apply();
++            appendEvent(context, "BRAIN", "cleared stale Brain error after verified success");
++        }
++    }
++
+     public static void recordMicLevel(Context context, float rmsDb) {
+         long now = System.currentTimeMillis();
+         if (now - lastMicWriteAtMs < 500L
+--- a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java
++++ b/app/src/main/java/com/pineapple/sage/SageBrainHealth.java
+@@ -48,6 +48,8 @@
+                 .putLong("generation_only_duration_ms",-1).putFloat("generation_tokens_per_second",-1f)
+                 .putInt("generated_tokens",0).putString("terminal_outcome","ACTIVE")
+                 .putString("native_stage","prompt_tokenization").putString("exact_error","")
++                .putString("expected_literal",clean(prompt.expectedLiteral))
++                .putString("actual_literal","").putString("literal_verification","NOT_RUN")
+                 .putBoolean("cancelled",false).putBoolean("timed_out",false)
+                 .putLong("started_at_ms",System.currentTimeMillis());
+         e.commit();
+@@ -74,6 +76,7 @@
+                 .putLong("generation_duration_ms",duration).putLong("prompt_prefill_duration_ms",prefill)
+                 .putInt("prompt_token_count",promptTokens).putInt("generated_tokens",tokens)
+                 .putFloat("generation_tokens_per_second",generationTps).putBoolean("cancelled",false).apply();
++        SageDiagnostics.clearBrainError(c);
+         setStatus(c,Status.LOCAL_READY,"tablet Brain","complete","");
+     }
+     static void terminal(Context c,long id,long generation,String outcome,String stage,String error,int tokens){
+@@ -94,7 +97,18 @@
+     static String lastFailedCommand(Context c){SharedPreferences p=snapshotPrefs(c);return "SUCCESS".equals(p.getString("terminal_outcome",""))?"":p.getString("last_command","");}
+     static String lastBrainError(Context c){return snapshotPrefs(c).getString("exact_error","");}
+ 
+-    static void deterministicTest(Context c,boolean passed,String response,int tokens,String stage){prefs(c).edit().putString("deterministic_test",passed?"PASS":"FAIL").putString("displayed_response",clean(response)).putInt("test_generated_tokens",Math.max(0,tokens)).putString("native_stage",clean(stage)).apply();if(!passed)setStatus(c,Status.ERROR,"tablet Brain",stage,"Deterministic Brain response did not equal Brain online.");}
++    static void deterministicTest(Context c,boolean passed,String response,int tokens,String stage){
++        String actual=clean(response),error=passed?"":"Deterministic Brain response did not exactly equal Brain online.";
++        prefs(c).edit().putString("deterministic_test",passed?"PASS":"FAIL")
++                .putString("displayed_response",actual).putInt("test_generated_tokens",Math.max(0,tokens))
++                .putString("native_stage",clean(stage)).apply();
++        snapshotPrefs(c).edit().putString("expected_literal","Brain online.")
++                .putString("actual_literal",actual).putString("literal_verification",passed?"PASS":"FAIL")
++                .putString("terminal_outcome",passed?"SUCCESS":"ERROR")
++                .putString("native_stage",passed?"complete":"output_verification")
++                .putString("exact_error",error).apply();
++        if(!passed)setStatus(c,Status.ERROR,"tablet Brain","output_verification",error);
++    }
+     static void cancelled(Context c,String stage){setStatus(c,Status.CANCELLED,"tablet Brain",stage,"Brain request cancelled");}
+     static void fallback(Context c,String stage,String reason){setStatus(c,Status.FALLBACK_USED,"fallback",stage,reason);}
+     static String indicator(Context c){SharedPreferences p=prefs(c);return p.getString("status",Status.OFF.name())+" • "+p.getString("active_route","command engine");}
+@@ -114,6 +128,8 @@
+                 +"\nGeneration speed: "+(gt<0?"not measured":String.format(Locale.US,"%.2f tokens/s",gt))
+                 +"\nGenerated token count: "+s.getInt("generated_tokens",0)+"\nTerminal outcome: "+s.getString("terminal_outcome","none")
+                 +"\nNative stage: "+s.getString("native_stage","none")+"\nExact error: "+s.getString("exact_error","none")
++                +"\nExpected literal: "+s.getString("expected_literal","")+"\nActual literal: "+s.getString("actual_literal","")
++                +"\nLiteral verification: "+s.getString("literal_verification","NOT_RUN")
+                 +"\nModel name: "+p.getString("model_name","not selected")+"\nModel file: "+p.getString("model_file","not selected")
+                 +"\nQuantization: "+p.getString("quantization","unknown")+"\nFile size: "+p.getLong("file_size",0)+" bytes"
+                 +"\nVerification hash: "+p.getString("verification_hash","not recorded")+"\nAvailable RAM: "+m.availMem+" bytes"
+--- a/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java
++++ b/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java
+@@ -39,11 +39,13 @@
+         if(eligible.isEmpty()&&recent!=null&&!recent.isEmpty()){for(Candidate c:candidates)if(eligible(c)&&(wantedProvider.isEmpty()||normalize(c.provider).equals(wantedProvider)))eligible.add(c);}
+         if(eligible.isEmpty())return null;Collections.sort(eligible,(a,b)->a.identity().compareTo(b.identity()));
+         return eligible.get(new Random(seed).nextInt(eligible.size()));}
+-    static boolean eligible(Candidate c){return c!=null&&c.standardSafe&&c.visible&&c.enabled&&!c.stale&&!c.advertising&&!c.navigation&&c.related&&!c.title.isEmpty()&&!redQueenText(c.source)&&!redQueenText(c.title);}
++    static boolean eligible(Candidate c){return c!=null&&c.standardSafe&&c.visible&&c.enabled&&!c.stale&&!c.advertising&&!c.navigation&&c.related&&!c.title.isEmpty()&&!redQueenText(c.source)&&!redQueenText(c.title)&&!internalProvider(c.provider)&&!controlText(c.title);}
+     static boolean revalidate(Candidate saved,Candidate current){return saved!=null&&current!=null&&saved.identity().equals(current.identity())&&eligible(current);}
+     static Set<String> recent(String encoded){Set<String> out=new HashSet<>();if(encoded!=null)for(String value:encoded.split("\\n"))if(!value.trim().isEmpty())out.add(value.trim());return out;}
+     static String encodeRecent(Set<String> values){List<String> sorted=new ArrayList<>(values);Collections.sort(sorted);StringBuilder out=new StringBuilder();for(String value:sorted){if(out.length()>0)out.append('\n');out.append(value);}return out.toString();}
+     static boolean redQueenText(String value){String v=normalize(value);return v.contains("red queen")||v.contains("red_queen")||v.contains("private vault")||v.contains("investigation");}
++    static boolean internalProvider(String value){String v=normalize(value);return v.contains("com pineapple sagecommander stable")||v.contains("pineapple sagecommander");}
++    static boolean controlText(String value){String v=normalize(value);return v.equals("stop")||v.startsWith("stop surprise")||v.equals("cancel")||v.equals("back")||v.equals("refresh persistent brain report")||v.contains("download verified qwen")||v.contains("choose downloaded gguf")||v.contains("run deterministic brain test")||v.equals("sage brain on")||v.equals("sage brain off");}
+     private static String clean(String value){return value==null?"":value.trim();}
+     private static String normalize(String value){return clean(value).toLowerCase(Locale.US).replaceAll("[^a-z0-9]+"," ").replaceAll("\\s+"," ").trim();}
+ }
+--- a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
++++ b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
+@@ -298,6 +298,7 @@
+         AccessibilityNodeInfo root=service.getRootInActiveWindow();
+         if(root==null)return new SurpriseSelection(false,"","","","","no_active_window");
+         String provider=root.getPackageName()==null?"":root.getPackageName().toString();
++        if(SageSurprisePolicy.internalProvider(provider))return new SurpriseSelection(false,"","",provider,"","internal_sage_window");
+         if(requireYouTube&&!provider.toLowerCase(Locale.US).contains("youtube"))return new SurpriseSelection(false,"","",provider,"","youtube_not_visible");
+         DisplayMetrics metrics=service.getResources().getDisplayMetrics();
+         List<ScreenTarget> targets=findInteractiveTargets(root,type,metrics.widthPixels,metrics.heightPixels);
+@@ -323,7 +324,7 @@
+     private static SageSurprisePolicy.Candidate surpriseCandidate(ScreenTarget target,String provider,String type){
+         String title=target==null?"":target.text;String normalized=normalizeTargetText(title);
+         boolean advertising=normalized.contains("sponsored")||normalized.matches("(^|.* )ad( |$).*")||normalized.contains("advertisement");
+-        boolean navigation=normalized.equals("home")||normalized.equals("shorts")||normalized.equals("subscriptions")||normalized.equals("library")||normalized.equals("search")||normalized.equals("you");
++        boolean navigation=normalized.equals("home")||normalized.equals("shorts")||normalized.equals("subscriptions")||normalized.equals("library")||normalized.equals("search")||normalized.equals("you")||SageSurprisePolicy.controlText(title);
+         boolean related=type.equals("generic")||target.score>0;
+         return new SageSurprisePolicy.Candidate(title,"",provider,type,"standard_accessibility_tree",true,target!=null&&target.node!=null&&target.node.isEnabled(),false,advertising,navigation,related,true);
+     }
+--- a/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java
++++ b/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java
+@@ -28,6 +28,7 @@
+         if(command==SageSurprisePolicy.Command.STOP)return stop(context,seed);
+         String provider=command==SageSurprisePolicy.Command.ANOTHER?p.getString("last_provider",""):"";
+         String topic=command==SageSurprisePolicy.Command.ANOTHER?p.getString("last_topic",""):topic(command);
++        if(SageSurprisePolicy.internalProvider(provider))provider="youtube";
+         if(command==SageSurprisePolicy.Command.YOUTUBE||command==SageSurprisePolicy.Command.WEIRD||command==SageSurprisePolicy.Command.BORED||command==SageSurprisePolicy.Command.RABBIT_HOLE)provider="youtube";
+         if(command==SageSurprisePolicy.Command.ANOTHER&&provider.isEmpty())return outcome(context,seed,false,false,false,"I need a current provider before I can choose another one.","unsupported","standard_safe_context_only");
+         if(provider.equals("youtube")){SageAccessibilityService.SurpriseSelection immediate=SageAccessibilityService.selectSurpriseVideo(seed,recent(p));
+@@ -37,7 +38,7 @@
+         if(snapshot.activePlayback&&!"unavailable".equals(snapshot.packageName)&&media.control("next"))return selected(context,p,seed,"Next from "+snapshot.title,"",snapshot.packageName,"current media","media_session");
+         SageAccessibilityService.SurpriseSelection current=SageAccessibilityService.selectSurpriseCurrent(seed,recent(p));
+         if(current.opened)return selected(context,p,seed,current.title,current.uri,current.provider,"current page","accessibility_fallback");
+-        return outcome(context,seed,false,false,false,"What should I surprise you in—YouTube or the current page?","clarification","standard_safe_context_only");
++        return launchYouTubeSearch(context,p,seed,topic.isEmpty()?"unexpected fascinating videos":topic);
+     }
+     private static Outcome launchYouTubeSearch(Context context,SharedPreferences p,long seed,String topic){String query=topic.isEmpty()?"unexpected fascinating videos":topic;
+         String encoded=Uri.encode(query);Intent intent=new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/results?search_query="+encoded)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+

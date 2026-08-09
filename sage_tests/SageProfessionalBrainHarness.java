@@ -12,12 +12,15 @@ public final class SageProfessionalBrainHarness {
     ok(exact.deterministic&&exact.outputTokens<=12,"real deterministic bounded inference");
     ok(!exact.system.contains("UNFILTERED")&&!exact.user.contains("memory")
        &&!exact.user.contains("action"),"exact isolation");
-    ok(exact.expectedLiteral.equals("Pineapple"),"literal parsed");
-    ok(SageBrainRequestPolicy.literalMatches("Pineapple.","Pineapple"),"literal verified");
+    ok(exact.expectedLiteral.equals("Pineapple."),"literal punctuation preserved");
+    ok(SageBrainRequestPolicy.literalMatches("Pineapple.","Pineapple."),"literal verified");
+    ok(!SageBrainRequestPolicy.literalMatches("Pineapple","Pineapple."),"missing punctuation rejected");
+    ok(!SageBrainRequestPolicy.literalMatches("pineapple.","Pineapple."),"case mismatch rejected");
     SageBrainRequestPolicy.Prompt concise=SageBrainRequestPolicy.build(
       "What is a pineapple?", "clean", Arrays.asList("x".repeat(5000)),
       Arrays.asList("pineapple is a fruit "+"z".repeat(5000)),10000,1.1f);
     ok(concise.formattedCharacters<=concise.formattedBudget,"total formatted budget");
+    ok(concise.deterministic,"ordinary concise answers use stable decoding");
     ok(concise.user.length()<concise.formattedBudget,"long line bounded");
     ok(!concise.system.contains("open TARGET"),"concise excludes action allowlist");
     SageBrainRequestPolicy.Prompt action=SageBrainRequestPolicy.build(
@@ -38,6 +41,6 @@ public final class SageProfessionalBrainHarness {
     ok(fresh.generatedTokens()==0&&fresh.terminal()==SageBrainRequestPolicy.Terminal.ACTIVE,"fresh telemetry");
     ok(SageBrainRequestPolicy.outputBudget(SageBrainRequestPolicy.PromptMode.CONCISE_ANSWER,"",20000,1f)<=16,
        "deadline output cap");
-    System.out.println("professional Brain harness: "+n+"/15 passed");
+    System.out.println("professional Brain harness: "+n+"/18 passed");
   }
 }

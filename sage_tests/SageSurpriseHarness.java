@@ -23,7 +23,9 @@ public final class SageSurpriseHarness {
         check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Stale","","youtube","","standard",true,true,true,false,false,true,true)),"stale excluded");
         check(SageSurprisePolicy.revalidate(one,candidate("Odd clocks"))&&!SageSurprisePolicy.revalidate(one,candidate("Changed")),"immediate identity revalidation");
         check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Private investigation","","youtube","","red_queen_private_vault",true,true,false,false,false,true,true)),"Red Queen excluded");
+        check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Sage Brain: ON","","com.pineapple.sagecommander.stable","","standard",true,true,false,false,false,true,true)),"Sage internal window excluded");
+        check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Stop","","youtube","","standard",true,true,false,false,false,true,true)),"Stop control excluded");
         check(SageSurprisePolicy.choose(Arrays.asList(new SageSurprisePolicy.Candidate("Unavailable","","youtube","","standard",false,false,true,false,false,true,true)),new HashSet<>(),1L,"youtube","")==null,"unsupported honest");
-        System.out.println("surprise harness: "+tests+"/12 passed");
+        System.out.println("surprise harness: "+tests+"/14 passed");
     }
 }

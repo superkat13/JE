@@ -13,7 +13,7 @@ class ProfessionalBrain(unittest.TestCase):
       subprocess.run(["javac","-d",out,str(BUILD/"app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java"),
                       str(ROOT/"sage_tests/SageProfessionalBrainHarness.java")],check=True)
       value=subprocess.run(["java","-cp",out,"com.pineapple.sage.SageProfessionalBrainHarness"],text=True,capture_output=True,check=True)
-      self.assertIn("15/15 passed",value.stdout)
+      self.assertIn("18/18 passed",value.stdout)
   def test_real_exact_native_route(self):
     manager=self.read("app/src/main/java/com/pineapple/sage/SageBrainManager.java")
     policy=self.read("app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java")
@@ -38,6 +38,21 @@ class ProfessionalBrain(unittest.TestCase):
     self.assertIn("generation_finished - generation_only_start",native)
     self.assertIn("g_last_prompt_tokens_per_second",native)
     self.assertIn("std::max(1, std::min(24",native)
+    self.assertGreaterEqual(native.count("0,\n            false"),1)
+    self.assertNotIn("0,\n            true\n    );\n    if (count < 0)",native)
+  def test_exact_output_and_decoder_cleanup(self):
+    manager=self.read("app/src/main/java/com/pineapple/sage/SageBrainManager.java")
+    policy=self.read("app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java")
+    activity=self.read("app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java")
+    health=self.read("app/src/main/java/com/pineapple/sage/SageBrainHealth.java")
+    diagnostics=self.read("app/src/main/java/com/pineapple/sage/SageDiagnostics.java")
+    self.assertIn("unwrapLiteral",policy)
+    self.assertNotIn('replaceAll("[.]+$","")',policy)
+    self.assertIn("mode==PromptMode.EXACT_LITERAL||mode==PromptMode.CONCISE_ANSWER",policy)
+    self.assertIn("SageBrainRequestPolicy.literalMatches(reply.text,\"Brain online.\")",activity)
+    self.assertIn("im_start|im_end|assistant|user|system|endoftext",manager)
+    self.assertIn("literal_verification",health)
+    self.assertIn("clearBrainError",diagnostics)
   def test_snapshot_reset_and_wake_throttle(self):
     health=self.read("app/src/main/java/com/pineapple/sage/SageBrainHealth.java")
     diagnostics=self.read("app/src/main/java/com/pineapple/sage/SageDiagnostics.java")

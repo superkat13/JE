@@ -19,6 +19,8 @@ class SurpriseDiscoveryTests(unittest.TestCase):
             self.assertIn(token.lower(),(manager+policy).lower())
         self.assertNotIn("showNumberOverlay",manager)
         self.assertIn("media.control(\"next\")",manager)
+        self.assertIn("internalProvider(provider)",manager)
+        self.assertGreaterEqual(manager.count("launchYouTubeSearch"),3)
     def test_youtube_pending_selection_and_honest_routes(self):
         manager=self.source("SageSurpriseManager.java")
         for token in ('pending_semantic_selection','accessibility_fallback','unsupported','youtube.com/results?search_query=','selectSurpriseVideo','I’ll open one verified result when it appears'):
@@ -29,6 +31,8 @@ class SurpriseDiscoveryTests(unittest.TestCase):
         for token in ('sponsored','advertisement','navigation','isVisibleToUser','isEnabled','semanticIdentityMatches','SageSurprisePolicy.revalidate','immediate_revalidation_failed','clickNodeOrTap'):
             self.assertIn(token,access+policy)
         self.assertLess(access.index("SageSurprisePolicy.revalidate(selected,currentCandidate)"),access.index("boolean opened=service.clickNodeOrTap"))
+        self.assertIn("internal_sage_window",access)
+        self.assertIn("controlText",policy)
     def test_stop_and_no_duplicate_loop(self):
         manager=self.source("SageSurpriseManager.java");media=self.source("SageMediaSessionBridge.java")
         for token in ('putBoolean("pending",false)','putBoolean("opening",false)','cancelSurprise','stopPlayback','ACTION_STOP','ACTION_PAUSE'):
@@ -53,6 +57,6 @@ class SurpriseDiscoveryTests(unittest.TestCase):
             harness=pathlib.Path(__file__).with_name("SageSurpriseHarness.java")
             subprocess.run(["javac","-d",out,str(JAVA/"SageSurprisePolicy.java"),str(harness)],check=True)
             result=subprocess.run(["java","-cp",out,"com.pineapple.sage.SageSurpriseHarness"],check=True,text=True,capture_output=True)
-            self.assertIn("12/12 passed",result.stdout)
+            self.assertIn("14/14 passed",result.stdout)
 
 if __name__=="__main__":unittest.main(verbosity=2)
