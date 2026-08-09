@@ -1,0 +1,232 @@
+--- a/app/src/main/java/com/pineapple/sage/SageConversationStateMachine.java
++++ b/app/src/main/java/com/pineapple/sage/SageConversationStateMachine.java
+@@ -26 +26,3 @@
+-    enum SpeechSource { LIKELY_USER, SAGE_TTS, DEVICE_MEDIA, UNKNOWN }
++    enum SpeechSource { OWNER_SPEECH, SAGE_TTS, ACTIVE_MEDIA, DUPLICATE, UNKNOWN_AUDIO }
++
++    enum TranscriptType { WAKE_FINAL, COMMAND_PARTIAL, COMMAND_FINAL, TYPED_FINAL }
+@@ -39,0 +42,5 @@
++        final TranscriptType transcriptType;
++        final String wakeState;
++        final String mediaState;
++        final int dispatchCount;
++        final long latencyMs;
+@@ -44 +51,2 @@
+-                 SpeechSource source) {
++                 SpeechSource source, TranscriptType transcriptType,
++                 String wakeState, String mediaState, int dispatchCount, long latencyMs) {
+@@ -55 +63,6 @@
+-            this.source = source == null ? SpeechSource.UNKNOWN : source;
++            this.source = source == null ? SpeechSource.UNKNOWN_AUDIO : source;
++            this.transcriptType = transcriptType;
++            this.wakeState = clean(wakeState);
++            this.mediaState = clean(mediaState);
++            this.dispatchCount = dispatchCount;
++            this.latencyMs = Math.max(0L, latencyMs);
+@@ -67,0 +81,3 @@
++    private boolean mediaActiveForTurn;
++    private long turnStartedAtMs;
++    private int dispatchCount;
+@@ -80,0 +97,2 @@
++        mediaActiveForTurn = false;
++        turnStartedAtMs = nowMs;
+@@ -92 +110 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.UNKNOWN_AUDIO, TranscriptType.WAKE_FINAL, nowMs);
+@@ -97 +115 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.DUPLICATE, TranscriptType.WAKE_FINAL, nowMs);
+@@ -105 +123 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.DUPLICATE, TranscriptType.WAKE_FINAL, nowMs);
+@@ -112 +130,2 @@
+-                "wake_phrase", "wake", SpeechSource.LIKELY_USER);
++                "wake_phrase", "wake", SpeechSource.OWNER_SPEECH,
++                TranscriptType.WAKE_FINAL, nowMs);
+@@ -121,0 +141,2 @@
++        mediaActiveForTurn = activeMedia;
++        turnStartedAtMs = nowMs;
+@@ -132 +153,2 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.UNKNOWN_AUDIO, TranscriptType.COMMAND_PARTIAL,
++                    turnStartedAtMs);
+@@ -136 +158,2 @@
+-                SpeechSource.UNKNOWN);
++                SpeechSource.UNKNOWN_AUDIO, TranscriptType.COMMAND_PARTIAL,
++                turnStartedAtMs);
+@@ -150 +173 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.UNKNOWN_AUDIO, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -156 +179 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.DUPLICATE, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -162 +185 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.UNKNOWN_AUDIO, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -168 +191 @@
+-                    SpeechSource.UNKNOWN);
++                    SpeechSource.DUPLICATE, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -176 +199 @@
+-                    SpeechSource.SAGE_TTS);
++                    SpeechSource.SAGE_TTS, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -181 +204 @@
+-                    SpeechSource.DEVICE_MEDIA);
++                    SpeechSource.ACTIVE_MEDIA, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -185,0 +209 @@
++        dispatchCount++;
+@@ -189 +213 @@
+-                SpeechSource.LIKELY_USER);
++                SpeechSource.OWNER_SPEECH, TranscriptType.COMMAND_FINAL, nowMs);
+@@ -202,0 +227,16 @@
++    synchronized Decision typedTranscript(String text, long nowMs) {
++        activeTurnId = ++turnSequence;
++        activeGeneration = ++activeGeneration;
++        turnStartedAtMs = nowMs;
++        completed = true;
++        authorizedByWakeOrPushToTalk = true;
++        mediaActiveForTurn = false;
++        state = State.DISPATCHING;
++        dispatchCount++;
++        return accept(text, text, 1f, normalize(text), activeGeneration,
++                "visible_typed_input", "command_engine", SpeechSource.OWNER_SPEECH,
++                TranscriptType.TYPED_FINAL, nowMs);
++    }
++
++    synchronized int dispatchCount() { return dispatchCount; }
++
+@@ -214 +254,2 @@
+-                                    String route, String reason, SpeechSource source) {
++                                    String route, String reason, SpeechSource source,
++                                    TranscriptType transcriptType, long nowMs) {
+@@ -218 +259 @@
+-                match, route, reason, source);
++                match, route, reason, source, transcriptType, nowMs);
+@@ -223 +264,2 @@
+-                            String route, SpeechSource source) {
++                            String route, SpeechSource source,
++                            TranscriptType transcriptType, long nowMs) {
+@@ -225 +267,4 @@
+-                normalized, match, route, "", source);
++                normalized, match, route, "", source, transcriptType,
++                authorizedByWakeOrPushToTalk ? "authorized" : "not_authorized",
++                mediaActiveForTurn ? "playing" : "idle",
++                dispatchCount, nowMs - turnStartedAtMs);
+@@ -230 +275,2 @@
+-                            String route, String reason, SpeechSource source) {
++                            String route, String reason, SpeechSource source,
++                            TranscriptType transcriptType, long nowMs) {
+@@ -232 +278,4 @@
+-                normalized, match, route, reason, source);
++                normalized, match, route, reason, source, transcriptType,
++                authorizedByWakeOrPushToTalk ? "authorized" : "not_authorized",
++                mediaActiveForTurn ? "playing" : "idle",
++                dispatchCount, nowMs - turnStartedAtMs);
+--- a/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
++++ b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+@@ -234 +234,6 @@
+-            String lifecycleState
++            String lifecycleState,
++            String transcriptType,
++            String wakeState,
++            String mediaState,
++            int dispatchCount,
++            long latencyMs
+@@ -239,0 +245 @@
++                        + " transcript_type=" + safe(transcriptType)
+@@ -246,0 +253,5 @@
++                        + " echo_classification=" + safe(source)
++                        + " wake_state=" + safe(wakeState)
++                        + " media_state=" + safe(mediaState)
++                        + " dispatch_count=" + dispatchCount
++                        + " latency_ms=" + latencyMs
+--- a/app/src/main/java/com/pineapple/sage/SageMediaCaptureLifecycle.java
++++ b/app/src/main/java/com/pineapple/sage/SageMediaCaptureLifecycle.java
+@@ -0,0 +1,37 @@
++package com.pineapple.sage;
++
++/** Android-free bookkeeping for reversible media changes during an authorized capture. */
++final class SageMediaCaptureLifecycle {
++    static final class Restoration {
++        final boolean restorePlayback;
++        final boolean abandonFocus;
++        final String reason;
++
++        Restoration(boolean restorePlayback, boolean abandonFocus, String reason) {
++            this.restorePlayback = restorePlayback;
++            this.abandonFocus = abandonFocus;
++            this.reason = reason == null ? "" : reason;
++        }
++    }
++
++    private boolean captureActive;
++    private boolean playbackChanged;
++    private boolean focusChanged;
++
++    synchronized void begin() {
++        captureActive = true;
++        playbackChanged = false;
++        focusChanged = false;
++    }
++
++    synchronized void playbackPaused() { if (captureActive) playbackChanged = true; }
++    synchronized void focusDucked() { if (captureActive) focusChanged = true; }
++
++    synchronized Restoration finish(String reason) {
++        Restoration result = new Restoration(playbackChanged, focusChanged, reason);
++        captureActive = false;
++        playbackChanged = false;
++        focusChanged = false;
++        return result;
++    }
++}
+--- a/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java
++++ b/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java
+@@ -47,0 +48 @@
++    private final SageMediaCaptureLifecycle captureLifecycle = new SageMediaCaptureLifecycle();
+@@ -83 +84,2 @@
+-        restoreAfterCapture();
++        restoreAfterCapture("superseded");
++        captureLifecycle.begin();
+@@ -89,0 +92 @@
++                captureLifecycle.playbackPaused();
+@@ -95 +98 @@
+-            audio.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
++            int focusResult = audio.requestAudioFocus(focusListener, AudioManager.STREAM_MUSIC,
+@@ -96,0 +100,3 @@
++            if (focusResult == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
++                captureLifecycle.focusDucked();
++            }
+@@ -102,0 +109,5 @@
++        restoreAfterCapture("listening_ended_or_cancelled");
++    }
++
++    private void restoreAfterCapture(String reason) {
++        SageMediaCaptureLifecycle.Restoration restoration = captureLifecycle.finish(reason);
+@@ -114,0 +126,6 @@
++        if (restoration.restorePlayback || restoration.abandonFocus) {
++            SageDiagnostics.appendEvent(context, "MEDIA RESTORE",
++                    "reason=" + restoration.reason
++                            + " playback=" + restoration.restorePlayback
++                            + " focus=" + restoration.abandonFocus);
++        }
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -174 +174,12 @@
+-                handler.post(() -> handleCommand(command));
++                handler.post(() -> {
++                    stopWakeListening();
++                    destroyCommandRecognizer();
++                    if (speaking && textToSpeech != null) {
++                        textToSpeech.stop();
++                        speaking = false;
++                    }
++                    SageConversationStateMachine.Decision typed = conversationMachine
++                            .typedTranscript(command, System.currentTimeMillis());
++                    recordSpeechDecision(typed);
++                    handleCommand(command);
++                });
+@@ -1050 +1061,3 @@
+-                conversationMachine.state().name());
++                conversationMachine.state().name(), decision.transcriptType.name(),
++                decision.wakeState, decision.mediaState, decision.dispatchCount,
++                decision.latencyMs);
