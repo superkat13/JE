@@ -32,6 +32,10 @@ jobs:
             python3 sage_tests/test_intent_semantic_actions_v1_29.py sage_build_129
             echo '=== CONFIRMATION LEARNING / TONE TESTS ==='
             python3 sage_tests/test_confirmation_tone_v1_29.py sage_build_129
+            echo '=== SURPRISE DISCOVERY TESTS ==='
+            python3 sage_tests/test_surprise_discovery_v1_29.py sage_build_129
+            echo '=== BRAIN ROUTE REPAIR TESTS ==='
+            python3 sage_tests/test_brain_route_repair_v1_29.py sage_build_129
             echo '=== PYTHON COMPILE CHECK ==='
             python3 -m py_compile sage_patches/*.py sage_tests/*.py
             echo '=== FORGE TESTS ==='
@@ -150,7 +154,7 @@ jobs:
       - name: Verify, gate, and record the production APK
         run: |
           set -euo pipefail
-          APK=Sage-Commander-1.29.0-noticeably-better-verified.apk
+          APK=Sage-Commander-1.29.0-brain-route-repair-verified.apk
           SOURCE_APK=sage_build_129/app/build/outputs/apk/release/app-release.apk
           BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           EXPECTED_CERT_SHA=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
@@ -237,7 +241,7 @@ jobs:
       - name: Upload verified physical acceptance bundle
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.29.0-noticeably-better-verified
+          name: Sage-Commander-1.29.0-brain-route-repair-verified
           if-no-files-found: error
           retention-days: 30
           path: |

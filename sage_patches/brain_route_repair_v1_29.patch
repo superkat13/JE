@@ -33,9 +33,9 @@ diff -ruN a/app/src/main/cpp/sage_brain.cpp b/app/src/main/cpp/sage_brain.cpp
 +    g_active_request_id.store(0, std::memory_order_release);
      return to_java_string(env, output);
  }
- 
+
 @@ -478,9 +483,11 @@
- 
+
  extern "C"
  JNIEXPORT void JNICALL
 -Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(JNIEnv *, jclass) {
@@ -46,13 +46,13 @@ diff -ruN a/app/src/main/cpp/sage_brain.cpp b/app/src/main/cpp/sage_brain.cpp
      g_cancel_requested.store(true, std::memory_order_release);
 -    g_last_stage.store(9, std::memory_order_release);
  }
- 
+
  extern "C"
 diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java b/app/src/main/java/com/pineapple/sage/SageBrainHealth.java
 --- a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 22:53:15.270323343 -0500
 +++ b/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 22:51:28.390622865 -0500
 @@ -66,13 +66,36 @@
- 
+
      static void promptStarted(Context context) {
          prefs(context).edit()
 +                .putLong("brain_request_id", 0L)
@@ -63,7 +63,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java b/app/src/
                  .apply();
          setStatus(context, Status.THINKING_LOCAL, "tablet Brain", "generation", "");
      }
- 
+
 +    static void promptStarted(Context context, long requestId, long generationId,
 +                              int promptChars, int budget, boolean truncated,
 +                              int selectedContext, int selectedMemories) {
@@ -91,7 +91,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java b/app/src/
 @@ -91,6 +114,15 @@
          setStatus(context, Status.LOCAL_READY, "tablet Brain", "complete", "");
      }
- 
+
 +    static void generationFinished(Context context, long requestId, long generationId,
 +                                   String generatedText, long firstTokenLatencyMs,
 +                                   int generatedTokens, long generationDurationMs,
@@ -113,13 +113,13 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
      private boolean generationScheduled;
 +    private long requestGeneration;
 +    private volatile SageBrainRequestPolicy.Lifecycle activeRequest;
- 
+
      private volatile State state = State.NOT_CONFIGURED;
      private volatile String status = "No local brain model selected";
 @@ -289,41 +291,49 @@
          });
      }
- 
+
 -    public void cancelCurrentRequest() {
 -        if (!NATIVE_AVAILABLE) {
 -            return;
@@ -141,7 +141,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
 +        try { nativeCancelGeneration(requestId); } catch (Throwable ignored) {}
 +        return true;
      }
- 
+
 -    public void askAsync(String userText, ReplyCallback callback) {
 +    public long askAsync(String userText, ReplyCallback callback) {
          String cleaned = clean(userText);
@@ -177,7 +177,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
          });
 +        return request.requestId;
      }
- 
+
      /** Runs only the fixed health prompt, without memories, history, actions, or fallback text. */
 @@ -334,7 +344,11 @@
                  return;
@@ -231,7 +231,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
 @@ -378,7 +401,8 @@
          });
      }
- 
+
 -    private void askOnWorker(String cleaned, ReplyCallback callback) {
 +    private void askOnWorker(String cleaned, ReplyCallback callback,
 +                             SageBrainRequestPolicy.Lifecycle request) {
@@ -289,7 +289,7 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
 @@ -775,27 +815,17 @@
                  + "Keep answers to two short sentences.";
      }
- 
+
 -    private String buildUserPrompt(String userText) {
 -        StringBuilder prompt = new StringBuilder();
 +    private SageBrainRequestPolicy.Prompt buildUserPrompt(String userText) {
@@ -318,11 +318,11 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src
 +        return SageBrainRequestPolicy.compact(userText,SageTonePolicy.brainInstruction(tone),
 +                turns,memories);
      }
- 
+
      private String memorySummary() {
 @@ -1069,15 +1099,15 @@
      }
- 
+
      private static native boolean nativeLoadModel(String path);
 -    private static native String nativeGenerate(String systemPrompt, String userPrompt,
 -                                                int maxTokens, boolean deterministic);
@@ -496,4 +496,3 @@ diff -ruN a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src
          SageBrainHealth.cancelled(this, stage + "_timeout_at_" + nativeStage);
          SageDiagnostics.recordError(this,
                  "Sage Brain " + stage + " timed out after " + timeoutMs
-
