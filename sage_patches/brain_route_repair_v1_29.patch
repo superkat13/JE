@@ -1,0 +1,499 @@
+diff -ruN a/app/src/main/cpp/sage_brain.cpp b/app/src/main/cpp/sage_brain.cpp
+--- a/app/src/main/cpp/sage_brain.cpp	2026-08-08 22:53:15.270323343 -0500
++++ b/app/src/main/cpp/sage_brain.cpp	2026-08-08 22:51:53.394552170 -0500
+@@ -26,6 +26,7 @@
+ std::atomic<long long> g_last_prompt_prefill_duration_ms{-1};
+ std::atomic<int> g_last_prompt_token_count{0};
+ std::atomic<int> g_last_generated_token_count{0};
++std::atomic<long long> g_active_request_id{0};
+ std::atomic<int> g_last_stage{0};
+ std::string g_last_error = "Model not loaded";
+ bool g_backend_initialized = false;
+@@ -278,6 +279,7 @@
+ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
+         JNIEnv * env,
+         jclass,
++        jlong request_id,
+         jstring system_prompt_value,
+         jstring user_prompt_value,
+         jint requested_tokens,
+@@ -289,6 +291,8 @@
+     g_last_prompt_prefill_duration_ms.store(-1, std::memory_order_release);
+     g_last_prompt_token_count.store(0, std::memory_order_release);
+     g_last_generated_token_count.store(0, std::memory_order_release);
++    const long long active_request_id = static_cast<long long>(request_id);
++    g_active_request_id.store(active_request_id, std::memory_order_release);
+     const auto generation_start = std::chrono::steady_clock::now();
+     if (g_model == nullptr || g_context == nullptr) {
+         set_error("Sage Brain was asked before its model loaded");
+@@ -429,6 +433,7 @@
+     }
+     g_last_error.clear();
+     g_last_stage.store(10, std::memory_order_release);
++    g_active_request_id.store(0, std::memory_order_release);
+     return to_java_string(env, output);
+ }
+ 
+@@ -478,9 +483,11 @@
+ 
+ extern "C"
+ JNIEXPORT void JNICALL
+-Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(JNIEnv *, jclass) {
++Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(JNIEnv *, jclass, jlong request_id) {
++    if (static_cast<long long>(request_id) <= 0
++            || g_active_request_id.load(std::memory_order_acquire)
++                    != static_cast<long long>(request_id)) return;
+     g_cancel_requested.store(true, std::memory_order_release);
+-    g_last_stage.store(9, std::memory_order_release);
+ }
+ 
+ extern "C"
+diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java b/app/src/main/java/com/pineapple/sage/SageBrainHealth.java
+--- a/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 22:53:15.270323343 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 22:51:28.390622865 -0500
+@@ -66,13 +66,36 @@
+ 
+     static void promptStarted(Context context) {
+         prefs(context).edit()
++                .putLong("brain_request_id", 0L)
+                 .putLong("prompt_started_ms", System.currentTimeMillis())
+                 .putLong("first_token_latency_ms", -1L)
+                 .putBoolean("cancelled", false)
++                .putString("exact_error", "")
+                 .apply();
+         setStatus(context, Status.THINKING_LOCAL, "tablet Brain", "generation", "");
+     }
+ 
++    static void promptStarted(Context context, long requestId, long generationId,
++                              int promptChars, int budget, boolean truncated,
++                              int selectedContext, int selectedMemories) {
++        prefs(context).edit().putLong("brain_request_id", requestId)
++                .putLong("brain_generation_id", generationId)
++                .putLong("prompt_started_ms", System.currentTimeMillis())
++                .putLong("first_token_latency_ms", -1L).putInt("generated_tokens", 0)
++                .putBoolean("cancelled", false).putString("exact_error", "")
++                .putInt("prompt_chars", promptChars).putInt("prompt_budget_chars", budget)
++                .putBoolean("prompt_truncated", truncated)
++                .putInt("selected_context", selectedContext)
++                .putInt("selected_memories", selectedMemories).apply();
++        setStatus(context, Status.THINKING_LOCAL, "tablet Brain", "generation", "");
++    }
++
++    static boolean isCurrent(Context context, long requestId, long generationId) {
++        SharedPreferences p=prefs(context);
++        return p.getLong("brain_request_id",-1L)==requestId
++                && p.getLong("brain_generation_id",-1L)==generationId;
++    }
++
+     static void generationFinished(Context context, String generatedText,
+                                    long firstTokenLatencyMs, int generatedTokens,
+                                    long generationDurationMs, long promptPrefillDurationMs,
+@@ -91,6 +114,15 @@
+         setStatus(context, Status.LOCAL_READY, "tablet Brain", "complete", "");
+     }
+ 
++    static void generationFinished(Context context, long requestId, long generationId,
++                                   String generatedText, long firstTokenLatencyMs,
++                                   int generatedTokens, long generationDurationMs,
++                                   long promptPrefillDurationMs, int promptTokenCount) {
++        if (!isCurrent(context,requestId,generationId) || generatedTokens<=0) return;
++        generationFinished(context,generatedText,firstTokenLatencyMs,generatedTokens,
++                generationDurationMs,promptPrefillDurationMs,promptTokenCount);
++    }
++
+     static void deterministicTest(Context context, boolean passed, String response,
+                                   int generatedTokens, String nativeStage) {
+         prefs(context).edit()
+diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+--- a/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 22:53:15.274323331 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 22:54:11.982656712 -0500
+@@ -123,6 +123,8 @@
+     private final List<LoadCallback> pendingLoadCallbacks = new ArrayList<>();
+     private boolean loadScheduled;
+     private boolean generationScheduled;
++    private long requestGeneration;
++    private volatile SageBrainRequestPolicy.Lifecycle activeRequest;
+ 
+     private volatile State state = State.NOT_CONFIGURED;
+     private volatile String status = "No local brain model selected";
+@@ -289,41 +291,49 @@
+         });
+     }
+ 
+-    public void cancelCurrentRequest() {
+-        if (!NATIVE_AVAILABLE) {
+-            return;
+-        }
+-        try {
+-            nativeCancelGeneration();
+-            SageDiagnostics.appendEvent(context, "BRAIN", "native generation cancellation requested");
+-        } catch (Throwable ignored) {
+-        }
++    public boolean cancelCurrentRequest() {
++        SageBrainRequestPolicy.Lifecycle request=activeRequest;
++        return request!=null && cancelCurrentRequest(request.requestId,request.generationId);
++    }
++
++    public boolean cancelCurrentRequest(long requestId, long generationId) {
++        SageBrainRequestPolicy.Lifecycle request=activeRequest;
++        if (request==null || !request.accepts(requestId,generationId)) return false;
++        if (!request.finish(requestId,generationId,SageBrainRequestPolicy.Terminal.CANCELLED)) return false;
++        try { nativeCancelGeneration(requestId); } catch (Throwable ignored) {}
++        return true;
+     }
+ 
+-    public void askAsync(String userText, ReplyCallback callback) {
++    public long askAsync(String userText, ReplyCallback callback) {
+         String cleaned = clean(userText);
+         if (cleaned.isEmpty()) {
+             postReplyError(callback, "I did not receive enough words for Sage Brain.");
+-            return;
++            return 0L;
+         }
+         synchronized (generationLock) {
+             if (generationScheduled) {
+                 SageDiagnostics.appendEvent(context, "BRAIN",
+                         "duplicate generation rejected while one request was active");
+                 postReplyError(callback, "A Sage Brain generation is already running.");
+-                return;
++                return 0L;
+             }
+             generationScheduled = true;
++            activeRequest = new SageBrainRequestPolicy.Lifecycle(++requestGeneration,
++                    System.currentTimeMillis());
+         }
++        final SageBrainRequestPolicy.Lifecycle request=activeRequest;
++        lastError="";
++        status="Sage Brain request started";
+         worker.execute(() -> {
+             try {
+-                askOnWorker(cleaned, callback);
++                askOnWorker(cleaned, callback, request);
+             } finally {
+                 synchronized (generationLock) {
+                     generationScheduled = false;
+                 }
+             }
+         });
++        return request.requestId;
+     }
+ 
+     /** Runs only the fixed health prompt, without memories, history, actions, or fallback text. */
+@@ -334,7 +344,11 @@
+                 return;
+             }
+             generationScheduled = true;
++            activeRequest = new SageBrainRequestPolicy.Lifecycle(++requestGeneration,
++                    System.currentTimeMillis());
+         }
++        final SageBrainRequestPolicy.Lifecycle request=activeRequest;
++        lastError="";
+         worker.execute(() -> {
+             try {
+                 postReplyStatus(callback, isReady() ? "Running exact Brain health prompt"
+@@ -347,12 +361,15 @@
+                     return;
+                 }
+                 if (loadRequired) SageBrainHealth.loadFinished(context);
+-                SageBrainHealth.promptStarted(context);
+-                String raw = nativeGenerate(
++                SageBrainHealth.promptStarted(context,request.requestId,request.generationId,
++                        34,SageBrainRequestPolicy.SIMPLE_CHAR_BUDGET,false,0,0);
++                String raw = nativeGenerate(request.requestId,
+                         "Return only the literal answer requested by the user. /no_think",
+                         "Reply with exactly: Brain online.", 16, true);
+                 String answer = cleanModelOutput(raw);
+                 if (answer.isEmpty() || nativeLastGeneratedTokenCount() <= 0) {
++                    if (!request.finish(request.requestId,request.generationId,
++                            SageBrainRequestPolicy.Terminal.ERROR)) return;
+                     String error = nativeErrorOr("The local model generated zero real tokens.")
+                             + " [stage=" + lastNativeStage()
+                             + ", prompt_tokens=" + lastPromptTokenCount()
+@@ -364,10 +381,16 @@
+                     postReplyError(callback, error);
+                     return;
+                 }
+-                SageBrainHealth.generationFinished(context, answer,
+-                        nativeLastFirstTokenLatencyMs(), nativeLastGeneratedTokenCount(),
++                int tokens=nativeLastGeneratedTokenCount();
++                long first=nativeLastFirstTokenLatencyMs();
++                request.token(request.requestId,request.generationId,
++                        request.startedAtMs+Math.max(0L,first),tokens);
++                if (!request.finishSuccess(request.requestId,request.generationId,tokens)) return;
++                SageBrainHealth.generationFinished(context,request.requestId,request.generationId,answer,
++                        request.firstTokenLatencyMs(),request.generatedTokens(),
+                         nativeLastGenerationDurationMs(), nativeLastPromptPrefillDurationMs(),
+                         nativeLastPromptTokenCount());
++                state=State.READY; status="Sage Brain ready"; lastError="";
+                 postReply(callback, Reply.answer(answer));
+             } catch (Throwable problem) {
+                 postReplyError(callback, "Brain health generation failed: " + safeProblem(problem)
+@@ -378,7 +401,8 @@
+         });
+     }
+ 
+-    private void askOnWorker(String cleaned, ReplyCallback callback) {
++    private void askOnWorker(String cleaned, ReplyCallback callback,
++                             SageBrainRequestPolicy.Lifecycle request) {
+         postReplyStatus(callback, isReady()
+                 ? "Sage Brain is thinking"
+                 : "Loading Sage Brain for this request");
+@@ -391,17 +415,27 @@
+         }
+         if (loadRequired) SageBrainHealth.loadFinished(context);
+         postReplyStatus(callback, "Generating local Brain response");
+-        SageBrainHealth.promptStarted(context);
+         String systemPrompt = buildSystemPrompt();
+-        String userPrompt = buildUserPrompt(cleaned);
++        SageBrainRequestPolicy.Prompt prompt = buildUserPrompt(cleaned);
++        String userPrompt = prompt.text;
++        SageBrainHealth.promptStarted(context,request.requestId,request.generationId,
++                userPrompt.length(),prompt.budget,prompt.truncated,
++                prompt.selectedContext,prompt.selectedMemories);
++        SageDiagnostics.appendEvent(context,"BRAIN PROMPT","request_id="+request.requestId
++                +" generation_id="+request.generationId+" chars="+userPrompt.length()
++                +" budget="+prompt.budget+" truncated="+prompt.truncated
++                +" context="+prompt.selectedContext+" memories="+prompt.selectedMemories);
+         String raw;
+         try {
+-            raw = nativeGenerate(systemPrompt, userPrompt, MAX_REPLY_TOKENS, false);
++            raw = nativeGenerate(request.requestId, systemPrompt, userPrompt,
++                    MAX_REPLY_TOKENS, false);
+         } catch (Throwable problem) {
+             raw = "";
+             lastError = "Brain generation failed: " + safeProblem(problem);
+         }
+         if (raw == null || raw.trim().isEmpty()) {
++            if (!request.finish(request.requestId,request.generationId,
++                    SageBrainRequestPolicy.Terminal.ERROR)) return;
+             String error = nativeErrorOr("The local model did not return an answer.")
+                     + " [stage=" + lastNativeStage() + ", generated_tokens="
+                     + lastGeneratedTokenCount() + "]";
+@@ -421,8 +455,14 @@
+         }
+         rememberTurn("User: " + cleaned);
+         rememberTurn("Sage: " + reply.text);
+-        SageBrainHealth.generationFinished(context, reply.text,
+-                nativeLastFirstTokenLatencyMs(), nativeLastGeneratedTokenCount(),
++        int tokens=nativeLastGeneratedTokenCount();
++        long first=nativeLastFirstTokenLatencyMs();
++        if (tokens>0) request.token(request.requestId,request.generationId,
++                request.startedAtMs+Math.max(0L,first),tokens);
++        if (!request.finishSuccess(request.requestId,request.generationId,tokens)) return;
++        state=State.READY; status="Sage Brain ready"; lastError="";
++        SageBrainHealth.generationFinished(context,request.requestId,request.generationId,reply.text,
++                request.firstTokenLatencyMs(),request.generatedTokens(),
+                 nativeLastGenerationDurationMs(), nativeLastPromptPrefillDurationMs(),
+                 nativeLastPromptTokenCount());
+         postReply(callback, reply);
+@@ -775,27 +815,17 @@
+                 + "Keep answers to two short sentences.";
+     }
+ 
+-    private String buildUserPrompt(String userText) {
+-        StringBuilder prompt = new StringBuilder();
++    private SageBrainRequestPolicy.Prompt buildUserPrompt(String userText) {
+         SageTonePolicy.Tone tone;
+         try { tone = SageTonePolicy.Tone.valueOf(preferences.getString("owner_tone", "CLEAN")); }
+         catch (RuntimeException ignored) { tone = SageTonePolicy.Tone.CLEAN; }
+-        prompt.append(SageTonePolicy.brainInstruction(tone)).append('\n');
+-        prompt.append(SageIntentCoordinator.promptContext(context, userText)).append('\n');
+-        String memories = memorySummary();
+-        if (!memories.isEmpty()) {
+-            prompt.append("Saved user notes: ").append(memories).append('\n');
+-        }
++        List<String> memories = SageMemoryStore.recallAll(context);
++        List<String> turns = new ArrayList<>();
+         synchronized (recentTurns) {
+-            if (!recentTurns.isEmpty()) {
+-                prompt.append("Recent conversation:\n");
+-                for (String turn : recentTurns) {
+-                    prompt.append(turn).append('\n');
+-                }
+-            }
++            turns.addAll(recentTurns);
+         }
+-        prompt.append("User said: ").append(limit(userText, 700)).append("\n/no_think");
+-        return prompt.toString();
++        return SageBrainRequestPolicy.compact(userText,SageTonePolicy.brainInstruction(tone),
++                turns,memories);
+     }
+ 
+     private String memorySummary() {
+@@ -1069,15 +1099,15 @@
+     }
+ 
+     private static native boolean nativeLoadModel(String path);
+-    private static native String nativeGenerate(String systemPrompt, String userPrompt,
+-                                                int maxTokens, boolean deterministic);
++    private static native String nativeGenerate(long requestId, String systemPrompt, String userPrompt,
++                                                 int maxTokens, boolean deterministic);
++    private static native void nativeCancelGeneration(long requestId);
+     private static native long nativeLastFirstTokenLatencyMs();
+     private static native long nativeLastGenerationDurationMs();
+     private static native long nativeLastPromptPrefillDurationMs();
+     private static native int nativeLastPromptTokenCount();
+     private static native int nativeLastGeneratedTokenCount();
+     private static native String nativeLastStage();
+-    private static native void nativeCancelGeneration();
+     private static native void nativeUnloadModel();
+     private static native String nativeLastError();
+ }
+diff -ruN a/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java b/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
+--- a/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java	2026-08-08 22:51:28.154623534 -0500
+@@ -0,0 +1,127 @@
++package com.pineapple.sage;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.Locale;
++import java.util.concurrent.atomic.AtomicLong;
++
++/** Request identity, immutable terminal state, and deterministic prompt relevance policy. */
++final class SageBrainRequestPolicy {
++    static final int SIMPLE_CHAR_BUDGET = 720;
++    static final int COMPLEX_CHAR_BUDGET = 2400;
++    private static final AtomicLong IDS = new AtomicLong(System.currentTimeMillis() << 10);
++
++    enum Terminal { ACTIVE, SUCCESS, ERROR, CANCELLED, TIMED_OUT }
++
++    static final class Lifecycle {
++        final long requestId = IDS.incrementAndGet();
++        final long generationId;
++        final long startedAtMs;
++        private Terminal terminal = Terminal.ACTIVE;
++        private long firstTokenAtMs = -1L;
++        private int generatedTokens;
++        private boolean watchdogActive = true;
++
++        Lifecycle(long generationId, long now) {
++            this.generationId = generationId;
++            this.startedAtMs = now;
++        }
++
++        synchronized boolean accepts(long request, long generation) {
++            return request == requestId && generation == generationId && terminal == Terminal.ACTIVE;
++        }
++
++        synchronized boolean token(long request, long generation, long now, int total) {
++            if (!accepts(request, generation) || total <= generatedTokens) return false;
++            if (firstTokenAtMs < 0L) firstTokenAtMs = now;
++            generatedTokens = total;
++            return true;
++        }
++
++        synchronized boolean finishSuccess(long request, long generation, int total) {
++            if (!accepts(request, generation) || total <= 0) return false;
++            generatedTokens = Math.max(generatedTokens, total);
++            terminal = Terminal.SUCCESS;
++            watchdogActive = false;
++            return true;
++        }
++
++        synchronized boolean finish(long request, long generation, Terminal value) {
++            if (!accepts(request, generation)) return false;
++            terminal = value;
++            watchdogActive = false;
++            return true;
++        }
++
++        synchronized long firstTokenLatencyMs() {
++            return firstTokenAtMs < 0L ? -1L : Math.max(0L, firstTokenAtMs - startedAtMs);
++        }
++        synchronized int generatedTokens() { return generatedTokens; }
++        synchronized Terminal terminal() { return terminal; }
++        synchronized boolean watchdogActive() { return watchdogActive; }
++    }
++
++    static final class Prompt {
++        final String text;
++        final int budget;
++        final boolean truncated;
++        final int selectedContext;
++        final int selectedMemories;
++        Prompt(String text, int budget, boolean truncated, int contexts, int memories) {
++            this.text=text; this.budget=budget; this.truncated=truncated;
++            this.selectedContext=contexts; this.selectedMemories=memories;
++        }
++    }
++
++    static Prompt compact(String user, String tone, List<String> context, List<String> memories) {
++        String request = clean(user);
++        boolean complex = requiresFullContext(request);
++        int budget = complex ? COMPLEX_CHAR_BUDGET : SIMPLE_CHAR_BUDGET;
++        StringBuilder out = new StringBuilder();
++        append(out, clean(tone), budget);
++        int selectedContext = appendRelevant(out, "Relevant context: ", request, context,
++                complex ? 4 : 1, budget);
++        int selectedMemories = appendRelevant(out, "Relevant memory: ", request, memories,
++                complex ? 4 : 1, budget);
++        String userLine = "User: " + request + "\n/no_think";
++        boolean truncated = out.length() + userLine.length() > budget;
++        if (truncated) out.setLength(Math.max(0, budget - userLine.length()));
++        out.append(userLine);
++        return new Prompt(out.toString(), budget, truncated, selectedContext, selectedMemories);
++    }
++
++    private static int appendRelevant(StringBuilder out, String label, String user,
++                                      List<String> values, int maximum, int budget) {
++        if (values == null || values.isEmpty()) return 0;
++        List<String> ranked = new ArrayList<>();
++        for (String value : values) if (relevant(user, value)) ranked.add(clean(value));
++        Collections.sort(ranked, (a,b) -> Integer.compare(score(user,b), score(user,a)));
++        int count=0;
++        for (String value : ranked) {
++            if (count >= maximum || value.isEmpty()) break;
++            String line=label + value + "\n";
++            if (out.length() + line.length() > budget) break;
++            out.append(line); count++;
++        }
++        return count;
++    }
++
++    private static boolean relevant(String user, String value) { return score(user,value) > 0; }
++    private static int score(String user, String value) {
++        String a=clean(user).toLowerCase(Locale.US), b=clean(value).toLowerCase(Locale.US);
++        int score=0;
++        for (String word : a.split("[^a-z0-9]+")) if (word.length() >= 4 && b.contains(word)) score++;
++        return score;
++    }
++    private static boolean requiresFullContext(String value) {
++        String v=value.toLowerCase(Locale.US);
++        return v.contains("based on our conversation") || v.contains("compare")
++                || v.contains("summarize") || v.contains("what did i") || v.contains("remember");
++    }
++    private static void append(StringBuilder out,String value,int budget) {
++        if (value.isEmpty()) return;
++        out.append(value,0,Math.min(value.length(),budget)).append('\n');
++    }
++    private static String clean(String value) { return value == null ? "" : value.trim().replaceAll("\\s+"," "); }
++}
+diff -ruN a/app/src/main/java/com/pineapple/sage/SageRepairManager.java b/app/src/main/java/com/pineapple/sage/SageRepairManager.java
+--- a/app/src/main/java/com/pineapple/sage/SageRepairManager.java	2026-08-08 22:53:14.990324118 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageRepairManager.java	2026-08-08 22:51:28.798621709 -0500
+@@ -69,7 +69,9 @@
+         write(jsonFile, packet.toString(2));
+         write(markdownFile, markdown);
+         write(logFile, logs);
+-        File zipFile = new File(directory, "Sage-1.27.0-repair-bundle.zip");
++        String installedVersion = context.getPackageManager()
++                .getPackageInfo(context.getPackageName(), 0).versionName;
++        File zipFile = new File(directory, "Sage-" + installedVersion + "-repair-bundle.zip");
+         zip(zipFile, jsonFile, markdownFile, logFile);
+         SageDiagnostics.appendEvent(
+                 context, "SELF REPAIR",
+diff -ruN a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-08 22:53:15.278323320 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-08 22:52:20.074477172 -0500
+@@ -1610,7 +1610,7 @@
+         brainInProgress = false;
+         ++brainRequestGeneration;
+         String nativeStage = brainManager.lastNativeStage();
+-        brainManager.cancelCurrentRequest();
++        if (!brainManager.cancelCurrentRequest()) return;
+         SageBrainHealth.cancelled(this, stage + "_timeout_at_" + nativeStage);
+         SageDiagnostics.recordError(this,
+                 "Sage Brain " + stage + " timed out after " + timeoutMs
+
