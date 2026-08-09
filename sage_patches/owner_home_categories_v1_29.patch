@@ -1,0 +1,671 @@
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -91,6 +91,8 @@
+     private View mainRoot;
+     private Button appearanceModeButton;
+     private Button overlayTimeoutButton;
++    private final ArrayList<LinearLayout> categoryPanels = new ArrayList<>();
++    private final ArrayList<Button> categoryButtons = new ArrayList<>();
+ 
+     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
+         @Override
+@@ -154,31 +156,37 @@
+         subtitle.setPadding(0, 0, 0, 16);
+         root.addView(subtitle, matchWrap());
+ 
++        LinearLayout voicePanel = categoryPanel("Voice and Wake controls");
++        LinearLayout brainMemoryPanel = categoryPanel("Brain and Memory controls");
++        LinearLayout createPanel = categoryPanel("Create and Discover controls");
++        LinearLayout toolsPanel = categoryPanel("Tools and Settings controls");
++        LinearLayout diagnosticsPanel = categoryPanel("Diagnostics and Repair controls");
++
+         TextView appearanceTitle = new TextView(this);
+         appearanceTitle.setText("Appearance");
+         appearanceTitle.setTextSize(23);
+         appearanceTitle.setPadding(4, 18, 4, 4);
+-        root.addView(appearanceTitle, spaced());
++        toolsPanel.addView(appearanceTitle, spaced());
+ 
+         appearanceModeButton = makeButton("");
+         appearanceModeButton.setOnClickListener(v -> cycleAppearanceMode());
+-        root.addView(appearanceModeButton, spacedSmall());
++        toolsPanel.addView(appearanceModeButton, spacedSmall());
+ 
+         Button chooseBackground = makeButton("Choose background image");
+         chooseBackground.setOnClickListener(v -> chooseBackgroundImage());
+-        root.addView(chooseBackground, spacedSmall());
++        toolsPanel.addView(chooseBackground, spacedSmall());
+ 
+         Button clearBackground = makeButton("Clear background image");
+         clearBackground.setOnClickListener(v -> {
+             SageAppearance.setBackground(this, null);
+             applyAppearance();
+         });
+-        root.addView(clearBackground, spacedSmall());
++        toolsPanel.addView(clearBackground, spacedSmall());
+ 
+         TextView intensityLabel = new TextView(this);
+         intensityLabel.setText("Background intensity");
+         intensityLabel.setTextSize(15);
+-        root.addView(intensityLabel, spacedSmall());
++        toolsPanel.addView(intensityLabel, spacedSmall());
+ 
+         SeekBar intensity = new SeekBar(this);
+         intensity.setMax(100);
+@@ -193,11 +201,11 @@
+             @Override public void onStartTrackingTouch(SeekBar bar) { }
+             @Override public void onStopTrackingTouch(SeekBar bar) { }
+         });
+-        root.addView(intensity, spacedSmall());
++        toolsPanel.addView(intensity, spacedSmall());
+ 
+         overlayTimeoutButton = makeButton("");
+         overlayTimeoutButton.setOnClickListener(v -> cycleOverlayTimeout());
+-        root.addView(overlayTimeoutButton, spacedSmall());
++        toolsPanel.addView(overlayTimeoutButton, spacedSmall());
+         refreshAppearanceLabels();
+ 
+         statusText = new TextView(this);
+@@ -215,11 +223,11 @@
+ 
+         wakeButton = makeButton("Start background listening");
+         wakeButton.setOnClickListener(v -> toggleListening());
+-        root.addView(wakeButton, spacedSmall());
++        voicePanel.addView(wakeButton, spacedSmall());
+ 
+         conversationModeButton = makeButton("");
+         conversationModeButton.setOnClickListener(v -> toggleConversationMode());
+-        root.addView(conversationModeButton, spacedSmall());
++        voicePanel.addView(conversationModeButton, spacedSmall());
+         refreshConversationModeButton();
+ 
+         TextView conversationModeHelp = new TextView(this);
+@@ -227,64 +235,64 @@
+         conversationModeHelp.setTextSize(14);
+         conversationModeHelp.setTextColor(Color.DKGRAY);
+         conversationModeHelp.setPadding(8, 2, 8, 6);
+-        root.addView(conversationModeHelp, matchWrap());
++        voicePanel.addView(conversationModeHelp, matchWrap());
+ 
+         TextView wakeProfilesTitle = new TextView(this);
+         wakeProfilesTitle.setText("Custom wake profiles");
+         wakeProfilesTitle.setTextSize(23);
+         wakeProfilesTitle.setTextColor(Color.rgb(31, 41, 55));
+         wakeProfilesTitle.setPadding(4, 18, 4, 4);
+-        root.addView(wakeProfilesTitle, spaced());
++        voicePanel.addView(wakeProfilesTitle, spaced());
+ 
+         TextView wakeProfilesHelp = new TextView(this);
+         wakeProfilesHelp.setText("Add a distinctive wake word or short phrase, then choose what it activates. A profile can open normal Sage, trigger Red Queen, open direct Sage Brain mode, or run any saved command.");
+         wakeProfilesHelp.setTextSize(15);
+         wakeProfilesHelp.setTextColor(Color.DKGRAY);
+         wakeProfilesHelp.setPadding(8, 2, 8, 8);
+-        root.addView(wakeProfilesHelp, matchWrap());
++        voicePanel.addView(wakeProfilesHelp, matchWrap());
+ 
+         wakeProfilePhrase = new EditText(this);
+         wakeProfilePhrase.setHint("Wake word or phrase, such as computer or red queen");
+         wakeProfilePhrase.setSingleLine(true);
+         wakeProfilePhrase.setTextSize(17);
+-        root.addView(wakeProfilePhrase, spacedSmall());
++        voicePanel.addView(wakeProfilePhrase, spacedSmall());
+ 
+         wakeProfileModeButton = makeButton("");
+         wakeProfileModeButton.setOnClickListener(v -> {
+             wakeProfileModeIndex = (wakeProfileModeIndex + 1) % WAKE_MODE_KEYS.length;
+             refreshWakeProfileMode();
+         });
+-        root.addView(wakeProfileModeButton, spacedSmall());
++        voicePanel.addView(wakeProfileModeButton, spacedSmall());
+ 
+         wakeProfileModeHelp = new TextView(this);
+         wakeProfileModeHelp.setTextSize(14);
+         wakeProfileModeHelp.setTextColor(Color.DKGRAY);
+         wakeProfileModeHelp.setPadding(8, 2, 8, 4);
+-        root.addView(wakeProfileModeHelp, matchWrap());
++        voicePanel.addView(wakeProfileModeHelp, matchWrap());
+ 
+         wakeProfileCommand = new EditText(this);
+         wakeProfileCommand.setHint("Command to run, such as open YouTube");
+         wakeProfileCommand.setSingleLine(false);
+         wakeProfileCommand.setTextSize(17);
+-        root.addView(wakeProfileCommand, spacedSmall());
++        voicePanel.addView(wakeProfileCommand, spacedSmall());
+ 
+         Button saveWakeProfile = makeButton("Save wake profile");
+         saveWakeProfile.setOnClickListener(v -> saveWakeProfile());
+-        root.addView(saveWakeProfile, spacedSmall());
++        voicePanel.addView(saveWakeProfile, spacedSmall());
+ 
+         Button removeWakeProfile = makeButton("Remove typed wake phrase");
+         removeWakeProfile.setOnClickListener(v -> removeWakeProfile());
+-        root.addView(removeWakeProfile, spacedSmall());
++        voicePanel.addView(removeWakeProfile, spacedSmall());
+ 
+         Button clearWakeProfiles = makeButton("Clear custom wake profiles");
+         clearWakeProfiles.setOnClickListener(v -> confirmClearWakeProfiles());
+-        root.addView(clearWakeProfiles, spacedSmall());
++        voicePanel.addView(clearWakeProfiles, spacedSmall());
+ 
+         wakeProfileSummary = new TextView(this);
+         wakeProfileSummary.setTextSize(15);
+         wakeProfileSummary.setTextColor(Color.rgb(55, 65, 81));
+         wakeProfileSummary.setPadding(8, 10, 8, 4);
+-        root.addView(wakeProfileSummary, matchWrap());
++        voicePanel.addView(wakeProfileSummary, matchWrap());
+         refreshWakeProfileMode();
+         refreshWakeProfileSummary();
+ 
+@@ -293,14 +301,14 @@
+         brainTitle.setTextSize(23);
+         brainTitle.setTextColor(Color.rgb(31, 41, 55));
+         brainTitle.setPadding(4, 18, 4, 4);
+-        root.addView(brainTitle, spaced());
++        brainMemoryPanel.addView(brainTitle, spaced());
+ 
+         TextView brainHelp = new TextView(this);
+         brainHelp.setText("Sage's fast built-in commands still run first. The optional local model handles natural questions and rephrases unmatched requests, then sends any tablet action back through Sage's safe command engine. It runs on this tablet without an account or API key.");
+         brainHelp.setTextSize(15);
+         brainHelp.setTextColor(Color.DKGRAY);
+         brainHelp.setPadding(8, 2, 8, 8);
+-        root.addView(brainHelp, matchWrap());
++        brainMemoryPanel.addView(brainHelp, matchWrap());
+ 
+         brainStatusText = new TextView(this);
+         brainStatusText.setTextSize(14);
+@@ -308,35 +316,35 @@
+         brainStatusText.setPadding(14, 14, 14, 14);
+         brainStatusText.setBackgroundColor(Color.rgb(236, 253, 245));
+         brainStatusText.setTextIsSelectable(true);
+-        root.addView(brainStatusText, matchWrap());
++        brainMemoryPanel.addView(brainStatusText, matchWrap());
+ 
+         Button downloadBrainModel = makeButton("Open verified model manager (Qwen Q4_K_M)");
+         downloadBrainModel.setOnClickListener(v -> openRecommendedBrainModel());
+-        root.addView(downloadBrainModel, spacedSmall());
++        brainMemoryPanel.addView(downloadBrainModel, spacedSmall());
+ 
+         Button chooseBrainModel = makeButton("Choose downloaded GGUF model");
+         chooseBrainModel.setOnClickListener(v -> chooseBrainModelFile());
+-        root.addView(chooseBrainModel, spacedSmall());
++        brainMemoryPanel.addView(chooseBrainModel, spacedSmall());
+ 
+         brainToggleButton = makeButton("");
+         brainToggleButton.setOnClickListener(v -> toggleBrain());
+-        root.addView(brainToggleButton, spacedSmall());
++        brainMemoryPanel.addView(brainToggleButton, spacedSmall());
+ 
+         Button testBrain = makeButton("Test Sage Brain");
+         testBrain.setOnClickListener(v ->
+                 startActivity(new Intent(this, SageBrainTestActivity.class)));
+-        root.addView(testBrain, spacedSmall());
++        brainMemoryPanel.addView(testBrain, spacedSmall());
+ 
+         Button removeBrain = makeButton("Remove local brain model");
+         removeBrain.setOnClickListener(v -> confirmRemoveBrainModel());
+-        root.addView(removeBrain, spacedSmall());
++        brainMemoryPanel.addView(removeBrain, spacedSmall());
+ 
+         TextView brainStorageHelp = new TextView(this);
+         brainStorageHelp.setText("The model manager downloads only after you press Download, resumes a partial file, shows progress, supports cancellation, checks storage, and requires the pinned byte size and SHA-256 before replacing the active model. Manual GGUF import remains available.");
+         brainStorageHelp.setTextSize(13);
+         brainStorageHelp.setTextColor(Color.DKGRAY);
+         brainStorageHelp.setPadding(8, 4, 8, 4);
+-        root.addView(brainStorageHelp, matchWrap());
++        brainMemoryPanel.addView(brainStorageHelp, matchWrap());
+         refreshBrainStatus();
+ 
+         TextView createTitle = new TextView(this);
+@@ -344,38 +352,40 @@
+         createTitle.setTextSize(23);
+         createTitle.setTextColor(Color.rgb(31, 41, 55));
+         createTitle.setPadding(4, 18, 4, 4);
+-        root.addView(createTitle, spaced());
++        createPanel.addView(createTitle, spaced());
+ 
+         TextView surpriseTitle = new TextView(this);
+         surpriseTitle.setText("Surprise Me");
+         surpriseTitle.setTextSize(18);
+         surpriseTitle.setTextColor(Color.rgb(31, 41, 55));
+         surpriseTitle.setPadding(8, 8, 8, 2);
+-        root.addView(surpriseTitle, matchWrap());
++        createPanel.addView(surpriseTitle, matchWrap());
+         LinearLayout surpriseRowOne = surpriseRow();
+         addSurpriseButton(surpriseRowOne,"Surprise Me","surprise me");
+         addSurpriseButton(surpriseRowOne,"YouTube","surprise me on YouTube");
+         addSurpriseButton(surpriseRowOne,"Weird","find me something weird");
+-        root.addView(surpriseRowOne,spacedSmall());
++        createPanel.addView(surpriseRowOne,spacedSmall());
+         LinearLayout surpriseRowTwo = surpriseRow();
+         addSurpriseButton(surpriseRowTwo,"Rabbit Hole","send me down a rabbit hole");
+         addSurpriseButton(surpriseRowTwo,"Another","another one");
+         addSurpriseButton(surpriseRowTwo,"Stop","stop");
+-        root.addView(surpriseRowTwo,spacedSmall());
++        createPanel.addView(surpriseRowTwo,spacedSmall());
+         surpriseSummary = new TextView(this);
+         surpriseSummary.setTextSize(14);
+         surpriseSummary.setTextColor(Color.rgb(55,65,81));
+         surpriseSummary.setPadding(12,8,12,10);
+         surpriseSummary.setContentDescription("Last surprise selection and route");
+-        root.addView(surpriseSummary,matchWrap());
++        createPanel.addView(surpriseSummary,matchWrap());
+         refreshSurpriseSummary();
++        addCreativeActions(createPanel);
++        addInstalledAdobeActions(createPanel);
+ 
+         TextView diagnosticsTitle = new TextView(this);
+         diagnosticsTitle.setText("Sage Diagnostics and Continuity");
+         diagnosticsTitle.setTextSize(23);
+         diagnosticsTitle.setTextColor(Color.rgb(31, 41, 55));
+         diagnosticsTitle.setPadding(4, 18, 4, 4);
+-        root.addView(diagnosticsTitle, spaced());
++        diagnosticsPanel.addView(diagnosticsTitle, spaced());
+ 
+         diagnosticsText = new TextView(this);
+         diagnosticsText.setTextSize(14);
+@@ -383,33 +393,37 @@
+         diagnosticsText.setPadding(14, 14, 14, 14);
+         diagnosticsText.setBackgroundColor(Color.rgb(224, 242, 254));
+         diagnosticsText.setTextIsSelectable(true);
+-        root.addView(diagnosticsText, matchWrap());
++        diagnosticsPanel.addView(diagnosticsText, matchWrap());
+ 
+         Button refreshDiagnostics = makeButton("Refresh diagnostics");
+         refreshDiagnostics.setOnClickListener(v -> refreshDiagnostics());
+-        root.addView(refreshDiagnostics, spacedSmall());
++        diagnosticsPanel.addView(refreshDiagnostics, spacedSmall());
+ 
+         Button copyDiagnostics = makeButton("Copy diagnostics + continuity report");
+         copyDiagnostics.setOnClickListener(v -> copyDiagnosticReport());
+-        root.addView(copyDiagnostics, spacedSmall());
++        diagnosticsPanel.addView(copyDiagnostics, spacedSmall());
+ 
+         Button shareDiagnostics = makeButton("Share diagnostics + continuity report");
+         shareDiagnostics.setOnClickListener(v -> shareDiagnosticReport());
+-        root.addView(shareDiagnostics, spacedSmall());
++        diagnosticsPanel.addView(shareDiagnostics, spacedSmall());
+ 
+         Button workbench = makeButton("Open Sage Workbench");
+         workbench.setOnClickListener(v -> startActivity(new Intent(this, SageWorkbenchActivity.class)));
+-        root.addView(workbench, spacedSmall());
++        toolsPanel.addView(workbench, spacedSmall());
++
++        Button toolbelt = makeButton("Open Sage Toolbelt");
++        toolbelt.setOnClickListener(v -> startActivity(new Intent(this, SageToolbeltActivity.class)));
++        toolsPanel.addView(toolbelt, spacedSmall());
+ 
+         Button diagnose = makeButton("Diagnose Sage / prepare repair bundle");
+         diagnose.setOnClickListener(v ->
+                 startActivity(new Intent(this, SageRepairActivity.class)));
+-        root.addView(diagnose, spacedSmall());
++        diagnosticsPanel.addView(diagnose, spacedSmall());
+ 
+         Button authorityDashboard = makeButton("Authority & Permissions");
+         authorityDashboard.setOnClickListener(v ->
+                 startActivity(new Intent(this, SageAuthorityActivity.class)));
+-        root.addView(authorityDashboard, spacedSmall());
++        toolsPanel.addView(authorityDashboard, spacedSmall());
+ 
+         Button clearDiagnostics = makeButton("Clear diagnostic history");
+         clearDiagnostics.setOnClickListener(v -> {
+@@ -417,48 +431,48 @@
+             refreshDiagnostics();
+             Toast.makeText(this, "Sage diagnostic history cleared.", Toast.LENGTH_LONG).show();
+         });
+-        root.addView(clearDiagnostics, spacedSmall());
++        diagnosticsPanel.addView(clearDiagnostics, spacedSmall());
+ 
+         Button accessibility = makeButton("Accessibility control");
+         accessibility.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)));
+-        root.addView(accessibility, spacedSmall());
++        toolsPanel.addView(accessibility, spacedSmall());
+ 
+         Button clearScreenNumbers = makeButton("Clear screen numbers");
+         clearScreenNumbers.setOnClickListener(v -> {
+             SageAccessibilityService.clearNumberOverlay("settings_manual_clear");
+             Toast.makeText(this, "Screen numbers cleared.", Toast.LENGTH_LONG).show();
+         });
+-        root.addView(clearScreenNumbers, spacedSmall());
++        toolsPanel.addView(clearScreenNumbers, spacedSmall());
+ 
+         Button notifications = makeButton("Notification access");
+         notifications.setOnClickListener(v -> startActivity(new Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)));
+-        root.addView(notifications, spacedSmall());
++        toolsPanel.addView(notifications, spacedSmall());
+ 
+         Button voiceSettings = makeButton("Choose Sage voice");
+         voiceSettings.setOnClickListener(v -> openVoiceSettings());
+-        root.addView(voiceSettings, spacedSmall());
++        voicePanel.addView(voiceSettings, spacedSmall());
+ 
+         TextView voiceHelp = new TextView(this);
+         voiceHelp.setText("Sage uses Android’s installed text-to-speech voices. Install the matching language voice if you want translated phrases pronounced aloud.");
+         voiceHelp.setTextSize(14);
+         voiceHelp.setTextColor(Color.DKGRAY);
+         voiceHelp.setPadding(8, 4, 8, 4);
+-        root.addView(voiceHelp, matchWrap());
++        voicePanel.addView(voiceHelp, matchWrap());
+ 
+         Button testVoice = makeButton("Test current Sage voice");
+         testVoice.setOnClickListener(v -> dispatchTypedCommand("say This is Sage's current voice."));
+-        root.addView(testVoice, spacedSmall());
++        voicePanel.addView(testVoice, spacedSmall());
+ 
+         Button installUpdate = makeButton("Install Sage update file");
+         installUpdate.setOnClickListener(v -> chooseUpdateFile());
+-        root.addView(installUpdate, spacedSmall());
++        toolsPanel.addView(installUpdate, spacedSmall());
+ 
+         TextView updateHelp = new TextView(this);
+         updateHelp.setText("Pick the newer Sage APK from Downloads. Android will show one final Install screen.");
+         updateHelp.setTextSize(14);
+         updateHelp.setTextColor(Color.DKGRAY);
+         updateHelp.setPadding(8, 4, 8, 4);
+-        root.addView(updateHelp, matchWrap());
++        toolsPanel.addView(updateHelp, matchWrap());
+ 
+         typedCommand = new EditText(this);
+         typedCommand.setHint("Type a command for testing");
+@@ -471,59 +485,62 @@
+         runTyped.setOnClickListener(v -> runTypedCommand());
+         root.addView(runTyped, spacedSmall());
+ 
++        addCategoryNavigation(root, voicePanel, brainMemoryPanel, createPanel,
++                toolsPanel, diagnosticsPanel);
++
+         TextView teachTitle = new TextView(this);
+         teachTitle.setText("Teach Sage");
+         teachTitle.setTextSize(23);
+         teachTitle.setTextColor(Color.rgb(31, 41, 55));
+         teachTitle.setPadding(4, 18, 4, 4);
+-        root.addView(teachTitle, spaced());
++        brainMemoryPanel.addView(teachTitle, spaced());
+ 
+         TextView teachHelp = new TextView(this);
+         teachHelp.setText("Say “Sage, remember this” and answer her two questions, or say the whole lesson: “Sage, when I say movie time, it means open YouTube.” Lessons stay saved after restarts and updates.");
+         teachHelp.setTextSize(15);
+         teachHelp.setTextColor(Color.DKGRAY);
+         teachHelp.setPadding(8, 2, 8, 8);
+-        root.addView(teachHelp, matchWrap());
++        brainMemoryPanel.addView(teachHelp, matchWrap());
+ 
+         teachPhrase = new EditText(this);
+         teachPhrase.setHint("When I say…  example: movie time");
+         teachPhrase.setSingleLine(false);
+         teachPhrase.setTextSize(17);
+-        root.addView(teachPhrase, spacedSmall());
++        brainMemoryPanel.addView(teachPhrase, spacedSmall());
+ 
+         teachMeaning = new EditText(this);
+         teachMeaning.setHint("Sage should…  example: open YouTube");
+         teachMeaning.setSingleLine(false);
+         teachMeaning.setTextSize(17);
+-        root.addView(teachMeaning, spacedSmall());
++        brainMemoryPanel.addView(teachMeaning, spacedSmall());
+ 
+         Button teachButton = makeButton("Save this command");
+         teachButton.setOnClickListener(v -> teachSage());
+-        root.addView(teachButton, spacedSmall());
++        brainMemoryPanel.addView(teachButton, spacedSmall());
+ 
+         Button readLessonsButton = makeButton("Show what Sage learned");
+         readLessonsButton.setOnClickListener(v -> dispatchTypedCommand("what have I taught you"));
+-        root.addView(readLessonsButton, spacedSmall());
++        brainMemoryPanel.addView(readLessonsButton, spacedSmall());
+ 
+         memoryItem = new EditText(this);
+         memoryItem.setHint("Something Sage should remember");
+         memoryItem.setSingleLine(false);
+         memoryItem.setTextSize(17);
+-        root.addView(memoryItem, spaced());
++        brainMemoryPanel.addView(memoryItem, spaced());
+ 
+         Button rememberButton = makeButton("Add to Sage’s memory");
+         rememberButton.setOnClickListener(v -> addMemoryItem());
+-        root.addView(rememberButton, spacedSmall());
++        brainMemoryPanel.addView(rememberButton, spacedSmall());
+ 
+         Button readMemoryButton = makeButton("Read Sage’s memory");
+         readMemoryButton.setOnClickListener(v -> dispatchTypedCommand("memory"));
+-        root.addView(readMemoryButton, spacedSmall());
++        brainMemoryPanel.addView(readMemoryButton, spacedSmall());
+ 
+         teachingSummary = new TextView(this);
+         teachingSummary.setTextSize(15);
+         teachingSummary.setTextColor(Color.rgb(55, 65, 81));
+         teachingSummary.setPadding(8, 10, 8, 4);
+-        root.addView(teachingSummary, matchWrap());
++        brainMemoryPanel.addView(teachingSummary, matchWrap());
+         refreshTeachingSummary();
+ 
+         TextView voiceResponseTitle = new TextView(this);
+@@ -531,39 +548,39 @@
+         voiceResponseTitle.setTextSize(23);
+         voiceResponseTitle.setTextColor(Color.rgb(31, 41, 55));
+         voiceResponseTitle.setPadding(4, 18, 4, 4);
+-        root.addView(voiceResponseTitle, spaced());
++        voicePanel.addView(voiceResponseTitle, spaced());
+ 
+         TextView voiceResponseHelp = new TextView(this);
+         voiceResponseHelp.setText("Give the response a command phrase, then choose an audio or video file from Drive or this tablet. Sage plays only its audio and pauses her microphone until it finishes. Save the command without the wake word—for example, “red queen mode,” not “Sage red queen mode.”");
+         voiceResponseHelp.setTextSize(15);
+         voiceResponseHelp.setTextColor(Color.DKGRAY);
+         voiceResponseHelp.setPadding(8, 2, 8, 8);
+-        root.addView(voiceResponseHelp, matchWrap());
++        voicePanel.addView(voiceResponseHelp, matchWrap());
+ 
+         voiceResponsePhrase = new EditText(this);
+         voiceResponsePhrase.setHint("Command phrase");
+         voiceResponsePhrase.setText("red queen mode");
+         voiceResponsePhrase.setSingleLine(false);
+         voiceResponsePhrase.setTextSize(17);
+-        root.addView(voiceResponsePhrase, spacedSmall());
++        voicePanel.addView(voiceResponsePhrase, spacedSmall());
+ 
+         Button chooseVoiceResponse = makeButton("Choose audio/video response");
+         chooseVoiceResponse.setOnClickListener(v -> chooseVoiceResponseFile());
+-        root.addView(chooseVoiceResponse, spacedSmall());
++        voicePanel.addView(chooseVoiceResponse, spacedSmall());
+ 
+         Button testVoiceResponse = makeButton("Test saved voice response");
+         testVoiceResponse.setOnClickListener(v -> testVoiceResponse());
+-        root.addView(testVoiceResponse, spacedSmall());
++        voicePanel.addView(testVoiceResponse, spacedSmall());
+ 
+         Button clearVoiceResponses = makeButton("Clear custom voice responses");
+         clearVoiceResponses.setOnClickListener(v -> confirmClearVoiceResponses());
+-        root.addView(clearVoiceResponses, spacedSmall());
++        voicePanel.addView(clearVoiceResponses, spacedSmall());
+ 
+         voiceResponseSummary = new TextView(this);
+         voiceResponseSummary.setTextSize(15);
+         voiceResponseSummary.setTextColor(Color.rgb(55, 65, 81));
+         voiceResponseSummary.setPadding(8, 10, 8, 4);
+-        root.addView(voiceResponseSummary, matchWrap());
++        voicePanel.addView(voiceResponseSummary, matchWrap());
+         refreshVoiceResponseSummary();
+ 
+         Button translationCredit = makeButton("Powered by Google Translate");
+@@ -577,14 +594,14 @@
+                 Toast.makeText(this, "Android could not open the Google Translate information page.", Toast.LENGTH_LONG).show();
+             }
+         });
+-        root.addView(translationCredit, spaced());
++        voicePanel.addView(translationCredit, spaced());
+ 
+         TextView translationDisclaimer = new TextView(this);
+         translationDisclaimer.setText("Translations are automatic and may be inaccurate. Google does not guarantee their accuracy, reliability, merchantability, fitness for a particular purpose, or noninfringement.");
+         translationDisclaimer.setTextSize(12);
+         translationDisclaimer.setTextColor(Color.DKGRAY);
+         translationDisclaimer.setPadding(8, 2, 8, 4);
+-        root.addView(translationDisclaimer, matchWrap());
++        voicePanel.addView(translationDisclaimer, matchWrap());
+ 
+         conversationText = new TextView(this);
+         conversationText.setText("Natural conversation is the default: say Sage, feel the short wake vibration if this tablet supports it, wait for Yes, then speak. The command microphone now opens shortly after Sage finishes instead of waiting several seconds. After Sage answers, she opens one follow-up turn without requiring her name again. If nobody speaks, that turn closes and the quiet offline wake listener waits for Sage—there is no automatic beep loop.\n\nSage Brain is optional. Built-in commands remain fast; the local model answers open-ended questions and interprets unfamiliar wording. It cannot repair audio Android never transcribed, so Diagnostics now shows the last time the wake word was actually detected.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nThe green microphone privacy dot can remain visible while the quiet wake-word listener is active. Android command dictation should open only for an expected conversation turn.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
+@@ -592,7 +609,7 @@
+         conversationText.setTextColor(Color.rgb(31, 41, 55));
+         conversationText.setPadding(14, 18, 14, 24);
+         conversationText.setTextIsSelectable(true);
+-        root.addView(conversationText, spaced());
++        voicePanel.addView(conversationText, spaced());
+ 
+         SageAppearance.apply(this, scroll, root);
+         return scroll;
+@@ -1311,6 +1328,156 @@
+         }
+     }
+ 
++    private LinearLayout categoryPanel(String title) {
++        LinearLayout panel = new LinearLayout(this);
++        panel.setOrientation(LinearLayout.VERTICAL);
++        panel.setPadding(dp(4), dp(8), dp(4), dp(18));
++        panel.setVisibility(View.GONE);
++        panel.setContentDescription(title);
++        TextView heading = new TextView(this);
++        heading.setText(title);
++        heading.setTextSize(25);
++        heading.setTextColor(Color.rgb(31, 41, 55));
++        heading.setPadding(dp(4), dp(14), dp(4), dp(4));
++        panel.addView(heading, matchWrap());
++        categoryPanels.add(panel);
++        return panel;
++    }
++
++    private void addCategoryNavigation(LinearLayout root, LinearLayout voicePanel,
++                                       LinearLayout brainMemoryPanel, LinearLayout createPanel,
++                                       LinearLayout toolsPanel, LinearLayout diagnosticsPanel) {
++        TextView heading = new TextView(this);
++        heading.setText("Sage spaces");
++        heading.setTextSize(23);
++        heading.setTextColor(Color.rgb(31, 41, 55));
++        heading.setPadding(dp(4), dp(18), dp(4), dp(2));
++        root.addView(heading, spaced());
++
++        TextView help = new TextView(this);
++        help.setText("Talk and typed commands stay ready above. Open one working area below; unfinished tools stay hidden.");
++        help.setTextSize(14);
++        help.setTextColor(Color.DKGRAY);
++        help.setPadding(dp(8), dp(2), dp(8), dp(8));
++        root.addView(help, matchWrap());
++
++        LinearLayout first = surpriseRow();
++        addCategoryButton(first, "Voice & Wake", voicePanel);
++        addCategoryButton(first, "Brain & Memory", brainMemoryPanel);
++        root.addView(first, spacedSmall());
++
++        LinearLayout second = surpriseRow();
++        addCategoryButton(second, "Create & Discover", createPanel);
++        addCategoryButton(second, "Tools & Settings", toolsPanel);
++        root.addView(second, spacedSmall());
++
++        LinearLayout third = surpriseRow();
++        addCategoryButton(third, "Diagnostics & Repair", diagnosticsPanel);
++        root.addView(third, spacedSmall());
++
++        root.addView(voicePanel, matchWrap());
++        root.addView(brainMemoryPanel, matchWrap());
++        root.addView(createPanel, matchWrap());
++        root.addView(toolsPanel, matchWrap());
++        root.addView(diagnosticsPanel, matchWrap());
++    }
++
++    private void addCategoryButton(LinearLayout row, String label, LinearLayout panel) {
++        Button button = makeButton("▶ " + label);
++        button.setTag(label);
++        button.setContentDescription("Open " + label + " category");
++        button.setOnClickListener(v -> toggleCategory(button, panel));
++        categoryButtons.add(button);
++        row.addView(button, new LinearLayout.LayoutParams(
++                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++    }
++
++    private void toggleCategory(Button selectedButton, LinearLayout selectedPanel) {
++        boolean opening = selectedPanel.getVisibility() != View.VISIBLE;
++        for (LinearLayout panel : categoryPanels) panel.setVisibility(View.GONE);
++        for (Button button : categoryButtons) {
++            button.setText("▶ " + String.valueOf(button.getTag()));
++            button.setContentDescription("Open " + String.valueOf(button.getTag()) + " category");
++        }
++        if (opening) {
++            selectedPanel.setVisibility(View.VISIBLE);
++            selectedButton.setText("▼ " + String.valueOf(selectedButton.getTag()));
++            selectedButton.setContentDescription("Close " + String.valueOf(selectedButton.getTag()) + " category");
++            SageDiagnostics.appendEvent(this, "HOME CATEGORY",
++                    "opened=" + String.valueOf(selectedButton.getTag()));
++        }
++    }
++
++    private void addCreativeActions(LinearLayout panel) {
++        TextView title = new TextView(this);
++        title.setText("Creative Studio");
++        title.setTextSize(18);
++        title.setTextColor(Color.rgb(31, 41, 55));
++        title.setPadding(dp(8), dp(14), dp(8), dp(2));
++        panel.addView(title, matchWrap());
++        LinearLayout first = surpriseRow();
++        addCommandButton(first, "Video idea", "give me a video idea");
++        addCommandButton(first, "Image prompt", "give me an image prompt");
++        panel.addView(first, spacedSmall());
++        LinearLayout second = surpriseRow();
++        addCommandButton(second, "Music idea", "give me a music idea");
++        addCommandButton(second, "Project spark", "give me a project idea");
++        panel.addView(second, spacedSmall());
++    }
++
++    private void addCommandButton(LinearLayout row, String label, String command) {
++        Button button = makeButton(label);
++        button.setMinHeight(dp(44));
++        button.setContentDescription(label + " command");
++        button.setOnClickListener(v -> dispatchTypedCommand(command));
++        row.addView(button, new LinearLayout.LayoutParams(
++                0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
++    }
++
++    private void addInstalledAdobeActions(LinearLayout panel) {
++        ArrayList<SageTrustedAppRegistry.InstalledApp> launchable = new ArrayList<>();
++        for (SageTrustedAppRegistry.InstalledApp app
++                : SageTrustedAppRegistry.installedAdobeApps(this)) {
++            if (app.launch) launchable.add(app);
++        }
++        if (launchable.isEmpty()) return;
++
++        TextView title = new TextView(this);
++        title.setText("Installed Adobe apps");
++        title.setTextSize(18);
++        title.setTextColor(Color.rgb(31, 41, 55));
++        title.setPadding(dp(8), dp(14), dp(8), dp(2));
++        panel.addView(title, matchWrap());
++        for (SageTrustedAppRegistry.InstalledApp app : launchable) {
++            Button button = makeButton("Open " + app.label);
++            button.setContentDescription("Open installed Adobe app " + app.label);
++            button.setOnClickListener(v -> openInstalledAdobeApp(app));
++            panel.addView(button, spacedSmall());
++        }
++    }
++
++    private void openInstalledAdobeApp(SageTrustedAppRegistry.InstalledApp app) {
++        Intent launch = getPackageManager().getLaunchIntentForPackage(app.packageName);
++        if (launch == null) {
++            Toast.makeText(this, app.label + " is installed but cannot be opened.",
++                    Toast.LENGTH_LONG).show();
++            SageDiagnostics.appendEvent(this, "ADOBE LAUNCH",
++                    "verified=false package=" + app.packageName + " reason=no_launch_activity");
++            return;
++        }
++        try {
++            startActivity(launch);
++            SageDiagnostics.appendEvent(this, "ADOBE LAUNCH",
++                    "verified=true package=" + app.packageName);
++        } catch (RuntimeException error) {
++            Toast.makeText(this, "Android could not open " + app.label + ".",
++                    Toast.LENGTH_LONG).show();
++            SageDiagnostics.appendEvent(this, "ADOBE LAUNCH",
++                    "verified=false package=" + app.packageName
++                            + " error=" + error.getClass().getSimpleName());
++        }
++    }
++
+     private LinearLayout surpriseRow(){LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);return row;}
+     private void addSurpriseButton(LinearLayout row,String label,String command){Button button=makeButton(label);button.setMinHeight(dp(44));button.setContentDescription(label+" surprise discovery");button.setOnClickListener(v->{dispatchTypedCommand(command);button.postDelayed(this::refreshSurpriseSummary,1200L);});row.addView(button,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));}
+     private void refreshSurpriseSummary(){if(surpriseSummary!=null)surpriseSummary.setText(SageSurpriseManager.summary(this));}
