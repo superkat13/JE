@@ -2,6 +2,9 @@ name: Build verified Sage Commander 1.29 physical acceptance APK
 
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - agent/sage-1-29-recovery-20260801
 
 permissions:
   contents: read
@@ -156,7 +159,7 @@ jobs:
       - name: Verify, gate, and record the production APK
         run: |
           set -euo pipefail
-          APK=Sage-Commander-1.29.0-brain-route-repair-verified.apk
+          APK=Sage-Commander-1.29.0-noticeably-better-verified.apk
           SOURCE_APK=sage_build_129/app/build/outputs/apk/release/app-release.apk
           BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
           EXPECTED_CERT_SHA=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
@@ -243,11 +246,11 @@ jobs:
       - name: Upload verified physical acceptance bundle
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.29.0-brain-route-repair-verified
+          name: Sage-Commander-1.29.0-noticeably-better-verified
           if-no-files-found: error
           retention-days: 30
           path: |
-            Sage-Commander-1.29.0-brain-route-repair-verified.apk
+            Sage-Commander-1.29.0-noticeably-better-verified.apk
             APK_SHA256.txt
             APKSIGNER_FULL.txt
             SIGNER_COMPARISON.txt
