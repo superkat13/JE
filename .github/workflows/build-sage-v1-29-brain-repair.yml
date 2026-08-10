@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - agent/sage-1-29-recovery-20260801
+      - agent/sage-monster-mode-additive-20260810
 
 permissions:
   contents: read
@@ -31,6 +32,7 @@ jobs:
           python3 sage_tests/test_media_voice_repair_v1_29.py sage_build_129
           python3 sage_tests/test_external_action_lifecycle_v1_29.py sage_build_129
           python3 sage_tests/test_surprise_fun_reliability_v1_29.py sage_build_129
+          python3 sage_tests/test_monster_mode_v1_29.py sage_build_129
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
 
