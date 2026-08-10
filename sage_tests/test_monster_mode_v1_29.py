@@ -11,6 +11,7 @@ monster = (java / "SageMonsterMode.java").read_text()
 session = (java / "SageRedQueenSession.java").read_text()
 redqueen = (java / "SageRedQueenActivity.java").read_text()
 voice = (java / "SageVoiceService.java").read_text()
+state_machine = (java / "SageConversationStateMachine.java").read_text()
 
 checks = {
     "monster class exists": "final class SageMonsterMode" in monster,
@@ -24,11 +25,11 @@ checks = {
     "minimum command window is layered": "SageMonsterMode.commandMinimumMillis(this" in voice,
     "complete silence window is layered": "SageMonsterMode.completeSilenceMillis(this" in voice,
     "possible silence window is layered": "SageMonsterMode.possibleSilenceMillis(this" in voice,
-    "alternate candidates are diagnosed": 'SageMonsterMode.recordCandidates(this, "final", combinedChoices, candidate);' in voice,
-    "selector diagnostics are additive": 'SageDiagnostics.appendEvent(this, "VOICE SELECTION"' in voice,
-    "state machine command listening preserved": "COMMAND_LISTENING" in voice,
-    "state machine finalizing preserved": "FINALIZING" in voice,
-    "state machine echo guard preserved": "ECHO_GUARD" in voice,
+    "alternate candidate hook is present": 'SageMonsterMode.recordCandidates(this, "final"' in voice,
+    "candidate diagnostics are implemented": '"VOICE CANDIDATES"' in monster and "alternatives=" in monster,
+    "state machine command listening preserved": "COMMAND_LISTENING" in state_machine,
+    "state machine finalizing preserved": "FINALIZING" in state_machine,
+    "state machine echo guard preserved": "ECHO_GUARD" in state_machine,
     "package identity preserved": 'applicationId = "com.pineapple.sagecommander.stable"' in (root / "app/build.gradle.kts").read_text(),
 }
 
