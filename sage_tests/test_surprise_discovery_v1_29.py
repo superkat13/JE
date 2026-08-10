@@ -57,6 +57,6 @@ class SurpriseDiscoveryTests(unittest.TestCase):
             harness=pathlib.Path(__file__).with_name("SageSurpriseHarness.java")
             subprocess.run(["javac","-d",out,str(JAVA/"SageSurprisePolicy.java"),str(harness)],check=True)
             result=subprocess.run(["java","-cp",out,"com.pineapple.sage.SageSurpriseHarness"],check=True,text=True,capture_output=True)
-            self.assertIn("14/14 passed",result.stdout)
+            self.assertIn("16/16 passed",result.stdout)
 
 if __name__=="__main__":unittest.main(verbosity=2)

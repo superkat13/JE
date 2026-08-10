@@ -26,6 +26,8 @@ public final class SageSurpriseHarness {
         check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Sage Brain: ON","","com.pineapple.sagecommander.stable","","standard",true,true,false,false,false,true,true)),"Sage internal window excluded");
         check(!SageSurprisePolicy.eligible(new SageSurprisePolicy.Candidate("Stop","","youtube","","standard",true,true,false,false,false,true,true)),"Stop control excluded");
         check(SageSurprisePolicy.choose(Arrays.asList(new SageSurprisePolicy.Candidate("Unavailable","","youtube","","standard",false,false,true,false,false,true,true)),new HashSet<>(),1L,"youtube","")==null,"unsupported honest");
-        System.out.println("surprise harness: "+tests+"/14 passed");
+        check(SageSurprisePolicy.pendingProviderMatches("com.google.android.youtube","com.google.android.youtube"),"resolved provider accepted");
+        check(!SageSurprisePolicy.pendingProviderMatches("com.android.chrome","com.fake.browser"),"wrong provider rejected");
+        System.out.println("surprise harness: "+tests+"/16 passed");
     }
 }
