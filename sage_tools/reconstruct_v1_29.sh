@@ -17,4 +17,5 @@ patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/brain_route_repair_v1_29.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/professional_brain_repair_v1_29.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/physical_acceptance_cleanup_v1_29.patch
 patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/owner_home_categories_v1_29.patch
-echo "Reconstructed Sage Commander 1.29.0 with the compact owner home, physical Brain, and Surprise acceptance cleanup in $OUTPUT"
+python3 sage_patches/media_voice_repair_v1_29.py "$OUTPUT"
+echo "Reconstructed Sage Commander 1.29.0 with the physical Brain, media-safe YouTube boundary, installed Voice Studio, compact owner home, and Surprise acceptance cleanup in $OUTPUT"
