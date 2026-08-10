@@ -75,7 +75,8 @@ final class SageMonsterMode {
         if (enabled && !SageRedQueenSession.isUnlocked(context)) return false;
         SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         preferences.edit().putBoolean(ENABLED, enabled).apply();
-        SageDiagnostics.appendEvent(context, "MONSTER MODE", enabled ? "enabled by verified owner" : "disabled by owner");
+        SageDiagnostics.appendEvent(context, "MONSTER MODE",
+                enabled ? "enabled by verified owner" : "disabled by owner");
         SageRedQueenVault.appendAudit(context, "monster_mode", enabled ? "enabled" : "disabled");
         return true;
     }
@@ -123,8 +124,7 @@ final class SageMonsterMode {
 '''
     (java / "SageMonsterMode.java").write_text(monster)
 
-    # Owner authority: remove the arbitrary five-minute ceiling while preserving
-    # process-local authority and the existing device-lock check.
+    # Extend verified owner authority without changing its process-local nature.
     replace_once(
         session,
         "    private static final long SESSION_MS = 5L * 60L * 1000L;",
@@ -132,9 +132,8 @@ final class SageMonsterMode {
         "Red Queen owner-session duration",
     )
 
-    # App switching should not revoke verified owner authority. Process death still
-    # clears the process-local session and the existing isUnlocked() device-lock
-    # boundary remains intact.
+    # Normal app switching should not revoke owner authority. Explicit lock,
+    # process death/reboot, timeout, and the existing device-lock check remain.
     replace_once(
         redqueen,
         '''    @Override protected void onStop() {
@@ -160,7 +159,6 @@ final class SageMonsterMode {
         "Red Queen background persistence",
     )
 
-    # Make the activity inactivity timer agree with the process-local owner session.
     replace_once(
         redqueen,
         "    private static final long INACTIVITY_MS = 5L * 60L * 1000L;",
@@ -214,31 +212,14 @@ final class SageMonsterMode {
         "Monster Mode possible-silence window",
     )
 
-    # Preserve all final + partial alternatives and expose what the recognizer saw.
-    replace_once(
+    # Hook the existing candidate selector without assuming the local variable name
+    # used for the already-preserved final+partial alternatives.
+    regex_once(
         voice,
-        "                    String candidate = chooseBestCandidate(combinedChoices);",
-        '''                    String candidate = chooseBestCandidate(combinedChoices);
-                    SageMonsterMode.recordCandidates(this, "final", combinedChoices, candidate);''',
+        r'(?P<indent>\s*)String candidate = chooseBestCandidate\((?P<choices>[^;\n]+)\);',
+        r'\g<indent>String candidate = chooseBestCandidate(\g<choices>);\g<indent>SageMonsterMode.recordCandidates(this, "final", \g<choices>, candidate);',
         "Monster Mode alternate-candidate diagnostics",
     )
-
-    # Add richer diagnostics at the selector without changing its normal ranking or
-    # echo rejection. This deliberately avoids bypassing the stabilized echo guard.
-    marker = '''        return best;
-    }
-
-    private int scoreCommandCandidate(String choice, int index) {'''
-    replacement = '''        if (SageMonsterMode.isEnabled(this)) {
-            SageDiagnostics.appendEvent(this, "VOICE SELECTION",
-                    "selected=" + best + " score=" + bestScore
-                            + " follow_up=" + (commandEngine != null && commandEngine.isAwaitingFollowUp()));
-        }
-        return best;
-    }
-
-    private int scoreCommandCandidate(String choice, int index) {'''
-    replace_once(voice, marker, replacement, "Monster Mode voice selection diagnostics")
 
     print("Applied additive Sage 1.29 Monster Mode owner-control and voice-tolerance layer")
 
