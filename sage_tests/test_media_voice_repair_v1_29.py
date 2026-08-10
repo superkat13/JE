@@ -18,7 +18,7 @@ class MediaVoiceRepairTests(unittest.TestCase):
         for token in (
             "freshWakeAfterAction", "Result.media", "Result.quietMedia",
             "closeConversationWindow();", "commandEngine.cancelFollowUp();",
-            '"MEDIA BOUNDARY"', "fresh_wake_required=true",
+            '"ACTION BOUNDARY"', "fresh_wake_required=true",
         ):
             self.assertIn(token, engine + service)
         self.assertLess(service.index("if (result.freshWakeAfterAction)"),
@@ -44,7 +44,7 @@ class MediaVoiceRepairTests(unittest.TestCase):
         engine = self.source("SageCommandEngine.java")
         self.assertGreaterEqual(engine.count("Result.media(\"Opening YouTube."), 2)
         self.assertIn("asMediaBoundary(openUrl(url, \"Searching YouTube", engine)
-        self.assertIn("SageAccessibilityService.isMediaAppForeground()", engine)
+        self.assertIn('Result.quietExternal("Tapped " + target + ".")', engine)
         self.assertIn('Result.quietMedia("Playing.")', engine)
 
     def test_voice_studio_is_real_and_manifest_registered(self):
@@ -73,7 +73,7 @@ class MediaVoiceRepairTests(unittest.TestCase):
         self.assertIn('"TTS PROFILE"', service)
         self.assertIn('packet.put("tts_profile"', repair)
         self.assertIn("## Voice output", repair)
-        self.assertIn("Media boundary and playback diagnostics are present.", repair)
+        self.assertIn("Media and external-action boundary diagnostics are present.", repair)
 
 
 if __name__ == "__main__":

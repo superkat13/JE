@@ -29,6 +29,7 @@ jobs:
           python3 sage_tests/test_professional_brain_repair_v1_29.py sage_build_129
           python3 sage_tests/test_owner_home_categories_v1_29.py sage_build_129
           python3 sage_tests/test_media_voice_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_external_action_lifecycle_v1_29.py sage_build_129
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
 
@@ -115,4 +116,5 @@ jobs:
           set -euo pipefail
           gradle :app:compileReleaseJavaWithJavac --stacktrace
           gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
