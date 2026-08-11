@@ -1,0 +1,159 @@
+name: Verify Sage Red Queen capability pass
+
+on:
+  push:
+    branches:
+      - sage-red-queen-capability-pass-20260811
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct Sage and run every 1.29 regression
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129
+          for test_file in sage_tests/test_*_v1_29.py; do
+            echo "=== $test_file ==="
+            python3 "$test_file" sage_build_129
+          done
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py
+          python3 -m unittest -v sage_forge.tests.test_forge
+
+      - name: Run inherited regression suite
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_28.sh sage_build_128
+          for test_file in \
+            sage_tests/test_stabilization_v1_21.py \
+            sage_tests/test_android_compat_v1_21.py \
+            sage_tests/test_brain_watchdog_v1_22.py \
+            sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+            sage_tests/test_wake_profiles_compile_repair_v1_23.py \
+            sage_tests/test_continuity_report_v1_24.py \
+            sage_tests/test_number_overlay_release_v1_24_1.py \
+            sage_tests/test_sage_release_v1_24_2.py \
+            sage_tests/test_self_repair_v1_25.py \
+            sage_tests/test_workbench_v1_25.py \
+            sage_tests/test_sage_forge_v1_25.py \
+            sage_tests/test_reliability_toolbelt_v1_26.py \
+            sage_tests/test_continuity_finish_v1_26.py \
+            sage_tests/test_intelligence_memory_v1_27.py \
+            sage_tests/test_living_sage_v1_28.py \
+            sage_tests/test_red_queen_v1_28.py \
+            sage_tests/test_orchestrator_registry_v1_28.py \
+            sage_tests/test_package_file_labs_v1_28.py \
+            sage_tests/test_network_operations_v1_28.py \
+            sage_tests/test_automation_v1_28.py; do
+            python3 "$test_file" sage_build_128
+          done
+          python3 sage_tests/test_public_disclosure_v1_27.py
+
+      - name: Prove deterministic reconstruction
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129_second
+          diff -qr --exclude=build --exclude=.gradle sage_build_129/app/src sage_build_129_second/app/src
+          cmp sage_build_129/app/build.gradle.kts sage_build_129_second/app/build.gradle.kts
+          python3 sage_tests/test_red_queen_consolidation_v1_29.py sage_build_129_second
+          python3 sage_tests/test_red_queen_forensic_console_v1_29.py sage_build_129_second
+          python3 sage_tests/test_public_web_voice_owner_repair_v1_29.py sage_build_129_second
+          python3 sage_tests/test_background_survival_v1_29.py sage_build_129_second
+          python3 sage_tests/test_owner_conversation_finish_v1_29.py sage_build_129_second
+
+      - name: Add exact pinned native Brain and offline wake model
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_129/third_party/llama.cpp
+          git -C sage_build_129/third_party/llama.cpp init
+          git -C sage_build_129/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_129/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_129/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build_129/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          mkdir -p /tmp/sage-vosk-129 sage_build_129/app/src/main/assets
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-129.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-129.zip -d /tmp/sage-vosk-129
+          mv /tmp/sage-vosk-129/vosk-model-small-en-us-0.15 sage_build_129/app/src/main/assets/model-en-us
+          printf 'sage-v1.29.0-red-queen-capability\n' > sage_build_129/app/src/main/assets/model-en-us/uuid
+          test -s sage_build_129/app/src/main/assets/model-en-us/am/final.mdl
+          mkdir -p sage_build_129_second/third_party sage_build_129_second/app/src/main/assets
+          cp -a sage_build_129/third_party/llama.cpp sage_build_129_second/third_party/llama.cpp
+          cp -a sage_build_129/app/src/main/assets/model-en-us sage_build_129_second/app/src/main/assets/model-en-us
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Verify permanent Sage signer
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          ACTUAL="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Install exact Android compile toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile test and lint first reconstruction
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Compile test and lint second reconstruction
+        working-directory: sage_build_129_second
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Assemble and verify capability candidate
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-1.29-red-queen-capability-apksigner.txt
+          EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-1.29-red-queen-capability-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL" = "$EXPECTED"
+          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-1.29-wake-asset.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-1.29-native-brain.txt
+          sha256sum "$APK" | tee ../Sage-Commander-1.29.0-red-queen-capability.sha256
+          cp "$APK" ../Sage-Commander-1.29.0-red-queen-capability.apk
+
+      - name: Upload capability candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.29.0-red-queen-capability
+          path: |
+            Sage-Commander-1.29.0-red-queen-capability.apk
+            Sage-Commander-1.29.0-red-queen-capability.sha256
+            sage-1.29-red-queen-capability-apksigner.txt
+            sage-1.29-wake-asset.txt
+            sage-1.29-native-brain.txt
+          if-no-files-found: error
+          retention-days: 30
