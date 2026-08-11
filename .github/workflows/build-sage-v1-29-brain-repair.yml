@@ -37,6 +37,7 @@ jobs:
           python3 sage_tests/test_monster_mode_v1_29.py sage_build_129
           python3 sage_tests/test_one_sage_routing_v1_29.py sage_build_129
           python3 sage_tests/test_easter_egg_personality_v1_29.py sage_build_129
+          python3 sage_tests/test_voice_tolerance_v1_29.py sage_build_129
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
 
