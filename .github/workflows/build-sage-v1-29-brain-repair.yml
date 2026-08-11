@@ -40,6 +40,7 @@ jobs:
           python3 sage_tests/test_voice_tolerance_v1_29.py sage_build_129
           python3 sage_tests/test_internal_specialist_routing_v1_29.py sage_build_129
           python3 sage_tests/test_owner_authority_cleanup_v1_29.py sage_build_129
+          python3 sage_tests/test_red_queen_entry_v1_29.py sage_build_129
           python3 -m py_compile sage_patches/*.py sage_tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge
 
