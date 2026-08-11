@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Additive owner-control Monster Mode for Sage 1.29.
+"""Additive owner-experience layer for Sage 1.29.
 
-This patch deliberately layers on top of the verified 1.29 reconstruction. It does
-not replace the speech state machine, command router, Brain, Red Queen vault, or
-existing capability registry.
+This began as the bounded Monster Mode experiment. The useful pieces now become
+normal Sage behavior so the owner does not have to select another Sage. Red Queen
+remains the distinct hidden elevated workspace. The stabilized speech state machine,
+Brain, router, vault, capability registry, package identity, and signer are preserved.
 """
 
 from pathlib import Path
@@ -38,64 +39,38 @@ def main() -> None:
     redqueen = java / "SageRedQueenActivity.java"
 
     if not voice.is_file() or not session.is_file() or not redqueen.is_file():
-        raise SystemExit("Monster Mode requires the reconstructed Sage 1.29 voice and Red Queen sources")
+        raise SystemExit("Owner experience layer requires Sage 1.29 voice and Red Queen sources")
 
-    monster = r'''package com.pineapple.sage;
+    owner_experience = r'''package com.pineapple.sage;
 
 import android.content.Context;
-import android.content.SharedPreferences;
 
 import java.util.ArrayList;
 
 /**
- * Additive owner-control profile. Monster Mode never grants Android permissions or
- * executable authority by itself; it only relaxes Sage-owned convenience limits
- * while a verified Red Queen owner session is active.
+ * Normal Sage owner experience.
+ *
+ * These helpers only relax Sage-owned recognition timing and improve diagnostics.
+ * They grant no Android permission, root privilege, Red Queen authority, or
+ * executable capability. Consequence boundaries remain in their existing layers.
  */
-final class SageMonsterMode {
-    private static final String PREFS = "sage_monster_mode";
-    private static final String ENABLED = "enabled";
+final class SageOwnerExperience {
+    private SageOwnerExperience() {}
 
-    private SageMonsterMode() {}
-
-    static boolean isEnabled(Context context) {
-        return context != null
-                && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                        .getBoolean(ENABLED, false)
-                && SageRedQueenSession.isUnlocked(context);
+    static long commandMinimumMillis(long normal) {
+        return Math.max(normal, 1700L);
     }
 
-    static boolean isStoredEnabled(Context context) {
-        return context != null
-                && context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
-                        .getBoolean(ENABLED, false);
+    static long completeSilenceMillis(long normal) {
+        return Math.max(normal, 1550L);
     }
 
-    static boolean setEnabled(Context context, boolean enabled) {
-        if (enabled && !SageRedQueenSession.isUnlocked(context)) return false;
-        SharedPreferences preferences = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE);
-        preferences.edit().putBoolean(ENABLED, enabled).apply();
-        SageDiagnostics.appendEvent(context, "MONSTER MODE",
-                enabled ? "enabled by verified owner" : "disabled by owner");
-        SageRedQueenVault.appendAudit(context, "monster_mode", enabled ? "enabled" : "disabled");
-        return true;
-    }
-
-    static long commandMinimumMillis(Context context, long normal) {
-        return isEnabled(context) ? Math.max(normal, 1700L) : normal;
-    }
-
-    static long completeSilenceMillis(Context context, long normal) {
-        return isEnabled(context) ? Math.max(normal, 1550L) : normal;
-    }
-
-    static long possibleSilenceMillis(Context context, long normal) {
-        return isEnabled(context) ? Math.max(normal, 1050L) : normal;
+    static long possibleSilenceMillis(long normal) {
+        return Math.max(normal, 1050L);
     }
 
     static void recordCandidates(Context context, String stage,
                                  ArrayList<String> choices, String selected) {
-        if (!isEnabled(context)) return;
         StringBuilder detail = new StringBuilder();
         detail.append("stage=").append(clean(stage));
         detail.append(" selected=").append(clean(selected));
@@ -122,9 +97,10 @@ final class SageMonsterMode {
     }
 }
 '''
-    (java / "SageMonsterMode.java").write_text(monster)
+    (java / "SageOwnerExperience.java").write_text(owner_experience)
 
-    # Extend verified owner authority without changing its process-local nature.
+    # Red Queen remains special, but one successful owner authentication should
+    # remain useful while moving through its workspace.
     replace_once(
         session,
         "    private static final long SESSION_MS = 5L * 60L * 1000L;",
@@ -132,8 +108,6 @@ final class SageMonsterMode {
         "Red Queen owner-session duration",
     )
 
-    # Normal app switching should not revoke owner authority. Explicit lock,
-    # process death/reboot, timeout, and the existing device-lock check remain.
     replace_once(
         redqueen,
         '''    @Override protected void onStop() {
@@ -166,62 +140,37 @@ final class SageMonsterMode {
         "Red Queen workspace inactivity duration",
     )
 
-    replace_once(
-        redqueen,
-        '''        root.addView(label("RED QUEEN MODE", 30, Color.rgb(255, 60, 75)));
-        root.addView(label("Sage under verified owner authority. Android permissions and each sensitive operation remain separately controlled.",
-                15, Color.LTGRAY));''',
-        '''        root.addView(label("RED QUEEN MODE", 30, Color.rgb(255, 60, 75)));
-        root.addView(label("Sage under verified owner authority. Android permissions and irreversible external actions keep their real platform boundary; Sage-owned convenience limits can be relaxed here.",
-                15, Color.LTGRAY));
-        Button monster = button(SageMonsterMode.isStoredEnabled(this)
-                ? "Monster Mode: ON" : "Monster Mode: OFF");
-        monster.setOnClickListener(v -> {
-            boolean next = !SageMonsterMode.isStoredEnabled(this);
-            if (SageMonsterMode.setEnabled(this, next)) {
-                Toast.makeText(this, next
-                        ? "Monster Mode enabled. Sage has more room to breathe."
-                        : "Monster Mode disabled.", Toast.LENGTH_LONG).show();
-                showWorkspace();
-            } else {
-                Toast.makeText(this, "Authenticate owner before enabling Monster Mode.",
-                        Toast.LENGTH_LONG).show();
-            }
-        });
-        root.addView(monster);''',
-        "Monster Mode owner control",
-    )
-
-    # Speech tolerance is conditional. Normal Sage keeps the exact verified values.
+    # Normal Sage gets the more forgiving recognition windows. This is additive:
+    # the state machine, stale-callback gate, final latch, echo guard, and media
+    # authorization policy remain untouched.
     regex_once(
         voice,
         r'recognizerIntent\.putExtra\(RecognizerIntent\.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS,\s*([0-9]+L)\);',
-        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, SageMonsterMode.commandMinimumMillis(this, \1));',
-        "Monster Mode minimum command window",
+        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, SageOwnerExperience.commandMinimumMillis(\1));',
+        "normal Sage minimum command window",
     )
     regex_once(
         voice,
         r'recognizerIntent\.putExtra\(RecognizerIntent\.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS,\s*([0-9]+L)\);',
-        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SageMonsterMode.completeSilenceMillis(this, \1));',
-        "Monster Mode complete-silence window",
+        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, SageOwnerExperience.completeSilenceMillis(\1));',
+        "normal Sage complete-silence window",
     )
     regex_once(
         voice,
         r'recognizerIntent\.putExtra\(RecognizerIntent\.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS,\s*([0-9]+L)\);',
-        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SageMonsterMode.possibleSilenceMillis(this, \1));',
-        "Monster Mode possible-silence window",
+        r'recognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, SageOwnerExperience.possibleSilenceMillis(\1));',
+        "normal Sage possible-silence window",
     )
 
-    # Hook the existing candidate selector without assuming the local variable name
-    # used for the already-preserved final+partial alternatives.
+    # Keep every existing final+partial alternative and expose what Android heard.
     regex_once(
         voice,
         r'(?P<indent>\s*)String candidate = chooseBestCandidate\((?P<choices>[^;\n]+)\);',
-        r'\g<indent>String candidate = chooseBestCandidate(\g<choices>);\g<indent>SageMonsterMode.recordCandidates(this, "final", \g<choices>, candidate);',
-        "Monster Mode alternate-candidate diagnostics",
+        r'\g<indent>String candidate = chooseBestCandidate(\g<choices>);\g<indent>SageOwnerExperience.recordCandidates(this, "final", \g<choices>, candidate);',
+        "normal Sage alternate-candidate diagnostics",
     )
 
-    print("Applied additive Sage 1.29 Monster Mode owner-control and voice-tolerance layer")
+    print("Applied additive Sage 1.29 normal-owner experience and Red Queen session usability layer")
 
 
 if __name__ == "__main__":
