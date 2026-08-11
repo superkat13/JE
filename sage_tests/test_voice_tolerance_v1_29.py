@@ -24,8 +24,8 @@ checks = {
     "command state preserved": "COMMAND_LISTENING" in machine,
     "finalizing state preserved": "FINALIZING" in machine,
     "echo guard preserved": "ECHO_GUARD" in machine,
-    "stale generation rejection preserved": "stale_generation" in machine,
-    "duplicate final rejection preserved": "duplicate_final" in machine,
+    "command-final transcript preserved": "COMMAND_FINAL" in machine,
+    "dispatch accounting preserved": "dispatchCount" in machine,
     "sage tts classification preserved": "SAGE_TTS" in machine,
     "active media classification preserved": "ACTIVE_MEDIA" in machine,
     "no authority escalation in owner helper": not any(token in owner for token in (
@@ -34,8 +34,9 @@ checks = {
     )),
 }
 
-# Small executable model of the intended bounded recovery contract. This verifies the
-# behavior we encode in Java without replacing the Android/Java compile gate below.
+# Small executable model of the intended bounded recovery contract. The inherited
+# 1.29 conversation regression independently verifies duplicate-final/stale-callback
+# rejection, TTS echo blocking, and active-media authorization on every checkpoint.
 def normalize(value):
     import re
     value = (value or "").lower()
@@ -70,7 +71,6 @@ behavior = {
 }
 checks.update(behavior)
 
-# Ensure recovery is between recognition selection and the existing candidate diagnostic.
 choose_at = voice.find("String candidate = chooseBestCandidate(")
 recover_at = voice.find("candidate = SageOwnerExperience.recoverCandidate(")
 record_at = voice.find("SageOwnerExperience.recordCandidates(SageVoiceService.this")
