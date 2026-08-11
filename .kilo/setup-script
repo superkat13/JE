@@ -1,0 +1,26 @@
+#!/bin/sh
+set -eu
+
+cd "$WORKTREE_PATH"
+
+echo "Sage Kilo worktree preflight"
+echo "Worktree: $WORKTREE_PATH"
+echo "Repository: $REPO_PATH"
+echo "Branch: $(git branch --show-current)"
+echo "Head: $(git rev-parse HEAD)"
+
+# Refuse to proceed if sensitive signing material is accidentally staged in this worktree.
+if git diff --cached --name-only | grep -Eq '(^|/)sage_signing/|\.(keystore|jks|p12|pfx)$'; then
+  echo "ERROR: sensitive signing material is staged. Remove it before agent work." >&2
+  exit 1
+fi
+
+# Confirm the preserved Sage reconstruction entry point exists.
+test -f sage_tools/reconstruct_v1_29.sh
+test -f AGENTS.md
+test -f kilo.jsonc
+
+# Keep generated worktree state out of commits.
+mkdir -p .kilo
+
+echo "Preflight PASS. Agent is isolated and Sage execution contract is present."
