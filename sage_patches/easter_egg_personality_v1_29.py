@@ -179,7 +179,6 @@ public final class SageEasterEggStore {
 '''
     (java / "SageEasterEggStore.java").write_text(store_source)
 
-    # Fields: additive to existing custom voice-response editor.
     replace_once(
         main_activity,
         '''    private EditText voiceResponsePhrase;\n    private TextView voiceResponseSummary;''',
@@ -187,7 +186,6 @@ public final class SageEasterEggStore {
         "Easter egg UI fields",
     )
 
-    # UI is kept beside existing teaching/personality controls, before media replies.
     marker = '''        TextView voiceResponseTitle = new TextView(this);'''
     ui = '''        TextView easterEggTitle = new TextView(this);\n        easterEggTitle.setText("Sage Easter eggs");\n        easterEggTitle.setTextSize(23);\n        easterEggTitle.setTextColor(Color.rgb(31, 41, 55));\n        easterEggTitle.setPadding(4, 18, 4, 4);\n        root.addView(easterEggTitle, spaced());\n\n        TextView easterEggHelp = new TextView(this);\n        easterEggHelp.setText("Add a phrase and exactly what Sage should say back. This is normal Sage personality, not a mode or privileged action. Red Queen mode remains reserved for the elevated workspace.");\n        easterEggHelp.setTextSize(15);\n        easterEggHelp.setTextColor(Color.DKGRAY);\n        easterEggHelp.setPadding(8, 2, 8, 8);\n        root.addView(easterEggHelp, matchWrap());\n\n        easterEggPhrase = new EditText(this);\n        easterEggPhrase.setHint("Phrase, for example: who's the boss");\n        easterEggPhrase.setSingleLine(false);\n        easterEggPhrase.setTextSize(17);\n        root.addView(easterEggPhrase, spacedSmall());\n\n        easterEggReply = new EditText(this);\n        easterEggReply.setHint("Sage's exact reply");\n        easterEggReply.setSingleLine(false);\n        easterEggReply.setTextSize(17);\n        root.addView(easterEggReply, spacedSmall());\n\n        Button saveEasterEgg = makeButton("Save Easter egg");\n        saveEasterEgg.setOnClickListener(v -> saveEasterEgg());\n        root.addView(saveEasterEgg, spacedSmall());\n\n        Button removeEasterEgg = makeButton("Remove typed Easter egg");\n        removeEasterEgg.setOnClickListener(v -> removeEasterEgg());\n        root.addView(removeEasterEgg, spacedSmall());\n\n        easterEggSummary = new TextView(this);\n        easterEggSummary.setTextSize(15);\n        easterEggSummary.setTextColor(Color.rgb(55, 65, 81));\n        easterEggSummary.setPadding(8, 10, 8, 4);\n        root.addView(easterEggSummary, matchWrap());\n        refreshEasterEggSummary();\n\n'''
     replace_once(main_activity, marker, ui + marker, "Easter egg controls")
@@ -196,16 +194,6 @@ public final class SageEasterEggStore {
     methods = '''    private void saveEasterEgg() {\n        String problem = SageEasterEggStore.save(\n                this,\n                easterEggPhrase.getText().toString(),\n                easterEggReply.getText().toString()\n        );\n        if (!problem.isEmpty()) {\n            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();\n            return;\n        }\n        refreshEasterEggSummary();\n        Toast.makeText(this, "Easter egg saved.", Toast.LENGTH_LONG).show();\n    }\n\n    private void removeEasterEgg() {\n        if (!SageEasterEggStore.remove(this, easterEggPhrase.getText().toString())) {\n            Toast.makeText(this, "I could not find that saved Easter egg.", Toast.LENGTH_LONG).show();\n            return;\n        }\n        refreshEasterEggSummary();\n        Toast.makeText(this, "Easter egg removed.", Toast.LENGTH_LONG).show();\n    }\n\n    private void refreshEasterEggSummary() {\n        if (easterEggSummary == null) return;\n        java.util.List<SageEasterEggStore.Entry> entries = SageEasterEggStore.list(this);\n        StringBuilder text = new StringBuilder("Saved: ").append(entries.size())\n                .append(entries.size() == 1 ? " Easter egg" : " Easter eggs");\n        for (SageEasterEggStore.Entry entry : entries) {\n            text.append("\\n• ").append(entry.phrase).append(" → ").append(entry.response);\n        }\n        easterEggSummary.setText(text.toString());\n    }\n\n'''
     replace_once(main_activity, methods_marker, methods + methods_marker, "Easter egg UI methods")
 
-    # Keep summary current when normal Sage returns a line.
-    replace_once(
-        main_activity,
-        '''                refreshTeachingSummary();\n                refreshVoiceResponseSummary();''',
-        '''                refreshTeachingSummary();\n                refreshVoiceResponseSummary();\n                refreshEasterEggSummary();''',
-        "Easter egg summary refresh",
-    )
-
-    # Personality reply dispatch: media clips keep their existing precedence. Exact
-    # owner phrase replies happen before translation/commands and cannot execute code.
     voice_marker = '''        SageTranslationManager.Request translationRequest = translationManager.parse(cleaned);'''
     voice_insert = '''        SageEasterEggStore.Entry easterEgg = SageEasterEggStore.find(this, cleaned);\n        if (easterEgg != null) {\n            SageDiagnostics.appendEvent(this, "EASTER EGG", easterEgg.phrase);\n            broadcastLine("Sage", easterEgg.response);\n            speak(easterEgg.response);\n            return;\n        }\n'''
     replace_once(voice, voice_marker, voice_insert + voice_marker, "Easter egg voice dispatch")
