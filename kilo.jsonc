@@ -1,0 +1,43 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "permission": {
+    "read": {
+      "*": "allow",
+      "sage_signing/**": "deny",
+      "*.keystore": "deny",
+      "*.jks": "deny",
+      "*.p12": "deny",
+      "*.pfx": "deny",
+      ".env": "deny",
+      ".env.*": "deny",
+      ".env.example": "allow"
+    },
+    "edit": {
+      "*": "allow",
+      "sage_signing/**": "deny",
+      "*.keystore": "deny",
+      "*.jks": "deny",
+      "*.p12": "deny",
+      "*.pfx": "deny",
+      ".env": "deny",
+      ".env.*": "deny"
+    },
+    "bash": {
+      "*": "ask",
+      "git status *": "allow",
+      "git diff *": "allow",
+      "git log *": "allow",
+      "git show *": "allow",
+      "git rev-parse *": "allow",
+      "git branch *": "allow",
+      "python3 sage_tests/*": "allow",
+      "python3 -m unittest *": "allow",
+      "python3 -m py_compile *": "allow",
+      "bash sage_tools/reconstruct_*": "allow",
+      "grep *": "allow",
+      "find *": "allow",
+      "ls *": "allow"
+    },
+    "external_directory": "deny"
+  }
+}
