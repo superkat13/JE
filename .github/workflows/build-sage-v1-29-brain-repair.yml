@@ -171,6 +171,7 @@ jobs:
 
           # Compile the independent reconstruction too, including the exact same native Brain revision.
           rm -rf sage_build_129_second/third_party/llama.cpp
+          mkdir -p sage_build_129_second/third_party
           cp -a sage_build_129/third_party/llama.cpp sage_build_129_second/third_party/llama.cpp
           cd sage_build_129_second
           gradle :app:compileReleaseJavaWithJavac --stacktrace
