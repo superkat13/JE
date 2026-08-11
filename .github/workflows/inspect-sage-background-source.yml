@@ -1,0 +1,30 @@
+name: Inspect Sage background service source
+
+on:
+  push:
+    branches:
+      - sage-one-background-20260811
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct current Sage source
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129
+          mkdir -p background-inspection
+          cp sage_build_129/app/src/main/AndroidManifest.xml background-inspection/AndroidManifest.xml
+          cp sage_build_129/app/src/main/java/com/pineapple/sage/SageVoiceService.java background-inspection/SageVoiceService.java
+          cp sage_build_129/app/src/main/java/com/pineapple/sage/MainActivity.java background-inspection/MainActivity.java
+          grep -RniE 'startForeground|START_STICKY|stopSelf|stopService|FOREGROUND_SERVICE|foregroundServiceType|onTaskRemoved|onStartCommand|onDestroy' sage_build_129/app/src/main > background-inspection/background-grep.txt || true
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sage-background-source-inspection
+          path: background-inspection
+          if-no-files-found: error
