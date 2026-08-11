@@ -6,6 +6,7 @@ response for the phrase still plays first/alongside entry. Existing verified own
 authority is reused instead of forcing another credential prompt on every screen entry.
 """
 from pathlib import Path
+import re
 import sys
 
 
@@ -45,31 +46,42 @@ def main() -> None:
         "reuse existing Red Queen owner session",
     )
 
-    media_block = '''        SageMediaResponseStore.Entry voiceResponse =
-                SageMediaResponseStore.find(preferences, cleaned);
-        if (voiceResponse != null) {
-            playVoiceResponse(voiceResponse);
-            return;
-        }'''
-    replacement = '''        SageMediaResponseStore.Entry voiceResponse =
-                SageMediaResponseStore.find(preferences, cleaned);
-        if (isRedQueenSpokenTrigger(cleaned)) {
-            if (voiceResponse != null) {
-                playVoiceResponse(voiceResponse);
-            } else {
-                broadcastLine("Sage", "Well then. Off with the training wheels.");
-                speak("Well then. Off with the training wheels.");
-            }
-            SageDiagnostics.appendEvent(this, "RED QUEEN ENTRY",
-                    "spoken_trigger=true existing_session=" + SageRedQueenSession.isUnlocked(this));
-            handler.postDelayed(this::openRedQueenWorkspace, 250L);
-            return;
-        }
-        if (voiceResponse != null) {
-            playVoiceResponse(voiceResponse);
-            return;
-        }'''
-    replace_once(voice, media_block, replacement, "spoken Red Queen dispatch")
+    text = voice.read_text()
+    media_pattern = re.compile(
+        r'(?P<indent>^[ \t]*)SageMediaResponseStore\.Entry voiceResponse\s*=\s*'
+        r'SageMediaResponseStore\.find\(preferences,\s*cleaned\);\s*\n'
+        r'(?P=indent)if \(voiceResponse != null\) \{\s*\n'
+        r'(?P=indent)    playVoiceResponse\(voiceResponse\);\s*\n'
+        r'(?P=indent)    return;\s*\n'
+        r'(?P=indent)\}',
+        re.MULTILINE,
+    )
+    match = media_pattern.search(text)
+    if match is None:
+        raise SystemExit("spoken Red Queen dispatch: existing custom voice-response path not found")
+    indent = match.group("indent")
+    replacement = (
+        indent + "SageMediaResponseStore.Entry voiceResponse =\n"
+        + indent + "        SageMediaResponseStore.find(preferences, cleaned);\n"
+        + indent + "if (isRedQueenSpokenTrigger(cleaned)) {\n"
+        + indent + "    if (voiceResponse != null) {\n"
+        + indent + "        playVoiceResponse(voiceResponse);\n"
+        + indent + "    } else {\n"
+        + indent + "        broadcastLine(\"Sage\", \"Well then. Off with the training wheels.\");\n"
+        + indent + "        speak(\"Well then. Off with the training wheels.\");\n"
+        + indent + "    }\n"
+        + indent + "    SageDiagnostics.appendEvent(this, \"RED QUEEN ENTRY\",\n"
+        + indent + "            \"spoken_trigger=true existing_session=\" + SageRedQueenSession.isUnlocked(this));\n"
+        + indent + "    handler.postDelayed(this::openRedQueenWorkspace, 250L);\n"
+        + indent + "    return;\n"
+        + indent + "}\n"
+        + indent + "if (voiceResponse != null) {\n"
+        + indent + "    playVoiceResponse(voiceResponse);\n"
+        + indent + "    return;\n"
+        + indent + "}"
+    )
+    text = text[:match.start()] + replacement + text[match.end():]
+    voice.write_text(text)
 
     method_anchor = '''    private void playVoiceResponse(SageMediaResponseStore.Entry response) {'''
     methods = '''    private boolean isRedQueenSpokenTrigger(String spoken) {
