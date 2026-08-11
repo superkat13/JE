@@ -73,6 +73,10 @@ def main() -> None:
                 SageNetworkActivity.class);
         functional(root, "Black Box", "Diagnostics, repair evidence, and recovery tools",
                 SageRepairActivity.class);
+        functional(root, "Boot Evidence", "Read-only root and boot readiness evidence",
+                SagePrivilegeReadinessActivity.class);
+        functional(root, "Dell Evidence Import", "Interpret owner-collected ADB and boot evidence",
+                SageDellEvidenceActivity.class);
         functional(root, "Control Room", "Live Android authority and device-control status",
                 SageDeviceAuthorityActivity.class);
 
