@@ -127,7 +127,9 @@ jobs:
           APK="app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
           "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-1.29-apksigner.txt
-          grep -qi "Signer #1 certificate SHA-256 digest: 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" ../sage-1.29-apksigner.txt
+          EXPECTED="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          APK_CERT="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-1.29-apksigner.txt | head -n1)"
+          test "$APK_CERT" = "$EXPECTED"
           sha256sum "$APK" | tee ../Sage-Commander-1.29.0.sha256
           cp "$APK" ../Sage-Commander-1.29.0.apk
 
