@@ -37,9 +37,13 @@ def main() -> None:
     voice = java / "SageVoiceService.java"
     session = java / "SageRedQueenSession.java"
     redqueen = java / "SageRedQueenActivity.java"
+    brain = java / "SageBrainManager.java"
+    command = java / "SageCommandEngine.java"
+    tone_policy = java / "SageTonePolicy.java"
 
-    if not voice.is_file() or not session.is_file() or not redqueen.is_file():
-        raise SystemExit("Owner experience layer requires Sage 1.29 voice and Red Queen sources")
+    required = (voice, session, redqueen, brain, command, tone_policy)
+    if not all(path.is_file() for path in required):
+        raise SystemExit("Owner experience layer requires Sage 1.29 voice, tone, Brain, command, and Red Queen sources")
 
     owner_experience = r'''package com.pineapple.sage;
 
@@ -98,6 +102,35 @@ final class SageOwnerExperience {
 }
 '''
     (java / "SageOwnerExperience.java").write_text(owner_experience)
+
+    # Ordinary conversation is an owner personality preference, not an elevated
+    # authority mode. Existing saved choices still win and tone-down commands remain.
+    # Security, diagnostic, verification, emergency, and exact-error output keep the
+    # existing non-conversation formatting boundary in SageTonePolicy.
+    replace_once(
+        brain,
+        'preferences.getString("owner_tone", "CLEAN")',
+        'preferences.getString("owner_tone", "UNFILTERED")',
+        "Brain normal owner tone default",
+    )
+    replace_once(
+        brain,
+        "catch (RuntimeException ignored) { tone = SageTonePolicy.Tone.CLEAN; }",
+        "catch (RuntimeException ignored) { tone = SageTonePolicy.Tone.UNFILTERED; }",
+        "Brain normal owner tone fallback",
+    )
+    replace_once(
+        command,
+        'preferences.getString("owner_tone", "CLEAN")',
+        'preferences.getString("owner_tone", "UNFILTERED")',
+        "command normal owner tone default",
+    )
+    replace_once(
+        command,
+        "catch (RuntimeException ignored) { return SageTonePolicy.Tone.CLEAN; }",
+        "catch (RuntimeException ignored) { return SageTonePolicy.Tone.UNFILTERED; }",
+        "command normal owner tone fallback",
+    )
 
     # Red Queen remains special, but one successful owner authentication should
     # remain useful while moving through its workspace.
@@ -172,7 +205,7 @@ final class SageOwnerExperience {
         "normal Sage alternate-candidate diagnostics",
     )
 
-    print("Applied additive Sage 1.29 normal-owner experience and Red Queen session usability layer")
+    print("Applied additive Sage 1.29 normal-owner experience, natural language default, and Red Queen session usability layer")
 
 
 if __name__ == "__main__":
