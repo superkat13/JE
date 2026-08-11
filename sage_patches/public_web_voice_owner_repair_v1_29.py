@@ -39,8 +39,6 @@ def main() -> None:
         if not required.is_file():
             raise SystemExit(f"missing reconstructed source: {required.name}")
 
-    # Remove an app-created content-category URL ban from normal browser handoff. This does
-    # not broaden the network scanner or selected-host inspector in any way.
     replace_once(
         command,
         '''        if (lower.contains(".onion") || lower.contains("dark web") || lower.startsWith("tor:")) {\n            return new Result("I will not open onion or dark-web links.");\n        }\n''',
@@ -55,11 +53,10 @@ def main() -> None:
         "host public-web imports",
     )
 
-    # Generated v1.28 source intentionally uses compact formatting, so replace the complete
-    # confirm-method region structurally rather than depending on whitespace.
     host_confirm = r'''    private void confirm(){String target=ip.getText().toString().trim();
         if(looksLikePublicWebsite(target)){openPublicWebsite(target);return;}
         if(!SageNetworkScanner.isPrivate(target+"/32")){Toast.makeText(this,"That is not a saved private-LAN IP. For a public site, enter its website address instead.",Toast.LENGTH_LONG).show();return;}
+        if(SageOwnerAuthorityPolicy.verifiedOwnerMayProceedReadOnly(this,"selected private-LAN host inspection")){start(target);return;}
         SageConfirmation.require(this,"Inspect one saved private-LAN host",target,"INTERNET; exact host must already exist in Sage's saved snapshot","Private-LAN packets only","Cancel immediately; saved network snapshots are unchanged",()->start(target));}
     private boolean looksLikePublicWebsite(String value){String lower=value==null?"":value.trim().toLowerCase(java.util.Locale.US);if(lower.matches("[0-9.]+"))return false;return lower.startsWith("http://")||lower.startsWith("https://")||lower.startsWith("www.")||lower.contains(" dot com")||lower.contains(" dot org")||lower.contains(" dot net")||lower.contains(" dot io")||lower.contains(" dot ai")||lower.contains(" dot co")||lower.endsWith(".com")||lower.endsWith(".org")||lower.endsWith(".net")||lower.endsWith(".io")||lower.endsWith(".ai")||lower.endsWith(".co");}
     private void openPublicWebsite(String value){String url=value.trim().replace(" dot com",".com").replace(" dot org",".org").replace(" dot net",".net").replace(" dot io",".io").replace(" dot ai",".ai").replace(" dot co",".co");if(!url.matches("(?i)^https?://.*"))url="https://"+url;try{startActivity(new Intent(Intent.ACTION_VIEW,Uri.parse(url)));SageDiagnostics.appendEvent(this,"PUBLIC WEB ROUTE","host-inspector input handed to browser url="+url);status.setText("Opening public website in your browser");}catch(Exception error){Toast.makeText(this,"No browser could open that address.",Toast.LENGTH_LONG).show();SageDiagnostics.recordError(this,"Public website handoff failed: "+error);}}
