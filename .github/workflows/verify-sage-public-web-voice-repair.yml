@@ -118,3 +118,26 @@ jobs:
           gradle :app:externalNativeBuildRelease --stacktrace
           gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
+
+      - name: Assemble and verify Sage 1.29 release candidate
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-1.29-apksigner.txt
+          grep -qi "Signer #1 certificate SHA-256 digest: 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35" ../sage-1.29-apksigner.txt
+          sha256sum "$APK" | tee ../Sage-Commander-1.29.0.sha256
+          cp "$APK" ../Sage-Commander-1.29.0.apk
+
+      - name: Upload Sage 1.29 acceptance candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.29.0-acceptance-candidate
+          path: |
+            Sage-Commander-1.29.0.apk
+            Sage-Commander-1.29.0.sha256
+            sage-1.29-apksigner.txt
+          if-no-files-found: error
+          retention-days: 30
