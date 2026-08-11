@@ -15,7 +15,7 @@ permissions:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v4
 
@@ -129,6 +129,50 @@ jobs:
         working-directory: sage_build_129
         run: |
           set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Second full-system verification on finished reconstruction
+        run: |
+          set -euo pipefail
+          # Re-run every current 1.29 behavior gate against the independently reconstructed tree.
+          for test_file in \
+            sage_tests/test_brain_repair_v1_29.py \
+            sage_tests/test_conversation_media_echo_v1_29.py \
+            sage_tests/test_intent_semantic_actions_v1_29.py \
+            sage_tests/test_confirmation_tone_v1_29.py \
+            sage_tests/test_surprise_discovery_v1_29.py \
+            sage_tests/test_brain_route_repair_v1_29.py \
+            sage_tests/test_professional_brain_repair_v1_29.py \
+            sage_tests/test_owner_home_categories_v1_29.py \
+            sage_tests/test_media_voice_repair_v1_29.py \
+            sage_tests/test_external_action_lifecycle_v1_29.py \
+            sage_tests/test_surprise_fun_reliability_v1_29.py \
+            sage_tests/test_monster_mode_v1_29.py \
+            sage_tests/test_one_sage_routing_v1_29.py \
+            sage_tests/test_easter_egg_personality_v1_29.py \
+            sage_tests/test_voice_tolerance_v1_29.py \
+            sage_tests/test_internal_specialist_routing_v1_29.py \
+            sage_tests/test_owner_authority_cleanup_v1_29.py \
+            sage_tests/test_red_queen_entry_v1_29.py \
+            sage_tests/test_device_authority_v1_29.py \
+            sage_tests/test_privilege_readiness_v1_29.py \
+            sage_tests/test_dell_evidence_import_v1_29.py \
+            sage_tests/test_capability_snapshot_v1_29.py; do
+            python3 "$test_file" sage_build_129_second
+          done
+          python3 -m unittest -v sage_forge.tests.test_forge
+
+          # Release-contract invariants: same package and no destructive migration hooks.
+          grep -Rqs 'com.pineapple.sagecommander.stable' sage_build_129_second/app
+          ! grep -RqsE 'deleteDatabase\(|clearApplicationUserData\(|pm clear|factory.?reset|uninstall' sage_build_129_second/app/src/main
+
+          # Compile the independent reconstruction too, including the exact same native Brain revision.
+          rm -rf sage_build_129_second/third_party/llama.cpp
+          cp -a sage_build_129/third_party/llama.cpp sage_build_129_second/third_party/llama.cpp
+          cd sage_build_129_second
           gradle :app:compileReleaseJavaWithJavac --stacktrace
           gradle :app:externalNativeBuildRelease --stacktrace
           gradle :app:testReleaseUnitTest --stacktrace
