@@ -7,6 +7,7 @@ on:
       - agent/sage-1-29-recovery-20260801
       - agent/sage-monster-mode-additive-20260810
       - agent/sage-one-executor-20260811
+      - sage-one-executor-20260811
 
 permissions:
   contents: read
