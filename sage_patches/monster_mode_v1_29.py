@@ -163,10 +163,12 @@ final class SageOwnerExperience {
     )
 
     # Keep every existing final+partial alternative and expose what Android heard.
+    # This hook lives inside an anonymous RecognitionListener, so use the outer
+    # service context explicitly rather than the listener's `this`.
     regex_once(
         voice,
         r'(?P<indent>\s*)String candidate = chooseBestCandidate\((?P<choices>[^;\n]+)\);',
-        r'\g<indent>String candidate = chooseBestCandidate(\g<choices>);\g<indent>SageOwnerExperience.recordCandidates(this, "final", \g<choices>, candidate);',
+        r'\g<indent>String candidate = chooseBestCandidate(\g<choices>);\g<indent>SageOwnerExperience.recordCandidates(SageVoiceService.this, "final", \g<choices>, candidate);',
         "normal Sage alternate-candidate diagnostics",
     )
 
