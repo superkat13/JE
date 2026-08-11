@@ -20,4 +20,5 @@ patch --fuzz=0 -p1 -d "$OUTPUT" < sage_patches/owner_home_categories_v1_29.patch
 python3 sage_patches/media_voice_repair_v1_29.py "$OUTPUT"
 python3 sage_patches/external_action_lifecycle_v1_29.py "$OUTPUT"
 python3 sage_patches/surprise_fun_reliability_v1_29.py "$OUTPUT"
-echo "Reconstructed Sage Commander 1.29.0 with the physical Brain, deterministic external-action boundary, installed Voice Studio, compact owner home, and reliable Surprise app/browser handoff in $OUTPUT"
+python3 sage_patches/owner_conversation_finish_v1_29.py "$OUTPUT"
+echo "Reconstructed Sage Commander 1.29.0 with the physical Brain, deterministic external-action boundary, installed Voice Studio, compact owner home, reliable Surprise handoff, and owner confirmation finish in $OUTPUT"
