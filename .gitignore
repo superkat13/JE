@@ -8,3 +8,7 @@ __pycache__/
 app/build/
 Sage-Commander-*.zip
 Sage-Commander-*/
+
+# Kilo Agent Manager local state and worktree checkouts
+.kilo/worktrees/
+.kilo/agent-manager.json
