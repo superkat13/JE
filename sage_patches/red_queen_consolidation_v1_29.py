@@ -41,7 +41,6 @@ def main() -> None:
         if not required.is_file():
             raise SystemExit(f"missing reconstructed source: {required.name}")
 
-    # Red Queen is a spoken doorway. Do not advertise it as a normal Workbench card.
     replace_once(
         workbench,
         'card(r,"Red Queen Mode","Owner-authenticated black/crimson workspace with encrypted private storage and audited advanced tools",SageRedQueenActivity.class);',
@@ -49,7 +48,6 @@ def main() -> None:
         "remove visible Workbench Red Queen card",
     )
 
-    # Never tell the owner to hunt for a removed button if Android cannot open the activity.
     replace_once(
         command,
         'return new Result("Owner authentication required. Open Sage Workbench and tap Red Queen Mode.");',
@@ -77,7 +75,7 @@ def main() -> None:
                 SagePrivilegeReadinessActivity.class);
         functional(root, "Dell Evidence Import", "Interpret owner-collected ADB and boot evidence",
                 SageDellEvidenceActivity.class);
-        functional(root, "Control Room", "Live Android authority and device-control status",
+        functional(root, "Device Authority", "Live Android authority and device-control status",
                 SageDeviceAuthorityActivity.class);
 
         EditText note = new EditText(this);
@@ -124,7 +122,6 @@ def main() -> None:
         "remove engineering-state label from Red Queen cards",
     )
 
-    # Keep the real owner boundary. Phrase-only entry is not permission escalation.
     session_text = session.read_text(encoding="utf-8")
     for token in ("isDeviceLocked()", "canAttempt", "recordFailure", "unlockedUntilMs"):
         if token not in session_text:
