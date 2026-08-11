@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - agent/sage-1-29-recovery-20260801
+      - sage-one-executor-20260811
 
 permissions:
   contents: read
@@ -14,7 +15,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - name: Checkout exact recovery checkpoint
+      - name: Checkout exact completion checkpoint
         uses: actions/checkout@v4
 
       - name: Reconstruct twice and run all host regressions
@@ -27,26 +28,32 @@ jobs:
             echo "Commit: $GITHUB_SHA"
             echo '=== FIRST COMPLETE 1.29 RECONSTRUCTION ==='
             bash sage_tools/reconstruct_v1_29.sh sage_build_129
-            echo '=== BRAIN REPAIR TESTS ==='
-            python3 sage_tests/test_brain_repair_v1_29.py sage_build_129
-            echo '=== CONVERSATION / MEDIA / ECHO TESTS ==='
-            python3 sage_tests/test_conversation_media_echo_v1_29.py sage_build_129
-            echo '=== SEMANTIC ACTION TESTS ==='
-            python3 sage_tests/test_intent_semantic_actions_v1_29.py sage_build_129
-            echo '=== CONFIRMATION LEARNING / TONE TESTS ==='
-            python3 sage_tests/test_confirmation_tone_v1_29.py sage_build_129
-            echo '=== SURPRISE DISCOVERY TESTS ==='
-            python3 sage_tests/test_surprise_discovery_v1_29.py sage_build_129
-            echo '=== BRAIN ROUTE REPAIR TESTS ==='
-            python3 sage_tests/test_brain_route_repair_v1_29.py sage_build_129
-            echo '=== PROFESSIONAL BRAIN SLA REPAIR TESTS ==='
-            python3 sage_tests/test_professional_brain_repair_v1_29.py sage_build_129
-            echo '=== MEDIA BOUNDARY / VOICE STUDIO TESTS ==='
-            python3 sage_tests/test_media_voice_repair_v1_29.py sage_build_129
-            echo '=== EXTERNAL ACTION LIFECYCLE TESTS ==='
-            python3 sage_tests/test_external_action_lifecycle_v1_29.py sage_build_129
-            echo '=== SURPRISE FUN RELIABILITY TESTS ==='
-            python3 sage_tests/test_surprise_fun_reliability_v1_29.py sage_build_129
+            for test_file in \
+              sage_tests/test_brain_repair_v1_29.py \
+              sage_tests/test_conversation_media_echo_v1_29.py \
+              sage_tests/test_intent_semantic_actions_v1_29.py \
+              sage_tests/test_confirmation_tone_v1_29.py \
+              sage_tests/test_surprise_discovery_v1_29.py \
+              sage_tests/test_brain_route_repair_v1_29.py \
+              sage_tests/test_professional_brain_repair_v1_29.py \
+              sage_tests/test_owner_home_categories_v1_29.py \
+              sage_tests/test_media_voice_repair_v1_29.py \
+              sage_tests/test_external_action_lifecycle_v1_29.py \
+              sage_tests/test_surprise_fun_reliability_v1_29.py \
+              sage_tests/test_monster_mode_v1_29.py \
+              sage_tests/test_one_sage_routing_v1_29.py \
+              sage_tests/test_easter_egg_personality_v1_29.py \
+              sage_tests/test_voice_tolerance_v1_29.py \
+              sage_tests/test_internal_specialist_routing_v1_29.py \
+              sage_tests/test_owner_authority_cleanup_v1_29.py \
+              sage_tests/test_red_queen_entry_v1_29.py \
+              sage_tests/test_device_authority_v1_29.py \
+              sage_tests/test_privilege_readiness_v1_29.py \
+              sage_tests/test_dell_evidence_import_v1_29.py \
+              sage_tests/test_capability_snapshot_v1_29.py; do
+              echo "--- $test_file ---"
+              python3 "$test_file" sage_build_129
+            done
             echo '=== PYTHON COMPILE CHECK ==='
             python3 -m py_compile sage_patches/*.py sage_tests/*.py
             echo '=== FORGE TESTS ==='
