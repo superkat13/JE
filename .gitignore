@@ -8,3 +8,6 @@ __pycache__/
 app/build/
 Sage-Commander-*.zip
 Sage-Commander-*/
+.kilo/worktrees/
+.kilo/cache/
+.agent-worktrees/
