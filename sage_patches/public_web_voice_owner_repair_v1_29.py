@@ -83,7 +83,7 @@ def main() -> None:
     replace_once(
         owner,
         '                        + " reason=prefix_fragment_alternate");',
-        '                        + " reason=owner_defined_or_prefix_alternate");',
+        '                        + " reason=owner_defined_or_prefix_fragment_alternate");',
         "voice recovery diagnostic reason",
     )
 
