@@ -61,12 +61,23 @@ class AdbAuthorityProbeTests(unittest.TestCase):
         self.assertEqual(result["authority"]["write_secure_settings"], "granted")
         self.assertIn("secure-settings", result["next_ceiling"].lower())
 
-        forbidden_tokens = ("install", "uninstall", "grant", "revoke", "set-device-owner",
-                            "reboot", "flash", "root", "su", "push", "pull")
+        forbidden_exact = {
+            ("root",), ("reboot",), ("reboot", "bootloader"),
+        }
+        forbidden_prefixes = (
+            ("install",), ("uninstall",), ("push",), ("pull",),
+            ("shell", "pm", "grant"), ("shell", "pm", "revoke"),
+            ("shell", "dpm", "set-device-owner"), ("shell", "dpm", "set-profile-owner"),
+            ("shell", "su"), ("shell", "reboot"), ("flash",),
+        )
         for command in seen:
-            joined = " ".join(command).lower()
-            for token in forbidden_tokens:
-                self.assertNotIn(token, joined)
+            self.assertNotIn(command, forbidden_exact)
+            for prefix in forbidden_prefixes:
+                self.assertNotEqual(command[:len(prefix)], prefix)
+
+        # Reading a property whose *name* contains "flash" is evidence collection,
+        # not an ADB flash operation.
+        self.assertIn(("shell", "getprop", "ro.boot.flash.locked"), seen)
 
     def test_no_arbitrary_command_input_surface(self):
         registry = default_registry()
