@@ -194,9 +194,21 @@ public final class SageEasterEggStore {
     methods = '''    private void saveEasterEgg() {\n        String problem = SageEasterEggStore.save(\n                this,\n                easterEggPhrase.getText().toString(),\n                easterEggReply.getText().toString()\n        );\n        if (!problem.isEmpty()) {\n            Toast.makeText(this, problem, Toast.LENGTH_LONG).show();\n            return;\n        }\n        refreshEasterEggSummary();\n        Toast.makeText(this, "Easter egg saved.", Toast.LENGTH_LONG).show();\n    }\n\n    private void removeEasterEgg() {\n        if (!SageEasterEggStore.remove(this, easterEggPhrase.getText().toString())) {\n            Toast.makeText(this, "I could not find that saved Easter egg.", Toast.LENGTH_LONG).show();\n            return;\n        }\n        refreshEasterEggSummary();\n        Toast.makeText(this, "Easter egg removed.", Toast.LENGTH_LONG).show();\n    }\n\n    private void refreshEasterEggSummary() {\n        if (easterEggSummary == null) return;\n        java.util.List<SageEasterEggStore.Entry> entries = SageEasterEggStore.list(this);\n        StringBuilder text = new StringBuilder("Saved: ").append(entries.size())\n                .append(entries.size() == 1 ? " Easter egg" : " Easter eggs");\n        for (SageEasterEggStore.Entry entry : entries) {\n            text.append("\\n• ").append(entry.phrase).append(" → ").append(entry.response);\n        }\n        easterEggSummary.setText(text.toString());\n    }\n\n'''
     replace_once(main_activity, methods_marker, methods + methods_marker, "Easter egg UI methods")
 
-    media_block = '''        SageMediaResponseStore.Entry voiceResponse =\n                SageMediaResponseStore.find(preferences, cleaned);\n        if (voiceResponse != null) {\n            playVoiceResponse(voiceResponse);\n            return;\n        }\n'''
-    voice_insert = '''        SageEasterEggStore.Entry easterEgg = SageEasterEggStore.find(this, cleaned);\n        if (easterEgg != null) {\n            SageDiagnostics.appendEvent(this, "EASTER EGG", easterEgg.phrase);\n            broadcastLine("Sage", easterEgg.response);\n            speak(easterEgg.response);\n            return;\n        }\n'''
-    replace_once(voice, media_block, media_block + voice_insert, "Easter egg voice dispatch")
+    voice_text = voice.read_text()
+    media_call = voice_text.find("SageMediaResponseStore.find(")
+    if media_call < 0:
+        raise SystemExit("Easter egg voice dispatch: existing media-response route not found")
+    media_return = voice_text.find("return;", media_call)
+    if media_return < 0:
+        raise SystemExit("Easter egg voice dispatch: media-response return not found")
+    media_close = voice_text.find("\n        }", media_return)
+    if media_close < 0:
+        raise SystemExit("Easter egg voice dispatch: media-response block end not found")
+    insert_at = media_close + len("\n        }")
+    voice_insert = '''\n        SageEasterEggStore.Entry easterEgg = SageEasterEggStore.find(this, cleaned);\n        if (easterEgg != null) {\n            SageDiagnostics.appendEvent(this, "EASTER EGG", easterEgg.phrase);\n            broadcastLine("Sage", easterEgg.response);\n            speak(easterEgg.response);\n            return;\n        }'''
+    if "SageEasterEggStore.Entry easterEgg" in voice_text:
+        raise SystemExit("Easter egg voice dispatch already present before Checkpoint 2")
+    voice.write_text(voice_text[:insert_at] + voice_insert + voice_text[insert_at:])
 
     print("Applied Checkpoint 2: persistent normal-Sage Easter egg personality replies")
 
