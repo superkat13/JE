@@ -114,18 +114,21 @@ class ForgePersistenceAndSchemaTest(unittest.TestCase):
 
     def test_trusted_registry_declares_required_controls(self) -> None:
         definitions = default_registry().public_definitions()
-        self.assertEqual(1, len(definitions))
+        self.assertGreaterEqual(len(definitions), 1)
         required = {
             "tool_id", "display_name", "purpose", "supported_platform", "implementation",
             "input_schema", "output_schema", "required_permissions", "risk_level",
             "confirmation_policy", "timeout_seconds", "concurrency_limit", "network_scope",
             "data_leaves_device", "audit_requirements",
         }
-        self.assertEqual(required, set(definitions[0]))
-        self.assertEqual("always", definitions[0]["confirmation_policy"])
-        self.assertTrue(definitions[0]["implementation"].startswith("trusted:"))
-        self.assertFalse(definitions[0]["input_schema"]["additionalProperties"])
-        self.assertFalse(definitions[0]["output_schema"]["additionalProperties"])
+        by_id = {definition["tool_id"]: definition for definition in definitions}
+        self.assertIn("system.info", by_id)
+        for definition in definitions:
+            self.assertEqual(required, set(definition))
+            self.assertEqual("always", definition["confirmation_policy"])
+            self.assertTrue(definition["implementation"].startswith("trusted:"))
+            self.assertFalse(definition["input_schema"]["additionalProperties"])
+            self.assertFalse(definition["output_schema"]["additionalProperties"])
         definition = default_registry().resolve("system.info")
         with self.assertRaisesRegex(ValueError, "missing tool output fields"):
             default_registry().validate_output(definition, {"schema_version": "1.0"})
