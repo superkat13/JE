@@ -93,7 +93,7 @@ jobs:
 
       - name: Install exact Android compile toolchain
         run: |
-          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+          sdkmanager "platform-tools" "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
@@ -118,3 +118,74 @@ jobs:
           gradle :app:externalNativeBuildRelease --stacktrace
           gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
+
+      - name: Add production offline wake model
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sage-vosk-129 sage_build_129/app/src/main/assets
+          rm -rf sage_build_129/app/src/main/assets/model-en-us
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-129.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-129.zip -d /tmp/sage-vosk-129
+          mv /tmp/sage-vosk-129/vosk-model-small-en-us-0.15 sage_build_129/app/src/main/assets/model-en-us
+          printf 'sage-v1.29.0-background-survival\n' > sage_build_129/app/src/main/assets/model-en-us/uuid
+          test -s sage_build_129/app/src/main/assets/model-en-us/am/final.mdl
+
+      - name: Assemble final background-survival release
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+
+      - name: Verify final APK package signer and integrity
+        run: |
+          set -euo pipefail
+          APK=Sage-Commander-1.29.0-background-survival-verified.apk
+          SOURCE_APK=sage_build_129/app/build/outputs/apk/release/app-release.apk
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          test -f "$SOURCE_APK"
+          cp "$SOURCE_APK" "$APK"
+          "$BUILD_TOOLS/apksigner" verify --verbose --print-certs "$APK" | tee APKSIGNER_FULL.txt
+          ACTUAL_CERT_SHA="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' APKSIGNER_FULL.txt | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL_CERT_SHA" = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35"
+          "$BUILD_TOOLS/zipalign" -c -P 16 -v 4 "$APK" | tee ZIPALIGN_FULL.txt
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee PACKAGE_BADGING.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='41' versionName='1.29.0'" PACKAGE_BADGING.txt
+          grep -F 'Verified using v2 scheme (APK Signature Scheme v2): true' APKSIGNER_FULL.txt
+          sha256sum "$APK" | tee APK_SHA256.txt
+          unzip -t "$APK" | tee ZIP_INTEGRITY.txt
+          grep -F 'No errors detected in compressed data' ZIP_INTEGRITY.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so'
+
+      - name: Write background physical acceptance boundary
+        run: |
+          cat > BACKGROUND_PHYSICAL_ACCEPTANCE.md <<'EOF'
+          # Sage 1.29 background-survival physical acceptance
+
+          Install over the existing `com.pineapple.sagecommander.stable` app. Do not uninstall first.
+
+          Required tablet checks:
+          1. Existing memories, wake profiles, Red Queen settings, Brain model selection, and Forge pairing remain present.
+          2. Start Sage listening, press Home, open another app, and leave Sage backgrounded for at least 10 minutes.
+          3. Say the saved wake phrase while another app is foreground. Sage must hear it and accept a command.
+          4. Turn the screen off for several minutes, wake the tablet, then test the wake phrase again.
+          5. Swipe Sage away from Recents while listening is enabled. The foreground voice service must remain active and recover wake listening.
+          6. Explicitly press Stop in Sage. The background service and wake lock must stop cleanly.
+          7. Verify the persistent foreground-service notification remains present while background listening is active.
+          8. Capture a new Sage diagnostic report after the background tests.
+
+          Static CI cannot prove OEM battery-manager behavior on the physical tablet. Physical acceptance is required before background survival is considered complete.
+          EOF
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.29.0-background-survival-verified
+          if-no-files-found: error
+          retention-days: 30
+          path: |
+            Sage-Commander-1.29.0-background-survival-verified.apk
+            APK_SHA256.txt
+            APKSIGNER_FULL.txt
+            ZIPALIGN_FULL.txt
+            PACKAGE_BADGING.txt
+            ZIP_INTEGRITY.txt
+            BACKGROUND_PHYSICAL_ACCEPTANCE.md
