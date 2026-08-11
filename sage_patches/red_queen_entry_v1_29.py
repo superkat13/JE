@@ -2,11 +2,10 @@
 """Checkpoint 6: restore Red Queen as the spoken hidden doorway, not another Sage.
 
 Exact spoken trigger opens the existing Red Queen workspace. A saved custom media
-response for the phrase still plays first/alongside entry. Existing verified owner
-authority is reused instead of forcing another credential prompt on every screen entry.
+response for the phrase still plays during entry. Existing verified owner authority
+is reused instead of forcing another credential prompt on every screen entry.
 """
 from pathlib import Path
-import re
 import sys
 
 
@@ -47,40 +46,48 @@ def main() -> None:
     )
 
     text = voice.read_text()
-    media_pattern = re.compile(
-        r'(?P<indent>^[ \t]*)SageMediaResponseStore\.Entry voiceResponse\s*=\s*'
-        r'SageMediaResponseStore\.find\(preferences,\s*cleaned\);\s*\n'
-        r'(?P=indent)if \(voiceResponse != null\) \{\s*\n'
-        r'(?P=indent)    playVoiceResponse\(voiceResponse\);\s*\n'
-        r'(?P=indent)    return;\s*\n'
-        r'(?P=indent)\}',
-        re.MULTILINE,
-    )
-    match = media_pattern.search(text)
-    if match is None:
-        raise SystemExit("spoken Red Queen dispatch: existing custom voice-response path not found")
-    indent = match.group("indent")
-    replacement = (
-        indent + "SageMediaResponseStore.Entry voiceResponse =\n"
-        + indent + "        SageMediaResponseStore.find(preferences, cleaned);\n"
-        + indent + "if (isRedQueenSpokenTrigger(cleaned)) {\n"
-        + indent + "    if (voiceResponse != null) {\n"
-        + indent + "        playVoiceResponse(voiceResponse);\n"
-        + indent + "    } else {\n"
-        + indent + "        broadcastLine(\"Sage\", \"Well then. Off with the training wheels.\");\n"
-        + indent + "        speak(\"Well then. Off with the training wheels.\");\n"
-        + indent + "    }\n"
+    declaration = text.find("SageMediaResponseStore.Entry voiceResponse")
+    if declaration < 0:
+        raise SystemExit("spoken Red Queen dispatch: custom voice-response declaration not found")
+    if_start = text.find("if (voiceResponse != null)", declaration)
+    if if_start < 0:
+        raise SystemExit("spoken Red Queen dispatch: custom voice-response branch not found")
+    play_at = text.find("playVoiceResponse(voiceResponse);", if_start)
+    return_at = text.find("return;", play_at)
+    if play_at < 0 or return_at < 0:
+        raise SystemExit("spoken Red Queen dispatch: custom voice-response branch is malformed")
+
+    # Saved Red Queen audio/video remains first-class. Open the workspace immediately
+    # after playback begins, rather than swallowing the trigger as a plain Easter egg.
+    after_play = play_at + len("playVoiceResponse(voiceResponse);")
+    text = text[:after_play] + '''
+            if (isRedQueenSpokenTrigger(cleaned)) {
+                SageDiagnostics.appendEvent(this, "RED QUEEN ENTRY",
+                        "spoken_trigger=true response=custom_media existing_session="
+                                + SageRedQueenSession.isUnlocked(this));
+                handler.postDelayed(this::openRedQueenWorkspace, 250L);
+            }''' + text[after_play:]
+
+    # If no saved custom media exists, catch the same exact trigger before normal
+    # translation/personality/Brain routing and give Sage a default line.
+    easter_anchor = "SageEasterEggStore.Entry easterEgg = SageEasterEggStore.find(this, cleaned);"
+    anchor_at = text.find(easter_anchor)
+    if anchor_at < 0:
+        raise SystemExit("spoken Red Queen dispatch: personality routing anchor not found")
+    line_start = text.rfind("\n", 0, anchor_at) + 1
+    indent = text[line_start:anchor_at]
+    fallback = (
+        indent + "if (isRedQueenSpokenTrigger(cleaned)) {\n"
+        + indent + "    broadcastLine(\"Sage\", \"Well then. Off with the training wheels.\");\n"
+        + indent + "    speak(\"Well then. Off with the training wheels.\");\n"
         + indent + "    SageDiagnostics.appendEvent(this, \"RED QUEEN ENTRY\",\n"
-        + indent + "            \"spoken_trigger=true existing_session=\" + SageRedQueenSession.isUnlocked(this));\n"
+        + indent + "            \"spoken_trigger=true response=tts existing_session=\"\n"
+        + indent + "                    + SageRedQueenSession.isUnlocked(this));\n"
         + indent + "    handler.postDelayed(this::openRedQueenWorkspace, 250L);\n"
         + indent + "    return;\n"
         + indent + "}\n"
-        + indent + "if (voiceResponse != null) {\n"
-        + indent + "    playVoiceResponse(voiceResponse);\n"
-        + indent + "    return;\n"
-        + indent + "}"
     )
-    text = text[:match.start()] + replacement + text[match.end():]
+    text = text[:line_start] + fallback + text[line_start:]
     voice.write_text(text)
 
     method_anchor = '''    private void playVoiceResponse(SageMediaResponseStore.Entry response) {'''
@@ -105,7 +112,6 @@ def main() -> None:
 '''
     replace_once(voice, method_anchor, methods + method_anchor, "Red Queen entry helpers")
 
-    # Preserve hard owner-auth boundaries.
     session_text = session.read_text()
     guards = ("isDeviceLocked()", "canAttempt", "recordFailure", "unlockedUntilMs")
     missing = [token for token in guards if token not in session_text]
