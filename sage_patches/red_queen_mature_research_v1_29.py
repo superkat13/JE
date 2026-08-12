@@ -25,8 +25,6 @@ import android.widget.LinearLayout;
 import android.widget.TextView;
 import android.widget.Toast;
 
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 
 public final class SageMatureResearchActivity extends Activity {
@@ -123,7 +121,7 @@ public final class SageMatureResearchActivity extends Activity {
                 return;
             }
         }
-        String encoded = URLEncoder.encode(value, StandardCharsets.UTF_8);
+        String encoded = Uri.encode(value);
         web.loadUrl("https://www.google.com/search?q=" + encoded);
         SageDiagnostics.appendEvent(this, "MATURE RESEARCH", "public search submitted");
     }
