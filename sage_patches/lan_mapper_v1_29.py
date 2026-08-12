@@ -1,11 +1,5 @@
 #!/usr/bin/env python3
-"""Add a bounded LAN Mapper over Sage's existing owner-confirmed private-LAN snapshot.
-
-This is an original Sage implementation. It does not add public scanning, broad port sweeps,
-credential probing, exploitation, or an arbitrary network shell. Discovery remains owned by
-SageNetworkActivity; this layer turns the saved snapshot into a useful map and routes one
-selected private host into the already bounded SageHostInspectorActivity.
-"""
+"""Add a bounded LAN Mapper over Sage's existing owner-confirmed private-LAN snapshot."""
 from pathlib import Path
 import sys
 
@@ -53,26 +47,20 @@ public final class SageLanMapperActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(18), dp(18), dp(18), dp(24));
         scroll.addView(root);
-
         root.addView(text("PRIVATE LAN MAP", 27));
-        root.addView(text("A read-only map of the most recent private-LAN snapshot Sage already collected with owner approval. Refresh discovery stays in the existing Network Snapshot tool. Select one saved host here to hand it to the bounded Selected Host Inspector.", 14));
-
+        root.addView(text("Read-only map of Sage's most recent owner-approved private-LAN snapshot. Refresh discovery here, then select one saved host for bounded inspection.", 14));
         Button refresh = button("Refresh private-LAN snapshot");
         refresh.setOnClickListener(v -> startActivity(new Intent(this, SageNetworkActivity.class)));
         root.addView(refresh);
-
         Button rebuild = button("Rebuild map from saved snapshot");
         rebuild.setOnClickListener(v -> render());
         root.addView(rebuild);
-
         selected = new EditText(this);
         selected.setHint("Saved private IP");
         root.addView(selected);
-
         Button inspect = button("Inspect selected saved host");
         inspect.setOnClickListener(v -> inspectSelected());
         root.addView(inspect);
-
         status = text("", 13);
         root.addView(status);
         hosts = new LinearLayout(this);
@@ -93,9 +81,8 @@ public final class SageLanMapperActivity extends Activity {
         }
         Collections.sort(items, Comparator.comparing(o -> ipKey(o.optString("ip"))));
         status.setText(items.isEmpty()
-                ? "No saved private-LAN hosts yet. Run Refresh private-LAN snapshot first."
+                ? "No saved private-LAN hosts yet. Refresh the private-LAN snapshot first."
                 : items.size() + " saved private-LAN host" + (items.size() == 1 ? "" : "s") + ". Tap a row to select it.");
-
         for (JSONObject item : items) {
             String ip = item.optString("ip", "").trim();
             String label = first(item, "name", "hostname", "host", "label");
@@ -108,10 +95,7 @@ public final class SageLanMapperActivity extends Activity {
             if (!mac.isEmpty()) detail.append("\nMAC: ").append(mac);
             if (!state.isEmpty()) detail.append("\nState: ").append(state);
             Button row = button(detail.toString());
-            row.setOnClickListener(v -> {
-                selected.setText(ip);
-                Toast.makeText(this, "Selected " + ip, Toast.LENGTH_SHORT).show();
-            });
+            row.setOnClickListener(v -> { selected.setText(ip); Toast.makeText(this, "Selected " + ip, Toast.LENGTH_SHORT).show(); });
             hosts.addView(row);
         }
         SageDiagnostics.appendEvent(this, "LAN MAP", "rendered_saved_hosts=" + items.size());
@@ -149,8 +133,7 @@ public final class SageLanMapperActivity extends Activity {
         String[] p = ip.split("\\.");
         if (p.length != 4) return ip;
         try {
-            return String.format(java.util.Locale.US, "%03d.%03d.%03d.%03d",
-                    Integer.parseInt(p[0]), Integer.parseInt(p[1]), Integer.parseInt(p[2]), Integer.parseInt(p[3]));
+            return String.format(java.util.Locale.US, "%03d.%03d.%03d.%03d", Integer.parseInt(p[0]), Integer.parseInt(p[1]), Integer.parseInt(p[2]), Integer.parseInt(p[3]));
         } catch (NumberFormatException ignored) { return ip; }
     }
 
@@ -180,47 +163,35 @@ def main():
     redqueen = java / "SageRedQueenActivity.java"
     command = java / "SageCommandEngine.java"
     for required in (host, manifest, toolbelt, redqueen, command):
-        if not required.is_file():
-            raise SystemExit("LAN Mapper missing dependency: " + str(required))
+        if not required.is_file(): raise SystemExit("LAN Mapper missing dependency: " + str(required))
 
     (java / "SageLanMapperActivity.java").write_text(MAPPER, encoding="utf-8")
 
-    replace_once(
-        manifest,
+    replace_once(manifest,
         '        <activity android:name=".SageHostInspectorActivity" android:exported="false" />',
         '        <activity android:name=".SageHostInspectorActivity" android:exported="false" />\n        <activity android:name=".SageLanMapperActivity" android:exported="false" />',
-        "LAN Mapper manifest",
-    )
+        "LAN Mapper manifest")
 
-    replace_once(
-        toolbelt,
+    replace_once(toolbelt,
         '''        card(root, "Selected Host Inspector",\n                "Confirm one saved private-LAN host for conservative ports, reverse DNS, latency, TLS, and HTTP-header evidence.",\n                SageHostInspectorActivity.class);''',
-        '''        card(root, "LAN Mapper",\n                "Map the current saved private-LAN snapshot, select one host, then hand it to bounded host inspection.",\n                SageLanMapperActivity.class);\n        card(root, "Selected Host Inspector",\n                "Confirm one saved private-LAN host for conservative ports, reverse DNS, latency, TLS, and HTTP-header evidence.",\n                SageHostInspectorActivity.class);''',
-        "Toolbelt LAN Mapper card",
-    )
+        '''        card(root, "LAN Mapper",\n                "Map the saved private-LAN snapshot and inspect a selected host from one surface.",\n                SageLanMapperActivity.class);''',
+        "Toolbelt network consolidation")
 
-    replace_once(
-        redqueen,
-        '''        functional(root, "Selected Host Inspector", "One saved private host; conservative ports and protocol evidence",\n                SageHostInspectorActivity.class);''',
-        '''        functional(root, "LAN Mapper", "Read-only owner-approved private-LAN map with one-host handoff",\n                SageLanMapperActivity.class);\n        functional(root, "Selected Host Inspector", "One saved private host; conservative ports and protocol evidence",\n                SageHostInspectorActivity.class);''',
-        "Red Queen LAN Mapper card",
-    )
+    replace_once(redqueen,
+        '''        functional(root, "Network Lab", "Private-LAN investigation using Sage's saved host evidence",\n                SageNetworkActivity.class);''',
+        '''        functional(root, "Network Lab", "Private-LAN map, refresh, selection, and bounded host inspection",\n                SageLanMapperActivity.class);''',
+        "Red Queen Network Lab upgrade")
 
-    replace_once(
-        command,
+    replace_once(command,
         '''        if (isAny(lower, "inspect selected host", "inspect this network host", "check this private ip")) {\n            return openWorkbench(SageHostInspectorActivity.class, null);\n        }''',
         '''        if (isAny(lower, "show lan mapper", "open lan mapper", "map my lan", "show private network map")) {\n            return openWorkbench(SageLanMapperActivity.class, null);\n        }\n        if (isAny(lower, "inspect selected host", "inspect this network host", "check this private ip")) {\n            return openWorkbench(SageHostInspectorActivity.class, null);\n        }''',
-        "LAN Mapper voice route",
-    )
+        "LAN Mapper voice route")
 
     host_text = host.read_text(encoding="utf-8")
     old = '@Override public void onCreate(Bundle state){super.onCreate(state);setTitle("Sage Selected Host Inspector");setContentView(build());}'
     new = '@Override public void onCreate(Bundle state){super.onCreate(state);setTitle("Sage Selected Host Inspector");setContentView(build());String chosen=getIntent().getStringExtra("selected_private_ip");if(chosen!=null&&SageNetworkScanner.isPrivate(chosen+"/32"))ip.setText(chosen);}'
-    if host_text.count(old) != 1:
-        raise SystemExit("Selected Host prefill anchor missing")
+    if host_text.count(old) != 1: raise SystemExit("Selected Host prefill anchor missing")
     host.write_text(host_text.replace(old, new, 1), encoding="utf-8")
+    print("Applied bounded LAN Mapper and consolidated existing network entry points")
 
-    print("Applied bounded LAN Mapper over Sage's existing owner-confirmed private-LAN snapshot")
-
-if __name__ == "__main__":
-    main()
+if __name__ == "__main__": main()
