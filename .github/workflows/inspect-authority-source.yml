@@ -1,0 +1,29 @@
+name: Inspect reconstructed Sage authority sources
+
+on:
+  push:
+    branches:
+      - sage-shizuku-power-pass-20260812-inspect
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct Sage 1.29
+        run: bash sage_tools/reconstruct_v1_29.sh sage_build_129
+      - name: Upload authority sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: sage-authority-source
+          path: |
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageAuthority.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageAuthorityActivity.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageDeviceAuthority.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageDeviceAuthorityActivity.java
+            sage_build_129/app/src/main/AndroidManifest.xml
+          if-no-files-found: error
+          retention-days: 2
