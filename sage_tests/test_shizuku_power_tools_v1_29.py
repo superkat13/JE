@@ -40,8 +40,10 @@ for required in ("Shizuku.UserServiceArgs", "Shizuku.bindUserService", "Shizuku.
 assert "newProcess" not in bridge, "deprecated Shizuku newProcess must not be used"
 
 # Red Queen remains the only UI path to shell power and mutation gets explicit per-action confirmation.
-for required in ("SageRedQueenSession.isUnlocked(this)", 'new AlertDialog.Builder(this).setTitle("Force-stop app?")', "runPower(\"force_stop\"", "runPower(\"authority_snapshot\"", "Deep-inspect package with shell authority"):
+for required in ("SageRedQueenSession.isUnlocked(this)", 'new AlertDialog.Builder(this).setTitle("Force-stop app?")', "runPower(\"force_stop\"", "runPower(\"authority_snapshot\""):
     assert required in activity, f"Red Queen power guard missing: {required}"
+assert ("Deep-inspect package with shell authority" in activity
+        or "Package Inspector Plus — inspect selected package" in activity), "typed package inspection UI path missing"
 
 # Authority page tells the truth rather than calling intentional states unsupported.
 for required in ("NOT_NEEDED", '"Shizuku shell authority"', "SageDeviceAuthority.isAdmin(context)", "boot_startup_enabled", "SageAuthorityBridgeActivity.class"):
