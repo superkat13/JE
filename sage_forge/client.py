@@ -85,6 +85,19 @@ class ForgeClient:
         })
         return result["job_id"]
 
+    def android_authority_probe(self) -> str:
+        """Submit the fixed read-only tablet authority probe to Forge."""
+        result = self.request("POST", "/v1/jobs", {
+            "tool_id": "android.adb_authority_probe",
+            "input": {},
+            "owner_approved": True,
+            "approval_context": {
+                "surface": "red_queen",
+                "action": "inspect tablet authority ceiling",
+            },
+        })
+        return result["job_id"]
+
     def job(self, job_id: str) -> dict[str, Any]:
         return self.request("GET", f"/v1/jobs/{job_id}")
 
