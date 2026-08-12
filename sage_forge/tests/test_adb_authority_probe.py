@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import io
+import json
 import unittest
+from contextlib import redirect_stdout
 from unittest import mock
 
 import sage_forge  # noqa: F401 - package import installs additive registry extension
-from sage_forge import adb_tools
+from sage_forge import adb_tools, probe_tablet
+from sage_forge.client import ForgeClient
 from sage_forge.tools import default_registry
 
 
@@ -86,6 +90,37 @@ class AdbAuthorityProbeTests(unittest.TestCase):
         self.assertNotIn("command", tool.input_schema["properties"])
         self.assertNotIn("shell", tool.input_schema["properties"])
         self.assertNotIn("script", tool.input_schema["properties"])
+
+    def test_forge_client_submits_exact_authority_tool(self):
+        client = ForgeClient("https://127.0.0.1:9443", "0" * 64, token="token")
+        with mock.patch.object(client, "request", return_value={"job_id": "job_probe"}) as request:
+            self.assertEqual(client.android_authority_probe(), "job_probe")
+        request.assert_called_once_with("POST", "/v1/jobs", {
+            "tool_id": "android.adb_authority_probe",
+            "input": {},
+            "owner_approved": True,
+            "approval_context": {
+                "surface": "red_queen",
+                "action": "inspect tablet authority ceiling",
+            },
+        })
+
+    @mock.patch("sage_forge.probe_tablet.collect_adb_authority")
+    def test_direct_dell_entry_point_has_no_command_surface(self, collect):
+        collect.return_value = {
+            "schema_version": "1.0",
+            "adb_available": True,
+            "device_state": "device",
+            "next_ceiling": "test",
+        }
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(probe_tablet.main(), 0)
+        collect.assert_called_once()
+        args = collect.call_args.args
+        self.assertEqual(args[0], {})
+        parsed = json.loads(output.getvalue())
+        self.assertEqual(parsed["result"]["device_state"], "device")
 
 
 if __name__ == "__main__":
