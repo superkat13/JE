@@ -28,8 +28,10 @@ for required in (
     'run("appops", "get", pkg)',
     'PACKAGE.matcher(pkg).matches()',
     'return bounded(out.toString())',
+    'android.os.Process.myUid()',
 ):
     assert required in service, f"missing Package Inspector operation: {required}"
+assert '.append(Process.myUid())' not in service, "unqualified Process.myUid reintroduces java.lang.Process namespace collision"
 
 # No destructive package-manager operations in the read-only slice.
 for forbidden in (
