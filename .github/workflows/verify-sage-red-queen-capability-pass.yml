@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - sage-red-queen-alive-voice-20260811
+      - sage-glass-recovery-20260811
   workflow_dispatch:
 
 permissions:
@@ -26,6 +27,16 @@ jobs:
           done
           python3 -m py_compile sage_patches/*.py sage_tests/*.py sage_forge/*.py sage_forge/tests/*.py
           python3 -m unittest -v sage_forge.tests.test_forge sage_forge.tests.test_adb_authority_probe
+
+      - name: Upload reconstructed voice routing sources
+        uses: actions/upload-artifact@v4
+        with:
+          name: sage-glass-routing-source
+          path: |
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run inherited regression suite
         run: |
