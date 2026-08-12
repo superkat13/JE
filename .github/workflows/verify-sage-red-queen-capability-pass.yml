@@ -5,6 +5,7 @@ on:
     branches:
       - sage-red-queen-alive-voice-20260811
       - sage-glass-recovery-20260811
+      - sage-shizuku-power-pass-20260812
   workflow_dispatch:
 
 permissions:
@@ -35,6 +36,9 @@ jobs:
           path: |
             sage_build_129/app/src/main/java/com/pineapple/sage/SageVoiceService.java
             sage_build_129/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageAuthority.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageAuthorityBridgeActivity.java
+            sage_build_129/app/src/main/java/com/pineapple/sage/SageShizukuUserService.java
           if-no-files-found: error
           retention-days: 7
 
@@ -76,10 +80,12 @@ jobs:
           python3 sage_tests/test_red_queen_consolidation_v1_29.py sage_build_129_second
           python3 sage_tests/test_red_queen_forensic_console_v1_29.py sage_build_129_second
           python3 sage_tests/test_shizuku_authority_bridge_v1_29.py sage_build_129_second
+          python3 sage_tests/test_shizuku_power_tools_v1_29.py sage_build_129_second
           python3 sage_tests/test_red_queen_mature_research_v1_29.py sage_build_129_second
           python3 sage_tests/test_public_web_voice_owner_repair_v1_29.py sage_build_129_second
           python3 sage_tests/test_background_survival_v1_29.py sage_build_129_second
           python3 sage_tests/test_owner_conversation_finish_v1_29.py sage_build_129_second
+          python3 sage_tests/test_glass_recovery_fastlane_v1_29.py sage_build_129_second
 
       - name: Add exact pinned native Brain and offline wake model
         run: |
@@ -142,30 +148,30 @@ jobs:
           gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
 
-      - name: Assemble and verify Red Queen alive candidate
+      - name: Assemble and verify Shizuku power candidate
         working-directory: sage_build_129
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
           APK="app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-1.29-red-queen-alive-apksigner.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-1.29-shizuku-power-apksigner.txt
           EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
-          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-1.29-red-queen-alive-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-1.29-shizuku-power-apksigner.txt | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL" = "$EXPECTED"
           unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-1.29-wake-asset.txt
           unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-1.29-native-brain.txt
-          sha256sum "$APK" | tee ../Sage-Commander-1.29.0-red-queen-alive.sha256
-          cp "$APK" ../Sage-Commander-1.29.0-red-queen-alive.apk
+          sha256sum "$APK" | tee ../Sage-Commander-1.29.0-shizuku-power.sha256
+          cp "$APK" ../Sage-Commander-1.29.0-shizuku-power.apk
 
-      - name: Upload Red Queen alive candidate
+      - name: Upload Shizuku power candidate
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.29.0-red-queen-alive
+          name: Sage-Commander-1.29.0-shizuku-power
           path: |
-            Sage-Commander-1.29.0-red-queen-alive.apk
-            Sage-Commander-1.29.0-red-queen-alive.sha256
-            sage-1.29-red-queen-alive-apksigner.txt
+            Sage-Commander-1.29.0-shizuku-power.apk
+            Sage-Commander-1.29.0-shizuku-power.sha256
+            sage-1.29-shizuku-power-apksigner.txt
             sage-1.29-wake-asset.txt
             sage-1.29-native-brain.txt
           if-no-files-found: error
