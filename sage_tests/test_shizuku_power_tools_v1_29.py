@@ -6,10 +6,12 @@ root = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("sage_build_129")
 java = root / "app/src/main/java/com/pineapple/sage"
 aidl = root / "app/src/main/aidl/com/pineapple/sage/ISageShizukuPower.aidl"
 manifest = (root / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+gradle = (root / "app/build.gradle.kts").read_text(encoding="utf-8")
 
 for name in ("SageShizukuUserService.java", "SageShizukuBridge.java", "SageAuthorityBridgeActivity.java", "SageBootReceiver.java", "SageAssistActivity.java"):
     assert (java / name).is_file(), f"missing {name}"
 assert aidl.is_file(), "typed Shizuku AIDL missing"
+assert "aidl = true" in gradle, "AGP AIDL generation must be explicitly enabled for typed Shizuku Binder interface"
 
 service = (java / "SageShizukuUserService.java").read_text(encoding="utf-8")
 bridge = (java / "SageShizukuBridge.java").read_text(encoding="utf-8")
@@ -62,6 +64,6 @@ for required in ("MainActivity.class", "SageVoiceService.ACTION_LISTEN_NOW", '"A
 machine = (java / "SageConversationStateMachine.java").read_text(encoding="utf-8")
 for state in ("COMMAND_LISTENING", "FINALIZING", "DISPATCHING", "SPEAKING", "ECHO_GUARD"):
     assert state in machine
-assert 'applicationId = "com.pineapple.sagecommander.stable"' in (root / "app/build.gradle.kts").read_text(encoding="utf-8")
+assert 'applicationId = "com.pineapple.sagecommander.stable"' in gradle
 
-print("Functional Shizuku shell power, authority cleanup, Assistant role, and boot-start checks passed")
+print("Functional Shizuku shell power, generated typed AIDL, authority cleanup, Assistant role, and boot-start checks passed")
