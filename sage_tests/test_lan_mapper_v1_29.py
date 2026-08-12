@@ -35,7 +35,7 @@ def test_lan_mapper_is_bounded_read_only_and_integrated():
             "ProcessBuilder",
             "nmap",
             "masscan",
-            "0.0.0.0/0",
+            "all-address cidr",
             "su -c",
             "adb shell",
             "exploit",
