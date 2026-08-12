@@ -16,6 +16,7 @@ from typing import Any, Callable
 Progress = Callable[[str, int, str], None]
 
 PACKAGE = "com.pineapple.sagecommander.stable"
+SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
 
 
 def _run(adb: str, args: list[str], timeout: int = 8) -> tuple[int, str]:
@@ -43,6 +44,15 @@ def _grant_state(dumpsys: str, permission: str) -> str:
     if permission in dumpsys:
         return "requested_not_granted_or_unresolved"
     return "not_requested_or_not_visible"
+
+
+def _enabled_flag(value: str) -> str:
+    normalized = (value or "").strip().lower()
+    if normalized in {"1", "true", "enabled", "on"}:
+        return "enabled"
+    if normalized in {"0", "false", "disabled", "off"}:
+        return "disabled"
+    return normalized or "unknown"
 
 
 def collect_adb_authority(_: dict[str, Any], progress: Progress,
@@ -86,13 +96,18 @@ def collect_adb_authority(_: dict[str, Any], progress: Progress,
         raise InterruptedError("cancelled by owner")
 
     progress("Reading tablet identity and verified-boot state", 30,
-             "Only fixed getprop queries are allowed")
+             "Only fixed identity/getprop queries are allowed")
+    shell_identity = _shell(adb, "id")
     device = {
         "model": _shell(adb, "getprop", "ro.product.model"),
         "device": _shell(adb, "getprop", "ro.product.device"),
         "android": _shell(adb, "getprop", "ro.build.version.release"),
         "sdk": _shell(adb, "getprop", "ro.build.version.sdk"),
         "fingerprint": _shell(adb, "getprop", "ro.build.fingerprint"),
+        "shell_identity": shell_identity,
+        "selinux": _shell(adb, "getenforce"),
+        "ro_secure": _shell(adb, "getprop", "ro.secure"),
+        "ro_debuggable": _shell(adb, "getprop", "ro.debuggable"),
     }
     boot = {
         "flash_locked": _shell(adb, "getprop", "ro.boot.flash.locked"),
@@ -103,34 +118,48 @@ def collect_adb_authority(_: dict[str, Any], progress: Progress,
         raise InterruptedError("cancelled by owner")
 
     progress("Inspecting Sage package authority", 50,
-             "Reading package and device-policy state without changing it")
+             "Reading package, app-op, debugging, and device-policy state without changing it")
     package_path = _shell(adb, "pm", "path", PACKAGE)
+    shizuku_path = _shell(adb, "pm", "path", SHIZUKU_PACKAGE)
     dumpsys = _shell(adb, "dumpsys", "package", PACKAGE)
+    appops = _shell(adb, "appops", "get", PACKAGE)
     dpm = _shell(adb, "dpm", "list-owners")
     if dpm == "unavailable":
         dpm = _shell(adb, "dpm", "list", "owners")
     package_present = package_path.startswith("package:")
     owner_marker = PACKAGE in dpm
     authority = {
+        "adb_shell_identity": shell_identity,
         "device_owner_report_mentions_sage": owner_marker,
         "device_policy_report": dpm[:4000],
         "write_secure_settings": _grant_state(dumpsys, "android.permission.WRITE_SECURE_SETTINGS"),
         "read_logs": _grant_state(dumpsys, "android.permission.READ_LOGS"),
         "dump": _grant_state(dumpsys, "android.permission.DUMP"),
         "package_usage_stats": _grant_state(dumpsys, "android.permission.PACKAGE_USAGE_STATS"),
+        "app_ops_report": appops[:6000],
+        "usb_debugging": _enabled_flag(_shell(adb, "settings", "get", "global", "adb_enabled")),
+        "wireless_debugging": _enabled_flag(_shell(adb, "settings", "get", "global", "adb_wifi_enabled")),
+        "shizuku_manager_installed": shizuku_path.startswith("package:"),
     }
     sage_package = {
         "package": PACKAGE,
         "installed": package_present,
         "apk_path": package_path if package_present else "unavailable",
+        "shizuku_package": SHIZUKU_PACKAGE,
+        "shizuku_installed": shizuku_path.startswith("package:"),
     }
 
     progress("Classifying non-root authority ceiling", 75,
-             "No grants, owner changes, shell scripts, unlocks, flashes, or root commands run")
+             "No grants, owner changes, scripts, installs, unlocks, flashes, or root commands run")
+    shell_2000 = "uid=2000" in shell_identity
     if owner_marker:
         next_ceiling = "Sage already appears in Android's device-owner report; wire device-owner APIs before considering root."
     elif authority["write_secure_settings"] == "granted":
         next_ceiling = "ADB-granted secure-settings authority is active; expose useful bounded system controls next."
+    elif authority["shizuku_manager_installed"] and shell_2000:
+        next_ceiling = "ADB shell authority and Shizuku are both present; start Shizuku and grant Sage access before considering root."
+    elif shell_2000 and package_present:
+        next_ceiling = "ADB shell authority is confirmed. Install/start Shizuku or test specific grantable development permissions before root."
     elif package_present:
         next_ceiling = "Sage is installed and ADB-connected; test specific grantable development permissions and device-owner eligibility next."
     else:
