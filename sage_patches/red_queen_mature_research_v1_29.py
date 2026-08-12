@@ -41,6 +41,7 @@ public final class SageMatureResearchActivity extends Activity {
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(14), dp(14), dp(14), dp(14));
+        root.setBackgroundColor(Color.rgb(8, 8, 10));
 
         TextView title = new TextView(this);
         title.setText("MATURE RESEARCH");
@@ -57,6 +58,8 @@ public final class SageMatureResearchActivity extends Activity {
         query = new EditText(this);
         query.setHint("Search or enter a public website");
         query.setSingleLine(true);
+        query.setTextColor(Color.WHITE);
+        query.setHintTextColor(Color.GRAY);
         root.addView(query);
 
         LinearLayout controls = new LinearLayout(this);
@@ -103,7 +106,6 @@ public final class SageMatureResearchActivity extends Activity {
             SageDiagnostics.appendEvent(this, "MATURE RESEARCH", "session cleared");
         });
 
-        SageAppearance.apply(this, root, root);
         setContentView(root);
         SageDiagnostics.appendEvent(this, "MATURE RESEARCH", "owner surface opened");
     }
