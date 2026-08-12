@@ -14,7 +14,7 @@ Physical rollback / known-installed baseline:
 - Package: `com.pineapple.sagecommander.stable`
 - Version: `1.29.0` (`versionCode 41`)
 - APK SHA-256: `a1fc673d449dc4c529a407642406c0b8f2fa6fb73584cb215868a9b9cca479e9`
-- Permanent signer SHA-256: `99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35`
+- Signing identity: preserve the existing permanent Sage signer; the private verification digest is intentionally not repeated in this public marker.
 - Update rule: install over existing package. Do not uninstall or wipe for ordinary upgrades.
 
 Physical evidence already confirmed by owner:
