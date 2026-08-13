@@ -12,6 +12,7 @@ receiver = (java / "SageDeviceAdminReceiver.java").read_text()
 authority = (java / "SageDeviceAuthority.java").read_text()
 activity = (java / "SageDeviceAuthorityActivity.java").read_text()
 redqueen = (java / "SageRedQueenActivity.java").read_text()
+bridge = (java / "SageAuthorityBridgeActivity.java").read_text()
 policy = (root / "app/src/main/res/xml/sage_device_admin.xml").read_text()
 build = (root / "app/build.gradle.kts").read_text()
 
@@ -29,7 +30,9 @@ checks = {
     "manifest receiver permission": "android.permission.BIND_DEVICE_ADMIN" in manifest,
     "manifest receiver and activity": ".SageDeviceAdminReceiver" in manifest and ".SageDeviceAuthorityActivity" in manifest,
     "minimal no-policy admin xml": "<uses-policies />" in policy,
-    "Red Queen exposes device authority": '"Device Authority"' in redqueen and "SageDeviceAuthorityActivity.class" in redqueen,
+    "Red Queen consolidates authority into one exclusive shell surface": '"Shell Authority"' in redqueen and "SageAuthorityBridgeActivity.class" in redqueen,
+    "duplicate Device Authority card removed": '"Device Authority"' not in redqueen and "SageDeviceAuthorityActivity.class" not in redqueen,
+    "shell authority retains device-admin owner action": "requestAdmin()" in bridge and "SageDeviceAdminReceiver" in bridge,
     "existing authority architecture retained": all((java / "SageAuthority.java").read_text().find(token) >= 0 for token in (
         "default_assistant", "red_queen_authority", "forge_trust", "tablet_brain")),
 }
