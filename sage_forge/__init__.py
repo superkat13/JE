@@ -1,6 +1,6 @@
 """Sage Forge: owner-controlled local engineering companion service."""
 
-__version__ = "0.3.0"
+__version__ = "0.3.1"
 
 # Register bounded Android authority and developer-inspection tools without replacing the
 # existing Forge registry or system.info tool. ToolRunner resolves default_registry at
