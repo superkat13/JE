@@ -22,6 +22,7 @@ def main() -> None:
     out = get_build()
     java = out / "app/src/main/java/com/pineapple/sage"
     manifest = (out / "app/src/main/AndroidManifest.xml").read_text(encoding="utf-8")
+    gradle = (out / "app/build.gradle.kts").read_text(encoding="utf-8")
     store = (java / "SageAutonomyStore.java").read_text(encoding="utf-8")
     activity = (java / "SageAutonomyActivity.java").read_text(encoding="utf-8")
     heartbeat = (java / "SageAutonomyHeartbeatReceiver.java").read_text(encoding="utf-8")
@@ -74,7 +75,9 @@ def main() -> None:
 
     assert 'SageAutonomyActivity" android:exported="false"' in manifest
     assert 'SageAutonomyHeartbeatReceiver" android:exported="false"' in manifest
-    assert "com.pineapple.sagecommander.stable" in manifest
+    assert 'applicationId = "com.pineapple.sagecommander.stable"' in gradle
+    assert 'versionCode = 41' in gradle
+    assert 'versionName = "1.29.0"' in gradle
 
     # Red Queen now has a reason to be hidden: its engineering surface is exclusive.
     assert 'functional(root, "Sage Autonomy"' in redqueen
