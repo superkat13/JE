@@ -32,7 +32,7 @@ checks = {
     "minimal no-policy admin xml": "<uses-policies />" in policy,
     "Red Queen consolidates authority into one exclusive shell surface": '"Shell Authority"' in redqueen and "SageAuthorityBridgeActivity.class" in redqueen,
     "duplicate Device Authority card removed": '"Device Authority"' not in redqueen and "SageDeviceAuthorityActivity.class" not in redqueen,
-    "shell authority retains device-admin owner action": "requestAdmin()" in bridge and "SageDeviceAdminReceiver" in bridge,
+    "shell authority retains device-admin owner action": "requestAdmin()" in bridge and "DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN" in bridge and "SageDeviceAuthority.admin(this)" in bridge,
     "existing authority architecture retained": all((java / "SageAuthority.java").read_text().find(token) >= 0 for token in (
         "default_assistant", "red_queen_authority", "forge_trust", "tablet_brain")),
 }
