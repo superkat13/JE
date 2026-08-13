@@ -7,6 +7,7 @@ import ipaddress
 import os
 from pathlib import Path
 
+from . import __version__
 from .security import PairingGrant, certificate_sha256, new_pairing_code
 from .server import ForgeApplication, SageForgeServer
 from .store import ForgeStore
@@ -44,7 +45,7 @@ def main() -> int:
     application = ForgeApplication(store, grant)
     server = SageForgeServer((args.bind, args.port), application,
                              args.certificate, args.private_key)
-    print("Sage Forge 0.1.0")
+    print(f"Sage Forge {__version__}")
     print(f"Listening with TLS on {args.bind}:{args.port}")
     print(f"Certificate SHA-256: {certificate_sha256(args.certificate)}")
     if code:
