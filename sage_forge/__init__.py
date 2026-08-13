@@ -8,6 +8,7 @@ __version__ = "0.2.0"
 from . import tools as _tools
 from .adb_tools import collect_adb_authority
 from .developer_tools import collect_developer_runtime, collect_project_snapshot
+from .termux_tools import collect_termux_status
 
 _original_default_registry = _tools.default_registry
 
@@ -86,6 +87,20 @@ def _default_registry_with_sage_extensions():
             "working_tree_clean", "changed_entry_count", "file_count", "file_bytes", "notes",
         ),
         timeout_seconds=60,
+    )
+    _register_readonly(
+        registry,
+        tool_id="android.termux_status",
+        display_name="Tablet Termux readiness",
+        purpose="Report whether Termux and Termux:API are installed on the connected tablet using fixed ADB package queries only",
+        implementation=collect_termux_status,
+        output_properties=(
+            "schema_version", "observed_at", "adb_available", "device_connected",
+            "termux_installed", "termux_api_installed", "termux_apk_path",
+            "termux_api_apk_path", "readiness",
+        ),
+        timeout_seconds=30,
+        network_scope="local_usb_or_adb_device",
     )
     return registry
 
