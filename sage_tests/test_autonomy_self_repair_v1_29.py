@@ -28,6 +28,7 @@ def main() -> None:
     heartbeat = (java / "SageAutonomyHeartbeatReceiver.java").read_text(encoding="utf-8")
     redqueen = (java / "SageRedQueenActivity.java").read_text(encoding="utf-8")
     voice = (java / "SageVoiceService.java").read_text(encoding="utf-8")
+    machine = (java / "SageConversationStateMachine.java").read_text(encoding="utf-8")
 
     required_store = [
         "FIVE_MINUTES_MS = 5L * 60L * 1000L",
@@ -99,9 +100,12 @@ def main() -> None:
         ordinary = (java / ordinary_name).read_text(encoding="utf-8")
         assert "SageAutonomyActivity.class" not in ordinary, ordinary_name
 
-    # The stabilized voice state machine survives the pivot untouched.
-    for state in ("IDLE_WAKE", "WAKE_ACCEPTED", "COMMAND_LISTENING", "DISPATCHING", "SPEAKING"):
-        assert state in voice, state
+    # Reuse the same actual state-machine invariants protected by the established voice regression.
+    for state in ("COMMAND_LISTENING", "FINALIZING", "ECHO_GUARD", "COMMAND_FINAL"):
+        assert state in machine, state
+    assert "dispatchCount" in machine
+    assert "SAGE_TTS" in machine and "ACTIVE_MEDIA" in machine
+    assert "SageOwnerExperience.recoverCandidate" in voice
 
     print("Sage autonomy/self-repair + five-minute rule + Red Queen exclusivity regression passed")
 
