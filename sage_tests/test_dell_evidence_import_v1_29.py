@@ -26,10 +26,12 @@ assert "SageDellEvidence.report(raw)" in activity
 assert "DELL EVIDENCE" in activity
 assert "pasted_chars=" in activity
 assert 'android:name=".SageDellEvidenceActivity"' in manifest
-assert "Dell Evidence Import" in redqueen
-assert "SageDellEvidenceActivity.class" in redqueen
 
-# This vertical slice must remain interpretation-only. No process or privilege execution.
+# Capability remains installed and callable, but the autonomy pivot deliberately removes
+# this ordinary diagnostic utility from the hidden Red Queen menu to avoid duplication.
+assert "Dell Evidence Import" not in redqueen
+assert "SageDellEvidenceActivity.class" not in redqueen
+
 forbidden = [
     "Runtime.getRuntime", "ProcessBuilder", "java.lang.Process", "Os.execv",
     "set-device-owner", "fastboot flashing unlock", "fastboot oem unlock",
@@ -39,9 +41,8 @@ combined = parser + "\n" + activity
 for token in forbidden:
     assert token not in combined, token
 
-# Ensure the parser does not overclaim root from unlocked boot properties.
 assert '"0".equals(flashLocked)' in parser
 assert '"unlocked".equalsIgnoreCase(vbmetaState)' in parser
 assert "ROOT: NOT PROVEN" in parser
 
-print("Checkpoint 9 Dell evidence import tests passed")
+print("Checkpoint 9 Dell evidence import tests passed without Red Queen duplication")
