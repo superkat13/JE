@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit
 
+from . import __version__
 from .security import PairingGrant, new_device_token, new_identifier, validate_fresh_request
 from .store import ForgeStore
 from .tools import ToolRunner
@@ -103,7 +104,7 @@ class ForgeApplication:
 
 
 class ForgeRequestHandler(BaseHTTPRequestHandler):
-    server_version = "SageForge/0.1"
+    server_version = f"SageForge/{__version__}"
     sys_version = ""
 
     @property
@@ -124,7 +125,12 @@ class ForgeRequestHandler(BaseHTTPRequestHandler):
         try:
             path = urlsplit(self.path).path
             if method == "GET" and path == "/v1/health":
-                self._send(200, {"service": "sage-forge", "version": "0.1.0", "tls": True})
+                self._send(200, {
+                    "service": "sage-forge",
+                    "version": __version__,
+                    "api_schema": "1.0",
+                    "tls": True,
+                })
                 return
             if method == "POST" and path == "/v1/pair":
                 self._send(200, self.app.pair(self._read_json()))
