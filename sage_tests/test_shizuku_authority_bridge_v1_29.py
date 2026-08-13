@@ -26,7 +26,8 @@ checks = {
     "root identity distinguished": 'uid == 0' in bridge,
     "permission requested through Shizuku": 'Shizuku.requestPermission' in activity,
     "Red Queen session required": 'SageRedQueenSession.isUnlocked(this)' in activity,
-    "Red Queen exposes bridge": 'functional(root, "Authority Bridge"' in redqueen,
+    "Red Queen exposes exclusive shell authority": 'functional(root, "Shell Authority"' in redqueen and 'SageAuthorityBridgeActivity.class' in redqueen,
+    "old Authority Bridge duplicate label removed": 'functional(root, "Authority Bridge"' not in redqueen,
     "normal package preserved": 'applicationId = "com.pineapple.sagecommander.stable"' in build,
     "no fake authority grant": 'grantRuntimePermission' not in bridge + activity and 'set-device-owner' not in bridge + activity,
 }
