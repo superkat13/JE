@@ -27,10 +27,12 @@ def main():
             "Checkpoint 8 must preserve real Android authority reporting")
     require("SageForgeStore.isPaired(context)" in readiness,
             "Checkpoint 8 must preserve Forge status")
-    require("SagePrivilegeReadinessActivity.class" in redqueen,
-            "Red Queen must expose the read-only readiness screen")
+    require("SagePrivilegeReadinessActivity.class" not in redqueen,
+            "Ordinary read-only readiness must not be duplicated in Red Queen")
+    require('"Shell Authority"' in redqueen and "SageAuthorityBridgeActivity.class" in redqueen,
+            "Red Queen should expose the materially stronger shell-authority surface instead")
     require(".SagePrivilegeReadinessActivity" in manifest,
-            "Privilege readiness activity must be private in the manifest")
+            "Privilege readiness activity must remain installed in the manifest")
     require('android:exported="false"' in manifest,
             "Privilege readiness activity must not be exported")
     require("root_proven=false" in activity,
@@ -50,7 +52,7 @@ def main():
             "Checkpoint 8 should provide owner-run flash-lock evidence command")
     require("adb shell getprop ro.boot.verifiedbootstate" in readiness,
             "Checkpoint 8 should provide owner-run verified-boot evidence command")
-    print("Checkpoint 8 privilege readiness regression passed")
+    print("Checkpoint 8 privilege readiness regression passed without Red Queen duplication")
 
 
 if __name__ == "__main__":
