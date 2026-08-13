@@ -1,12 +1,13 @@
 """Sage Forge: owner-controlled local engineering companion service."""
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 # Register bounded Android authority and developer-inspection tools without replacing the
 # existing Forge registry or system.info tool. ToolRunner resolves default_registry at
 # runtime, so these extensions remain additive and independently testable.
 from . import tools as _tools
 from .adb_tools import collect_adb_authority
+from .autonomy_transport import collect_autonomy_dispatch, collect_autonomy_result
 from .developer_tools import collect_developer_runtime, collect_project_snapshot
 from .termux_tools import collect_termux_status
 
@@ -41,6 +42,59 @@ def _register_readonly(registry, *, tool_id, display_name, purpose, implementati
         network_scope=network_scope,
         data_leaves_device=True,
         audit_requirements=("owner_approval", "fixed_operation_set", "job_lifecycle", "result_recipient"),
+    ))
+
+
+def _register_autonomy_transport(registry):
+    registry.register(_tools.ToolDefinition(
+        tool_id="developer.autonomy_dispatch",
+        display_name="Sage autonomy engineering dispatch",
+        purpose="Place one bounded Sage-owned engineering order in the configured Forge project's fixed autonomy outbox",
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=collect_autonomy_dispatch,
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"job_id": {}, "fingerprint": {}, "order": {}},
+            "required": ["job_id", "fingerprint", "order"],
+        },
+        output_schema=_object_schema((
+            "schema_version", "observed_at", "job_id", "status", "outbox_json",
+            "outbox_markdown", "order_sha256", "project_head", "project_branch", "notes",
+        )),
+        required_permissions=("owner_approved_local_engineering_handoff",),
+        risk_level="moderate",
+        confirmation_policy="always",
+        timeout_seconds=30,
+        concurrency_limit=1,
+        network_scope="local_device",
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_project_root", "fixed_outbox", "job_lifecycle", "result_recipient"),
+    ))
+    registry.register(_tools.ToolDefinition(
+        tool_id="developer.autonomy_result",
+        display_name="Sage autonomy result inbox",
+        purpose="Read the structured developer result for one Sage-owned job from the configured Forge project's fixed result inbox",
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=collect_autonomy_result,
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"job_id": {}},
+            "required": ["job_id"],
+        },
+        output_schema=_object_schema((
+            "schema_version", "observed_at", "job_id", "status", "result",
+            "result_sha256", "result_file", "notes",
+        )),
+        required_permissions=("owner_approved_local_engineering_result_read",),
+        risk_level="low",
+        confirmation_policy="always",
+        timeout_seconds=20,
+        concurrency_limit=1,
+        network_scope="local_device",
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_project_root", "fixed_result_inbox", "job_lifecycle", "result_recipient"),
     ))
 
 
@@ -102,6 +156,7 @@ def _default_registry_with_sage_extensions():
         timeout_seconds=30,
         network_scope="local_usb_or_adb_device",
     )
+    _register_autonomy_transport(registry)
     return registry
 
 
