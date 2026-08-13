@@ -76,9 +76,14 @@ class DeveloperToolTests(unittest.TestCase):
             self.assertEqual(result["git_branch"], "work")
             self.assertTrue(result["working_tree_clean"])
             self.assertGreaterEqual(result["file_count"], 1)
-            flat = " ".join(" ".join(call) for call in calls)
-            for forbidden in (" sh ", "bash", "powershell", "cmd.exe", "-c"):
-                self.assertNotIn(forbidden, flat)
+
+            # Reject actual shell interpreters or shell execution switches, but do not
+            # substring-match legitimate Git flags such as --show-current.
+            for call in calls:
+                lowered = [token.lower() for token in call]
+                for forbidden_program in ("sh", "bash", "powershell", "cmd.exe"):
+                    self.assertNotIn(forbidden_program, lowered)
+                self.assertNotIn("-c", lowered)
 
     def test_termux_status_uses_only_fixed_adb_package_queries(self):
         calls = []
