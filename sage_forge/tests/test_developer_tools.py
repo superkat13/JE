@@ -9,6 +9,7 @@ from unittest import mock
 import sage_forge  # noqa: F401 - installs the additive registry extension
 from sage_forge import tools
 from sage_forge.developer_tools import collect_developer_runtime, collect_project_snapshot
+from sage_forge.termux_tools import collect_termux_status
 
 
 class DeveloperToolTests(unittest.TestCase):
@@ -17,7 +18,11 @@ class DeveloperToolTests(unittest.TestCase):
 
     def test_registry_exposes_only_typed_empty_input_jobs(self):
         registry = tools.default_registry()
-        for tool_id in ("developer.runtime_inventory", "developer.project_snapshot"):
+        for tool_id in (
+            "developer.runtime_inventory",
+            "developer.project_snapshot",
+            "android.termux_status",
+        ):
             definition = registry.resolve(tool_id)
             self.assertEqual(definition.input_schema["properties"], {})
             self.assertFalse(definition.input_schema.get("additionalProperties", True))
@@ -75,14 +80,46 @@ class DeveloperToolTests(unittest.TestCase):
             for forbidden in (" sh ", "bash", "powershell", "cmd.exe", "-c"):
                 self.assertNotIn(forbidden, flat)
 
-    def test_no_input_can_select_a_path_or_executable(self):
+    def test_termux_status_uses_only_fixed_adb_package_queries(self):
+        calls = []
+
+        def fake_run(adb, args, timeout=8):
+            calls.append(tuple(args))
+            if args == ["get-state"]:
+                return 0, "device"
+            if args == ["shell", "pm", "path", "com.termux"]:
+                return 0, "package:/data/app/termux/base.apk"
+            if args == ["shell", "pm", "path", "com.termux.api"]:
+                return 1, ""
+            return 1, "unexpected"
+
+        with mock.patch("sage_forge.termux_tools.shutil.which", return_value="/usr/bin/adb"), \
+             mock.patch("sage_forge.termux_tools._run", side_effect=fake_run):
+            result = collect_termux_status({}, self.progress, lambda: False)
+
+        self.assertTrue(result["device_connected"])
+        self.assertTrue(result["termux_installed"])
+        self.assertFalse(result["termux_api_installed"])
+        self.assertEqual(calls, [
+            ("get-state",),
+            ("shell", "pm", "path", "com.termux"),
+            ("shell", "pm", "path", "com.termux.api"),
+        ])
+
+    def test_no_input_can_select_a_path_executable_or_termux_command(self):
         registry = tools.default_registry()
-        for tool_id in ("developer.runtime_inventory", "developer.project_snapshot"):
+        for tool_id in (
+            "developer.runtime_inventory",
+            "developer.project_snapshot",
+            "android.termux_status",
+        ):
             definition = registry.resolve(tool_id)
             with self.assertRaises(ValueError):
                 registry.validate_input(definition, {"path": "/tmp"})
             with self.assertRaises(ValueError):
                 registry.validate_input(definition, {"executable": "sh"})
+            with self.assertRaises(ValueError):
+                registry.validate_input(definition, {"command": "echo nope"})
 
 
 if __name__ == "__main__":
