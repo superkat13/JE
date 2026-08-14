@@ -1,0 +1,39 @@
+name: Probe Sage voice service contract
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and print voice service control seams
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_probe
+          python3 - <<'PY'
+          from pathlib import Path
+          for path, needles in [
+              (Path('sage_probe/app/src/main/java/com/pineapple/sage/MainActivity.java'), ['toggleListening', 'SageVoiceService']),
+              (Path('sage_probe/app/src/main/java/com/pineapple/sage/SageVoiceService.java'), ['onStartCommand', 'ACTION_', 'stopSelf', 'stopListening']),
+          ]:
+              lines=path.read_text(encoding='utf-8').splitlines()
+              print('\n===== '+path.name+' =====')
+              shown=set()
+              for i,line in enumerate(lines):
+                  if any(n in line for n in needles):
+                      a=max(0,i-12); b=min(len(lines),i+32)
+                      key=(a,b)
+                      if key in shown: continue
+                      shown.add(key)
+                      print(f'--- lines {a+1}-{b} ---')
+                      for j in range(a,b): print(f'{j+1:5d}: {lines[j]}')
+          PY
