@@ -1,0 +1,84 @@
+name: Probe transformed sherpa ABI
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  transformed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct current mic branch source
+        run: |
+          set -euo pipefail
+          git fetch origin sage-sherpa-mic-ab-v1-31:sage-sherpa-mic-ab-v1-31
+          git checkout sage-sherpa-mic-ab-v1-31 -- sage_patches sage_tests sage_tools
+          bash sage_tools/reconstruct_v1_31.sh sage_probe
+          mkdir -p sage_probe/app/libs
+          curl -L --fail --retry 3 --retry-delay 2 -o sage_probe/app/libs/sherpa-onnx-1.13.4.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          echo '03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780  sage_probe/app/libs/sherpa-onnx-1.13.4.aar' | sha256sum -c -
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Force javac transforms then inspect every FeatureConfig owner
+        working-directory: sage_probe
+        run: |
+          set +e
+          gradle :app:compileReleaseJavaWithJavac --info > ../compile-probe.txt 2>&1
+          STATUS=$?
+          set -e
+          echo "compile_status=$STATUS" | tee ../transformed-summary.txt
+          grep -E 'SageSherpaMicTester.java|cannot find symbol|incompatible types|required:|found:' ../compile-probe.txt | tail -n 80 | tee -a ../transformed-summary.txt || true
+          cd ..
+          : > transformed-owners.txt
+          find sage_probe "$HOME/.gradle/caches" -type f \( -name '*.jar' -o -name '*.aar' \) -print0 | while IFS= read -r -d '' FILE; do
+            if [[ "$FILE" == *.jar ]]; then
+              if unzip -l "$FILE" 2>/dev/null | grep -q 'com/k2fsa/sherpa/onnx/FeatureConfig.class'; then
+                echo "OWNER $FILE" >> transformed-owners.txt
+                javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -E 'FeatureConfig\(|setSampleRate|setFeatureDim|setDither' >> transformed-owners.txt || true
+                javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.OnlineModelConfig | grep -E 'setDebug' >> transformed-owners.txt || true
+                javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.OnlineStream | grep -E 'inputFinished' >> transformed-owners.txt || true
+              fi
+            else
+              TMP=$(mktemp -d)
+              unzip -q "$FILE" -d "$TMP" 2>/dev/null || true
+              if [ -f "$TMP/classes.jar" ] && unzip -l "$TMP/classes.jar" 2>/dev/null | grep -q 'com/k2fsa/sherpa/onnx/FeatureConfig.class'; then
+                echo "OWNER $FILE :: classes.jar" >> transformed-owners.txt
+                javap -classpath "$TMP/classes.jar" -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -E 'FeatureConfig\(|setSampleRate|setFeatureDim|setDither' >> transformed-owners.txt || true
+                javap -classpath "$TMP/classes.jar" -public com.k2fsa.sherpa.onnx.OnlineModelConfig | grep -E 'setDebug' >> transformed-owners.txt || true
+                javap -classpath "$TMP/classes.jar" -public com.k2fsa.sherpa.onnx.OnlineStream | grep -E 'inputFinished' >> transformed-owners.txt || true
+              fi
+              find "$TMP" -type f -name '*.jar' -print0 | while IFS= read -r -d '' NESTED; do
+                if unzip -l "$NESTED" 2>/dev/null | grep -q 'com/k2fsa/sherpa/onnx/FeatureConfig.class'; then
+                  echo "OWNER $FILE :: ${NESTED#$TMP/}" >> transformed-owners.txt
+                  javap -classpath "$NESTED" -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -E 'FeatureConfig\(|setSampleRate|setFeatureDim|setDither' >> transformed-owners.txt || true
+                  javap -classpath "$NESTED" -public com.k2fsa.sherpa.onnx.OnlineModelConfig | grep -E 'setDebug' >> transformed-owners.txt || true
+                  javap -classpath "$NESTED" -public com.k2fsa.sherpa.onnx.OnlineStream | grep -E 'inputFinished' >> transformed-owners.txt || true
+                fi
+              done
+              rm -rf "$TMP"
+            fi
+          done
+          cat transformed-owners.txt | tee -a transformed-summary.txt
+          test -s transformed-owners.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-transformed-abi
+          path: |
+            transformed-summary.txt
+            transformed-owners.txt
+            compile-probe.txt
+          if-no-files-found: error
+          retention-days: 30
