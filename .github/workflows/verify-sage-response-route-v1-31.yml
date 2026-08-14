@@ -1,16 +1,16 @@
-name: Verify Sage 1.31 natural voice
+name: Verify Sage 1.31 sherpa primary ASR
 
 on:
   push:
     branches:
-      - sage-natural-voice-v1-31
+      - sage-sherpa-primary-v1-31
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  sage-natural-voice-131:
+  sage-sherpa-primary-131:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -30,15 +30,16 @@ jobs:
           grep -F 'versionCode = 43' sage_build_1301_baseline/app/build.gradle.kts
           grep -F 'versionName = "1.30.1"' sage_build_1301_baseline/app/build.gradle.kts
 
-      - name: First complete Sage 1.31 reconstruction
+      - name: First complete Sage 1.31 sherpa reconstruction
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_31.sh sage_build_131_a
           python3 sage_tests/test_brain_presence_v1_31.py sage_build_131_a
           python3 sage_tests/test_response_route_v1_31.py sage_build_131_a
           python3 sage_tests/test_natural_voice_v1_31.py sage_build_131_a
+          python3 sage_tests/test_sherpa_primary_v1_31.py sage_build_131_a
 
-      - name: Key inherited conversation voice and owner-boundary regressions
+      - name: Key inherited speech conversation media and owner regressions
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_29.sh sage_build_129_baseline
@@ -46,6 +47,8 @@ jobs:
             sage_tests/test_conversation_media_echo_v1_29.py \
             sage_tests/test_media_voice_repair_v1_29.py \
             sage_tests/test_owner_conversation_finish_v1_29.py \
+            sage_tests/test_voice_tolerance_v1_29.py \
+            sage_tests/test_glass_recovery_and_arithmetic_v1_29.py \
             sage_tests/test_brain_repair_v1_29.py \
             sage_tests/test_professional_brain_repair_v1_29.py \
             sage_tests/test_one_sage_routing_v1_29.py \
@@ -58,15 +61,47 @@ jobs:
             python3 "$test_file" sage_build_130_baseline
           done
 
-      - name: Second independent complete Sage 1.31 reconstruction
+      - name: Second independent complete Sage 1.31 sherpa reconstruction
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_31.sh sage_build_131_b
           python3 sage_tests/test_brain_presence_v1_31.py sage_build_131_b
           python3 sage_tests/test_response_route_v1_31.py sage_build_131_b
           python3 sage_tests/test_natural_voice_v1_31.py sage_build_131_b
+          python3 sage_tests/test_sherpa_primary_v1_31.py sage_build_131_b
           diff -qr --exclude=build --exclude=.gradle sage_build_131_a/app/src sage_build_131_b/app/src
           cmp sage_build_131_a/app/build.gradle.kts sage_build_131_b/app/build.gradle.kts
+
+      - name: Add pinned sherpa runtime and licensed English streaming model
+        run: |
+          set -euo pipefail
+          AAR_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar"
+          AAR_SHA="03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780"
+          MODEL_URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2"
+          MODEL_BYTES=127887156
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sherpa-onnx-1.13.4.aar "$AAR_URL"
+          test "$(sha256sum /tmp/sherpa-onnx-1.13.4.aar | cut -d' ' -f1)" = "$AAR_SHA"
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sherpa-en-20m.tar.bz2 "$MODEL_URL"
+          test "$(stat -c%s /tmp/sherpa-en-20m.tar.bz2)" = "$MODEL_BYTES"
+          sha256sum /tmp/sherpa-en-20m.tar.bz2 | tee sherpa-model-archive.sha256
+          rm -rf /tmp/sherpa-en-20m
+          mkdir -p /tmp/sherpa-en-20m
+          tar -xjf /tmp/sherpa-en-20m.tar.bz2 -C /tmp/sherpa-en-20m
+          MODEL_DIR="/tmp/sherpa-en-20m/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17"
+          for build in sage_build_131_a sage_build_131_b; do
+            mkdir -p "$build/app/libs" "$build/app/src/main/assets/sherpa-asr"
+            cp /tmp/sherpa-onnx-1.13.4.aar "$build/app/libs/sherpa-onnx-1.13.4.aar"
+            cp "$MODEL_DIR/encoder-epoch-99-avg-1.int8.onnx" "$build/app/src/main/assets/sherpa-asr/"
+            cp "$MODEL_DIR/decoder-epoch-99-avg-1.onnx" "$build/app/src/main/assets/sherpa-asr/"
+            cp "$MODEL_DIR/joiner-epoch-99-avg-1.int8.onnx" "$build/app/src/main/assets/sherpa-asr/"
+            cp "$MODEL_DIR/tokens.txt" "$build/app/src/main/assets/sherpa-asr/"
+            cat > "$build/app/src/main/assets/sherpa-asr/NOTICE.txt" <<'NOTICE'
+          sherpa-onnx runtime v1.13.4: Apache-2.0, k2-fsa/sherpa-onnx.
+          English 20M streaming Zipformer model derived from desh2608/icefall-asr-librispeech-pruned-transducer-stateless7-streaming-small: Apache-2.0.
+          NOTICE
+          done
+          test -s sage_build_131_a/app/src/main/assets/sherpa-asr/encoder-epoch-99-avg-1.int8.onnx
+          test -s sage_build_131_a/app/src/main/assets/sherpa-asr/tokens.txt
 
       - name: Add exact pinned native Brain and offline wake assets
         run: |
@@ -77,11 +112,11 @@ jobs:
           git -C sage_build_131_a/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
           git -C sage_build_131_a/third_party/llama.cpp checkout --detach FETCH_HEAD
           test "$(git -C sage_build_131_a/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
-          mkdir -p /tmp/sage-vosk-131-voice sage_build_131_a/app/src/main/assets
-          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-131-voice.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-          unzip -q /tmp/sage-vosk-131-voice.zip -d /tmp/sage-vosk-131-voice
-          mv /tmp/sage-vosk-131-voice/vosk-model-small-en-us-0.15 sage_build_131_a/app/src/main/assets/model-en-us
-          printf 'sage-v1.31-natural-voice\n' > sage_build_131_a/app/src/main/assets/model-en-us/uuid
+          mkdir -p /tmp/sage-vosk-131-sherpa sage_build_131_a/app/src/main/assets
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-131-sherpa.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-131-sherpa.zip -d /tmp/sage-vosk-131-sherpa
+          mv /tmp/sage-vosk-131-sherpa/vosk-model-small-en-us-0.15 sage_build_131_a/app/src/main/assets/model-en-us
+          printf 'sage-v1.31-sherpa-primary\n' > sage_build_131_a/app/src/main/assets/model-en-us/uuid
           test -s sage_build_131_a/app/src/main/assets/model-en-us/am/final.mdl
           mkdir -p sage_build_131_b/third_party sage_build_131_b/app/src/main/assets
           cp -a sage_build_131_a/third_party/llama.cpp sage_build_131_b/third_party/llama.cpp
@@ -129,39 +164,46 @@ jobs:
           gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
 
-      - name: Assemble and inspect Sage 1.31 natural voice checkpoint APK
+      - name: Assemble and inspect Sage 1.31 sherpa checkpoint APK
         working-directory: sage_build_131_a
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
           APK="app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-131-voice-apksigner.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-131-sherpa-apksigner.txt
           EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
-          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-131-voice-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-131-sherpa-apksigner.txt | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL" = "$EXPECTED"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee ../sage-131-voice-badging.txt
-          grep -F "package: name='com.pineapple.sagecommander.stable'" ../sage-131-voice-badging.txt
-          grep -F "versionCode='44'" ../sage-131-voice-badging.txt
-          grep -F "versionName='1.31.0'" ../sage-131-voice-badging.txt
-          grep -F "application-label:'Sage Commander 1.31.0'" ../sage-131-voice-badging.txt
-          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-131-voice-wake-asset.txt
-          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-131-voice-native-brain.txt
-          sha256sum "$APK" | tee ../Sage-Commander-1.31.0-natural-voice.sha256
-          cp "$APK" ../Sage-Commander-1.31.0-natural-voice.apk
-          git rev-parse HEAD | tee ../Sage-1.31.0-natural-voice-source-commit.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee ../sage-131-sherpa-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable'" ../sage-131-sherpa-badging.txt
+          grep -F "versionCode='44'" ../sage-131-sherpa-badging.txt
+          grep -F "versionName='1.31.0'" ../sage-131-sherpa-badging.txt
+          grep -F "application-label:'Sage Commander 1.31.0'" ../sage-131-sherpa-badging.txt
+          unzip -l "$APK" | grep -F 'assets/sherpa-asr/encoder-epoch-99-avg-1.int8.onnx' | tee ../sage-131-sherpa-model.txt
+          unzip -l "$APK" | grep -F 'assets/sherpa-asr/tokens.txt' >> ../sage-131-sherpa-model.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so' | tee ../sage-131-sherpa-native.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libonnxruntime.so' >> ../sage-131-sherpa-native.txt
+          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-131-sherpa-wake-asset.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-131-sherpa-native-brain.txt
+          sha256sum "$APK" | tee ../Sage-Commander-1.31.0-sherpa-primary.sha256
+          cp "$APK" ../Sage-Commander-1.31.0-sherpa-primary.apk
+          git rev-parse HEAD | tee ../Sage-1.31.0-sherpa-source-commit.txt
 
-      - name: Upload Sage 1.31 natural voice checkpoint
+      - name: Upload Sage 1.31 sherpa engineering checkpoint
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.31.0-natural-voice
+          name: Sage-Commander-1.31.0-sherpa-primary
           path: |
-            Sage-Commander-1.31.0-natural-voice.apk
-            Sage-Commander-1.31.0-natural-voice.sha256
-            Sage-1.31.0-natural-voice-source-commit.txt
-            sage-131-voice-apksigner.txt
-            sage-131-voice-badging.txt
-            sage-131-voice-wake-asset.txt
-            sage-131-voice-native-brain.txt
+            Sage-Commander-1.31.0-sherpa-primary.apk
+            Sage-Commander-1.31.0-sherpa-primary.sha256
+            Sage-1.31.0-sherpa-source-commit.txt
+            sherpa-model-archive.sha256
+            sage-131-sherpa-apksigner.txt
+            sage-131-sherpa-badging.txt
+            sage-131-sherpa-model.txt
+            sage-131-sherpa-native.txt
+            sage-131-sherpa-wake-asset.txt
+            sage-131-sherpa-native-brain.txt
           if-no-files-found: error
           retention-days: 30
