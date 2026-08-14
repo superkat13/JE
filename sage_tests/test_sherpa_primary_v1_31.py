@@ -19,7 +19,7 @@ checks = {
     "model pinned by identity": "sherpa-onnx-streaming-zipformer-en-20M-2023-02-17-int8" in sherpa,
     "int8 encoder": "encoder-epoch-99-avg-1.int8.onnx" in sherpa,
     "int8 joiner": "joiner-epoch-99-avg-1.int8.onnx" in sherpa,
-    "offline tokens": 'sherpa-asr/tokens.txt' in sherpa,
+    "offline tokens": 'MODEL_DIR + "/tokens.txt"' in sherpa,
     "local audio record": "AudioRecord" in sherpa and "VOICE_RECOGNITION" in sherpa,
     "streaming partials": "partialResults(resultBundle(text))" in sherpa,
     "endpoint finalization": "isEndpoint(stream)" in sherpa,
