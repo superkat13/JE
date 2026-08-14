@@ -1,0 +1,49 @@
+name: Probe sherpa model evidence
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fingerprint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download official small English streaming model archive
+        run: |
+          set -euo pipefail
+          URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17.tar.bz2
+          ARCHIVE=/tmp/sherpa-model.tar.bz2
+          curl -L --fail --retry 3 --retry-delay 2 -o "$ARCHIVE" "$URL"
+          sha256sum "$ARCHIVE" | tee sherpa-model-archive.sha256
+          stat -c 'archive_bytes=%s' "$ARCHIVE" | tee sherpa-model-evidence.txt
+          tar -tjf "$ARCHIVE" | sort > sherpa-model-files.txt
+          ROOT=sherpa-onnx-streaming-zipformer-en-20M-2023-02-17
+          for FILE in \
+            "$ROOT/tokens.txt" \
+            "$ROOT/encoder-epoch-99-avg-1.int8.onnx" \
+            "$ROOT/decoder-epoch-99-avg-1.onnx" \
+            "$ROOT/joiner-epoch-99-avg-1.int8.onnx"; do
+            grep -Fx "$FILE" sherpa-model-files.txt
+            tar -xOf "$ARCHIVE" "$FILE" | sha256sum | sed "s#  -#  $FILE#" | tee -a sherpa-model-evidence.txt
+            printf '%s=' "$FILE" | tee -a sherpa-model-evidence.txt
+            tar -xOf "$ARCHIVE" "$FILE" | wc -c | tee -a sherpa-model-evidence.txt
+          done
+          grep -Ei '(^|/)(license|copying|notice)(\.|$)' sherpa-model-files.txt | tee sherpa-model-license-files.txt || true
+      - name: Upload model fingerprint only
+        uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-model-evidence
+          path: |
+            sherpa-model-archive.sha256
+            sherpa-model-evidence.txt
+            sherpa-model-files.txt
+            sherpa-model-license-files.txt
+          if-no-files-found: error
+          retention-days: 30
