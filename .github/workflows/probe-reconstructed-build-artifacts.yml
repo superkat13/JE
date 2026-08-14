@@ -1,0 +1,41 @@
+name: Probe reconstructed build artifacts
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  stale-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct without invoking Gradle and inspect restored build state
+        run: |
+          set -euo pipefail
+          git fetch origin sage-sherpa-mic-ab-v1-31:sage-sherpa-mic-ab-v1-31
+          git checkout sage-sherpa-mic-ab-v1-31 -- sage_patches sage_tests sage_tools
+          bash sage_tools/reconstruct_v1_31.sh sage_probe
+          echo '===== build directories restored by source archive ====='
+          find sage_probe -type d \( -name build -o -name .gradle -o -name .cxx \) -print | sort | tee stale-build-dirs.txt
+          echo '===== raw sherpa classes restored before Gradle ====='
+          find sage_probe -type f \( -name 'FeatureConfig.class' -o -name 'OnlineStream.class' -o -name 'OnlineModelConfig.class' \) -print | sort | tee stale-sherpa-classes.txt
+          echo '===== all preexisting class files count ====='
+          find sage_probe -type f -name '*.class' | wc -l | tee stale-class-count.txt
+          echo '===== preexisting jars/aars ====='
+          find sage_probe -type f \( -name '*.jar' -o -name '*.aar' \) -printf '%p %s\n' | sort | tee stale-archives.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reconstructed-build-artifact-probe
+          path: |
+            stale-build-dirs.txt
+            stale-sherpa-classes.txt
+            stale-class-count.txt
+            stale-archives.txt
+          if-no-files-found: error
+          retention-days: 30
