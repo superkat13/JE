@@ -48,7 +48,7 @@ jobs:
             sage_tests/test_media_voice_repair_v1_29.py \
             sage_tests/test_owner_conversation_finish_v1_29.py \
             sage_tests/test_voice_tolerance_v1_29.py \
-            sage_tests/test_glass_recovery_and_arithmetic_v1_29.py \
+            sage_tests/test_glass_recovery_fastlane_v1_29.py \
             sage_tests/test_brain_repair_v1_29.py \
             sage_tests/test_professional_brain_repair_v1_29.py \
             sage_tests/test_one_sage_routing_v1_29.py \
