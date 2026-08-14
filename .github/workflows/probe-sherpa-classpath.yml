@@ -1,0 +1,78 @@
+name: Probe sherpa compile classpath
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  classpath:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct Sage and install pinned sherpa AAR
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_probe
+          mkdir -p sage_probe/app/libs
+          curl -L --fail --retry 3 --retry-delay 2 -o sage_probe/app/libs/sherpa-onnx-1.13.4.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          echo '03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780  sage_probe/app/libs/sherpa-onnx-1.13.4.aar' | sha256sum -c -
+          echo '===== reconstructed app/libs ====='
+          find sage_probe/app/libs -maxdepth 1 -type f -printf '%f %s bytes\n' | sort
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Resolve release compile classpath
+        working-directory: sage_probe
+        run: |
+          set -euo pipefail
+          gradle :app:dependencies --configuration releaseCompileClasspath | tee ../release-compile-dependencies.txt
+      - name: Find every FeatureConfig class owner and inspect ABI
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/sherpa-owners
+          : > sherpa-class-owners.txt
+          find sage_probe "$HOME/.gradle/caches" -type f \( -name '*.jar' -o -name '*.aar' \) -print0 | while IFS= read -r -d '' FILE; do
+            case "$FILE" in
+              *.jar)
+                if unzip -l "$FILE" 2>/dev/null | grep -q 'com/k2fsa/sherpa/onnx/FeatureConfig.class'; then
+                  echo "JAR $FILE" | tee -a sherpa-class-owners.txt
+                  javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.FeatureConfig | tee -a sherpa-class-owners.txt
+                  javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.OnlineModelConfig | tee -a sherpa-class-owners.txt
+                  javap -classpath "$FILE" -public com.k2fsa.sherpa.onnx.OnlineStream | tee -a sherpa-class-owners.txt
+                fi
+                ;;
+              *.aar)
+                if unzip -l "$FILE" 2>/dev/null | grep -q 'classes.jar'; then
+                  KEY=$(printf '%s' "$FILE" | sha256sum | cut -c1-16)
+                  JAR="/tmp/sherpa-owners/$KEY.jar"
+                  unzip -p "$FILE" classes.jar > "$JAR"
+                  if unzip -l "$JAR" 2>/dev/null | grep -q 'com/k2fsa/sherpa/onnx/FeatureConfig.class'; then
+                    echo "AAR $FILE" | tee -a sherpa-class-owners.txt
+                    javap -classpath "$JAR" -public com.k2fsa.sherpa.onnx.FeatureConfig | tee -a sherpa-class-owners.txt
+                    javap -classpath "$JAR" -public com.k2fsa.sherpa.onnx.OnlineModelConfig | tee -a sherpa-class-owners.txt
+                    javap -classpath "$JAR" -public com.k2fsa.sherpa.onnx.OnlineStream | tee -a sherpa-class-owners.txt
+                  fi
+                fi
+                ;;
+            esac
+          done
+          test -s sherpa-class-owners.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-classpath-probe
+          path: |
+            release-compile-dependencies.txt
+            sherpa-class-owners.txt
+          if-no-files-found: error
+          retention-days: 30
