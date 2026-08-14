@@ -1,0 +1,29 @@
+name: Probe sherpa static conflict
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and inspect dependency declarations and bundled libraries
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_probe
+          echo '===== build.gradle.kts ====='
+          cat sage_probe/app/build.gradle.kts
+          echo '===== settings.gradle* ====='
+          find sage_probe -maxdepth 2 -type f \( -name 'settings.gradle' -o -name 'settings.gradle.kts' -o -name 'build.gradle' -o -name 'build.gradle.kts' \) -print -exec sed -n '1,260p' {} \;
+          echo '===== bundled libs ====='
+          find sage_probe/app -type f \( -name '*.aar' -o -name '*.jar' \) -printf '%p %s bytes\n' | sort || true
+          echo '===== sherpa text references ====='
+          grep -RniI -E 'sherpa|k2fsa|onnx' sage_probe --exclude='*.so' --exclude='*.gguf' --exclude-dir=build --exclude-dir=.gradle | head -n 300 || true
