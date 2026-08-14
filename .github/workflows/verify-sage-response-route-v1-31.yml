@@ -1,16 +1,16 @@
-name: Verify Sage 1.31 response route
+name: Verify Sage 1.31 natural voice
 
 on:
   push:
     branches:
-      - sage-response-route-v1-31
+      - sage-natural-voice-v1-31
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
-  sage-response-route-131:
+  sage-natural-voice-131:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -30,22 +30,24 @@ jobs:
           grep -F 'versionCode = 43' sage_build_1301_baseline/app/build.gradle.kts
           grep -F 'versionName = "1.30.1"' sage_build_1301_baseline/app/build.gradle.kts
 
-      - name: First Sage 1.31 response-route reconstruction
+      - name: First complete Sage 1.31 reconstruction
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_31.sh sage_build_131_a
           python3 sage_tests/test_brain_presence_v1_31.py sage_build_131_a
           python3 sage_tests/test_response_route_v1_31.py sage_build_131_a
+          python3 sage_tests/test_natural_voice_v1_31.py sage_build_131_a
 
-      - name: Key inherited conversation and owner-boundary regressions
+      - name: Key inherited conversation voice and owner-boundary regressions
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_29.sh sage_build_129_baseline
           for test_file in \
             sage_tests/test_conversation_media_echo_v1_29.py \
+            sage_tests/test_media_voice_repair_v1_29.py \
+            sage_tests/test_owner_conversation_finish_v1_29.py \
             sage_tests/test_brain_repair_v1_29.py \
             sage_tests/test_professional_brain_repair_v1_29.py \
-            sage_tests/test_owner_conversation_finish_v1_29.py \
             sage_tests/test_one_sage_routing_v1_29.py \
             sage_tests/test_background_survival_v1_29.py \
             sage_tests/test_red_queen_consolidation_v1_29.py; do
@@ -56,12 +58,13 @@ jobs:
             python3 "$test_file" sage_build_130_baseline
           done
 
-      - name: Second independent Sage 1.31 response-route reconstruction
+      - name: Second independent complete Sage 1.31 reconstruction
         run: |
           set -euo pipefail
           bash sage_tools/reconstruct_v1_31.sh sage_build_131_b
           python3 sage_tests/test_brain_presence_v1_31.py sage_build_131_b
           python3 sage_tests/test_response_route_v1_31.py sage_build_131_b
+          python3 sage_tests/test_natural_voice_v1_31.py sage_build_131_b
           diff -qr --exclude=build --exclude=.gradle sage_build_131_a/app/src sage_build_131_b/app/src
           cmp sage_build_131_a/app/build.gradle.kts sage_build_131_b/app/build.gradle.kts
 
@@ -74,11 +77,11 @@ jobs:
           git -C sage_build_131_a/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
           git -C sage_build_131_a/third_party/llama.cpp checkout --detach FETCH_HEAD
           test "$(git -C sage_build_131_a/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
-          mkdir -p /tmp/sage-vosk-131-route sage_build_131_a/app/src/main/assets
-          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-131-route.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
-          unzip -q /tmp/sage-vosk-131-route.zip -d /tmp/sage-vosk-131-route
-          mv /tmp/sage-vosk-131-route/vosk-model-small-en-us-0.15 sage_build_131_a/app/src/main/assets/model-en-us
-          printf 'sage-v1.31-response-route\n' > sage_build_131_a/app/src/main/assets/model-en-us/uuid
+          mkdir -p /tmp/sage-vosk-131-voice sage_build_131_a/app/src/main/assets
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-131-voice.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-131-voice.zip -d /tmp/sage-vosk-131-voice
+          mv /tmp/sage-vosk-131-voice/vosk-model-small-en-us-0.15 sage_build_131_a/app/src/main/assets/model-en-us
+          printf 'sage-v1.31-natural-voice\n' > sage_build_131_a/app/src/main/assets/model-en-us/uuid
           test -s sage_build_131_a/app/src/main/assets/model-en-us/am/final.mdl
           mkdir -p sage_build_131_b/third_party sage_build_131_b/app/src/main/assets
           cp -a sage_build_131_a/third_party/llama.cpp sage_build_131_b/third_party/llama.cpp
@@ -126,39 +129,39 @@ jobs:
           gradle :app:testReleaseUnitTest --stacktrace
           gradle :app:lintRelease --stacktrace
 
-      - name: Assemble and inspect Sage 1.31 route checkpoint APK
+      - name: Assemble and inspect Sage 1.31 natural voice checkpoint APK
         working-directory: sage_build_131_a
         run: |
           set -euo pipefail
           gradle :app:assembleRelease --stacktrace
           APK="app/build/outputs/apk/release/app-release.apk"
           test -f "$APK"
-          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-131-route-apksigner.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-131-voice-apksigner.txt
           EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
-          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-131-route-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-131-voice-apksigner.txt | tr '[:upper:]' '[:lower:]')"
           test "$ACTUAL" = "$EXPECTED"
-          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee ../sage-131-route-badging.txt
-          grep -F "package: name='com.pineapple.sagecommander.stable'" ../sage-131-route-badging.txt
-          grep -F "versionCode='44'" ../sage-131-route-badging.txt
-          grep -F "versionName='1.31.0'" ../sage-131-route-badging.txt
-          grep -F "application-label:'Sage Commander 1.31.0'" ../sage-131-route-badging.txt
-          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-131-route-wake-asset.txt
-          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-131-route-native-brain.txt
-          sha256sum "$APK" | tee ../Sage-Commander-1.31.0-response-route.sha256
-          cp "$APK" ../Sage-Commander-1.31.0-response-route.apk
-          git rev-parse HEAD | tee ../Sage-1.31.0-route-source-commit.txt
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee ../sage-131-voice-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable'" ../sage-131-voice-badging.txt
+          grep -F "versionCode='44'" ../sage-131-voice-badging.txt
+          grep -F "versionName='1.31.0'" ../sage-131-voice-badging.txt
+          grep -F "application-label:'Sage Commander 1.31.0'" ../sage-131-voice-badging.txt
+          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-131-voice-wake-asset.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-131-voice-native-brain.txt
+          sha256sum "$APK" | tee ../Sage-Commander-1.31.0-natural-voice.sha256
+          cp "$APK" ../Sage-Commander-1.31.0-natural-voice.apk
+          git rev-parse HEAD | tee ../Sage-1.31.0-natural-voice-source-commit.txt
 
-      - name: Upload Sage 1.31 response-route checkpoint
+      - name: Upload Sage 1.31 natural voice checkpoint
         uses: actions/upload-artifact@v4
         with:
-          name: Sage-Commander-1.31.0-response-route
+          name: Sage-Commander-1.31.0-natural-voice
           path: |
-            Sage-Commander-1.31.0-response-route.apk
-            Sage-Commander-1.31.0-response-route.sha256
-            Sage-1.31.0-route-source-commit.txt
-            sage-131-route-apksigner.txt
-            sage-131-route-badging.txt
-            sage-131-route-wake-asset.txt
-            sage-131-route-native-brain.txt
+            Sage-Commander-1.31.0-natural-voice.apk
+            Sage-Commander-1.31.0-natural-voice.sha256
+            Sage-1.31.0-natural-voice-source-commit.txt
+            sage-131-voice-apksigner.txt
+            sage-131-voice-badging.txt
+            sage-131-voice-wake-asset.txt
+            sage-131-voice-native-brain.txt
           if-no-files-found: error
           retention-days: 30
