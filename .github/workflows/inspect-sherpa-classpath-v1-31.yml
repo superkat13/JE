@@ -1,0 +1,41 @@
+name: Inspect Sage sherpa compile classpath
+
+on:
+  push:
+    branches:
+      - sage-sherpa-primary-v1-31
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-classpath:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Reconstruct and stage pinned sherpa AAR
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_build_131_probe
+          mkdir -p sage_build_131_probe/app/libs
+          curl -L --fail --retry 3 --retry-delay 2 -o sage_build_131_probe/app/libs/sherpa-onnx-1.13.4.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          test "$(sha256sum sage_build_131_probe/app/libs/sherpa-onnx-1.13.4.aar | cut -d' ' -f1)" = "03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780"
+          echo '===== app/build.gradle.kts ====='
+          cat sage_build_131_probe/app/build.gradle.kts
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+      - name: Print release compile classpath and sherpa origins
+        working-directory: sage_build_131_probe
+        run: |
+          set -euo pipefail
+          gradle :app:dependencies --configuration releaseCompileClasspath | tee ../release-compile-classpath.txt
+          echo '===== sherpa dependency lines ====='
+          grep -i -C 4 sherpa ../release-compile-classpath.txt || true
+          echo '===== files containing sherpa or k2fsa ====='
+          find "$HOME/.gradle" app -type f \( -iname '*sherpa*' -o -iname '*onnx*' \) -print | sort || true
