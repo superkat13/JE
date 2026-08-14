@@ -36,13 +36,13 @@ def main() -> None:
     require(manager, 'target.renameTo(backup)', "old-model atomic backup")
     require(manager, 'staging.renameTo(target)', "staged atomic activation")
     require(manager, 'License metadata: Apache-2.0', "model license notice")
+    require(manager, 'Android STT remains the active command backend', "no premature route switch")
     require(state, 'exactFile(dir, "tokens.txt", 5_048L)', "runtime exact-size readiness")
     require(state, 'Verified model pack present:', "Speech Lab readiness wording")
     require(lab, 'Install local command speech (~45 MB)', "single install action")
     require(lab, 'Verify local command speech', "adaptive verify action")
     require(lab, 'Repair local command speech', "adaptive repair action")
     require(lab, 'Cancel speech model download', "temporary cancel action")
-    require(lab, 'Android STT remains the active command backend', "no premature route switch")
     if "/resolve/main/" in manager:
         raise SystemExit("model installer must not use a floating main branch URL")
     if "tar.bz2" in manager:
