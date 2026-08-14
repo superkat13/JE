@@ -1,0 +1,47 @@
+name: Probe sherpa Java ABI
+
+on:
+  push:
+    branches:
+      - sage-sherpa-model-evidence-20260813
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  javap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Verify AAR and inspect Java-visible sherpa API
+        run: |
+          set -euo pipefail
+          AAR=/tmp/sherpa-onnx-1.13.4.aar
+          curl -L --fail --retry 3 --retry-delay 2 -o "$AAR" https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          echo '03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780  /tmp/sherpa-onnx-1.13.4.aar' | sha256sum -c -
+          unzip -p "$AAR" classes.jar > /tmp/sherpa-classes.jar
+          for CLASS in \
+            com.k2fsa.sherpa.onnx.FeatureConfig \
+            com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig \
+            com.k2fsa.sherpa.onnx.OnlineModelConfig \
+            com.k2fsa.sherpa.onnx.EndpointConfig \
+            com.k2fsa.sherpa.onnx.OnlineRecognizerConfig \
+            com.k2fsa.sherpa.onnx.OnlineRecognizer \
+            com.k2fsa.sherpa.onnx.OnlineStream \
+            com.k2fsa.sherpa.onnx.OnlineRecognizerResult \
+            com.k2fsa.sherpa.onnx.OnlineRecognizerKt; do
+            echo "===== $CLASS =====" | tee -a sherpa-java-abi.txt
+            javap -classpath /tmp/sherpa-classes.jar -public "$CLASS" | tee -a sherpa-java-abi.txt
+          done
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sherpa-java-abi
+          path: sherpa-java-abi.txt
+          if-no-files-found: error
+          retention-days: 30
