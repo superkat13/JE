@@ -1,0 +1,48 @@
+name: Inspect sherpa 1.13.4 Java ABI
+
+on:
+  push:
+    branches:
+      - sage-sherpa-primary-v1-31
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect-sherpa-abi:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Download pinned AAR and print Java ABI
+        run: |
+          set -euo pipefail
+          URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar"
+          SHA="03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780"
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sherpa.aar "$URL"
+          test "$(sha256sum /tmp/sherpa.aar | cut -d' ' -f1)" = "$SHA"
+          unzip -p /tmp/sherpa.aar classes.jar > /tmp/sherpa-classes.jar
+          for cls in \
+            FeatureConfig \
+            OnlineTransducerModelConfig \
+            OnlineParaformerModelConfig \
+            OnlineZipformer2CtcModelConfig \
+            OnlineNemoCtcModelConfig \
+            OnlineToneCtcModelConfig \
+            OnlineModelConfig \
+            OnlineLMConfig \
+            OnlineCtcFstDecoderConfig \
+            EndpointRule \
+            EndpointConfig \
+            QnnConfig \
+            HomophoneReplacerConfig \
+            OnlineRecognizerConfig \
+            OnlineRecognizer \
+            OnlineStream; do
+            echo "===== $cls ====="
+            javap -classpath /tmp/sherpa-classes.jar -p "com.k2fsa.sherpa.onnx.$cls" || true
+          done
