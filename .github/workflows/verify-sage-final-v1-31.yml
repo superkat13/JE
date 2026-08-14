@@ -1,0 +1,250 @@
+name: Verify final Sage 1.31
+
+on:
+  push:
+    branches:
+      - sage-final-v1-31-acceptance
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sage-final-131:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python Forge and patch integrity gate
+        run: |
+          set -euo pipefail
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py sage_forge/*.py sage_forge/tests/*.py
+          python3 -m unittest discover -v -s sage_forge/tests -t .
+
+      - name: Prove inherited Sage 1.30.1 floor
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_30_1.sh sage_build_1301_floor
+          python3 sage_tests/test_forge_compatibility_v1_30_1.py sage_build_1301_floor
+          grep -F 'versionCode = 43' sage_build_1301_floor/app/build.gradle.kts
+          grep -F 'versionName = "1.30.1"' sage_build_1301_floor/app/build.gradle.kts
+
+      - name: First final Sage 1.31 reconstruction and all 1.31 regressions
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_build_131_a
+          for test_file in sage_tests/test_*_v1_31.py; do
+            echo "=== $test_file ==="
+            python3 "$test_file" sage_build_131_a
+          done
+          grep -F 'versionCode = 44' sage_build_131_a/app/build.gradle.kts
+          grep -F 'versionName = "1.31.0"' sage_build_131_a/app/build.gradle.kts
+          test ! -d sage_build_131_a/app/build
+          test ! -d sage_build_131_a/.gradle
+          test ! -d sage_build_131_a/app/.cxx
+
+      - name: Inherited Sage continuity regression pass
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129_floor
+          for test_file in sage_tests/test_*_v1_29.py; do
+            echo "=== $test_file ==="
+            python3 "$test_file" sage_build_129_floor
+          done
+          bash sage_tools/reconstruct_v1_30.sh sage_build_130_floor
+          for test_file in sage_tests/test_*_v1_30.py; do
+            echo "=== $test_file ==="
+            python3 "$test_file" sage_build_130_floor
+          done
+          bash sage_tools/reconstruct_v1_28.sh sage_build_128_floor
+          for test_file in \
+            sage_tests/test_stabilization_v1_21.py \
+            sage_tests/test_android_compat_v1_21.py \
+            sage_tests/test_brain_watchdog_v1_22.py \
+            sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+            sage_tests/test_wake_profiles_compile_repair_v1_23.py \
+            sage_tests/test_continuity_report_v1_24.py \
+            sage_tests/test_number_overlay_release_v1_24_1.py \
+            sage_tests/test_sage_release_v1_24_2.py \
+            sage_tests/test_self_repair_v1_25.py \
+            sage_tests/test_workbench_v1_25.py \
+            sage_tests/test_sage_forge_v1_25.py \
+            sage_tests/test_reliability_toolbelt_v1_26.py \
+            sage_tests/test_continuity_finish_v1_26.py \
+            sage_tests/test_intelligence_memory_v1_27.py \
+            sage_tests/test_living_sage_v1_28.py \
+            sage_tests/test_red_queen_v1_28.py \
+            sage_tests/test_orchestrator_registry_v1_28.py \
+            sage_tests/test_package_file_labs_v1_28.py \
+            sage_tests/test_network_operations_v1_28.py \
+            sage_tests/test_automation_v1_28.py; do
+            python3 "$test_file" sage_build_128_floor
+          done
+          python3 sage_tests/test_public_disclosure_v1_27.py
+
+      - name: Second independent final Sage 1.31 reconstruction
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_build_131_b
+          for test_file in sage_tests/test_*_v1_31.py; do
+            python3 "$test_file" sage_build_131_b
+          done
+          diff -qr --exclude=build --exclude=.gradle --exclude=.cxx sage_build_131_a/app/src sage_build_131_b/app/src
+          cmp sage_build_131_a/app/build.gradle.kts sage_build_131_b/app/build.gradle.kts
+
+      - name: Add exact pinned native Brain and offline wake model to both passes
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_131_a/third_party/llama.cpp
+          git -C sage_build_131_a/third_party/llama.cpp init
+          git -C sage_build_131_a/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_131_a/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_131_a/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build_131_a/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          mkdir -p /tmp/sage-vosk-final-131 sage_build_131_a/app/src/main/assets
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-final-131.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-final-131.zip -d /tmp/sage-vosk-final-131
+          mv /tmp/sage-vosk-final-131/vosk-model-small-en-us-0.15 sage_build_131_a/app/src/main/assets/model-en-us
+          printf 'sage-v1.31-final-acceptance\n' > sage_build_131_a/app/src/main/assets/model-en-us/uuid
+          test -s sage_build_131_a/app/src/main/assets/model-en-us/am/final.mdl
+          mkdir -p sage_build_131_b/third_party sage_build_131_b/app/src/main/assets
+          cp -a sage_build_131_a/third_party/llama.cpp sage_build_131_b/third_party/llama.cpp
+          cp -a sage_build_131_a/app/src/main/assets/model-en-us sage_build_131_b/app/src/main/assets/model-en-us
+
+      - name: Download and prove exact sherpa-onnx Android engine
+        run: |
+          set -euo pipefail
+          AAR=/tmp/sherpa-onnx-1.13.4.aar
+          URL=https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          SHA=03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780
+          curl -L --fail --retry 3 --retry-delay 2 -o "$AAR" "$URL"
+          test "$(stat -c%s "$AAR")" = 48847529
+          echo "$SHA  $AAR" | sha256sum -c -
+          unzip -l "$AAR" | grep -F 'jni/arm64-v8a/libonnxruntime.so'
+          unzip -l "$AAR" | grep -F 'jni/arm64-v8a/libsherpa-onnx-jni.so'
+          unzip -p "$AAR" classes.jar > /tmp/sherpa-classes.jar
+          javap -classpath /tmp/sherpa-classes.jar -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -F 'setSampleRate(int)'
+          javap -classpath /tmp/sherpa-classes.jar -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -F 'setFeatureDim(int)'
+          javap -classpath /tmp/sherpa-classes.jar -public com.k2fsa.sherpa.onnx.FeatureConfig | grep -F 'setDither(float)'
+          javap -classpath /tmp/sherpa-classes.jar -public com.k2fsa.sherpa.onnx.OnlineModelConfig | grep -F 'setDebug(boolean)'
+          javap -classpath /tmp/sherpa-classes.jar -public com.k2fsa.sherpa.onnx.OnlineStream | grep -F 'inputFinished()'
+          mkdir -p sage_build_131_a/app/libs sage_build_131_b/app/libs
+          cp "$AAR" sage_build_131_a/app/libs/sherpa-onnx-1.13.4.aar
+          cp "$AAR" sage_build_131_b/app/libs/sherpa-onnx-1.13.4.aar
+
+      - name: Prove immutable sherpa model manifest
+        run: |
+          set -euo pipefail
+          BASE='https://huggingface.co/csukuangfj/sherpa-onnx-streaming-zipformer-en-20M-2023-02-17/resolve/d42f2d9f7ca24806fb667456a18a9f1b60f70d16'
+          verify_model_file() {
+            NAME="$1"; BYTES="$2"; SHA="$3"; DEST="/tmp/model-$NAME"
+            curl -L --fail --retry 3 --retry-delay 2 -o "$DEST" "$BASE/$NAME?download=true"
+            test "$(stat -c%s "$DEST")" = "$BYTES"
+            echo "$SHA  $DEST" | sha256sum -c -
+          }
+          verify_model_file tokens.txt 5048 49e3c2646595fd907228b3c6787069658f67b17377c60aeb8619c4551b2316fb
+          verify_model_file encoder-epoch-99-avg-1.int8.onnx 42845182 3810755ce7c3ab26b42a8bcf39d191308fa27fb0f53358823ba46141d03b7eb3
+          verify_model_file decoder-epoch-99-avg-1.onnx 2092272 45a7f940ecfb53d89fa270ad11b88b961e53a317203eb24b1c8e95ed208b0f30
+          verify_model_file joiner-epoch-99-avg-1.int8.onnx 259572 e085d73b593cf9b0707f370dbd656d58327d3fe36d80d849202ef81df02cb01e
+          test "$((5048 + 42845182 + 2092272 + 259572))" = 45202074
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Verify permanent Sage signer before builds
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          ACTUAL="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          EXPECTED=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Install exact Android compile toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Clean first pass and prove Java compile separately
+        working-directory: sage_build_131_a
+        run: |
+          set -euo pipefail
+          rm -rf app/build .gradle app/.cxx
+          gradle --no-daemon :app:compileReleaseJavaWithJavac --stacktrace
+
+      - name: Native unit and lint first pass
+        working-directory: sage_build_131_a
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:externalNativeBuildRelease --stacktrace
+          gradle --no-daemon :app:testReleaseUnitTest --stacktrace
+          gradle --no-daemon :app:lintRelease --stacktrace
+
+      - name: Clean second pass and prove Java compile separately
+        working-directory: sage_build_131_b
+        run: |
+          set -euo pipefail
+          rm -rf app/build .gradle app/.cxx
+          gradle --no-daemon :app:compileReleaseJavaWithJavac --stacktrace
+
+      - name: Native unit and lint second pass
+        working-directory: sage_build_131_b
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:externalNativeBuildRelease --stacktrace
+          gradle --no-daemon :app:testReleaseUnitTest --stacktrace
+          gradle --no-daemon :app:lintRelease --stacktrace
+
+      - name: Assemble install-over-existing Sage 1.31 acceptance APK
+        working-directory: sage_build_131_a
+        run: |
+          set -euo pipefail
+          gradle --no-daemon :app:assembleRelease --stacktrace
+          APK=app/build/outputs/apk/release/app-release.apk
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-131-final-apksigner.txt
+          EXPECTED=99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-131-final-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL" = "$EXPECTED"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee ../sage-131-final-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable'" ../sage-131-final-badging.txt
+          grep -F "versionCode='44'" ../sage-131-final-badging.txt
+          grep -F "versionName='1.31.0'" ../sage-131-final-badging.txt
+          grep -F "application-label:'Sage Commander 1.31.0'" ../sage-131-final-badging.txt
+          unzip -t "$APK" >/dev/null
+          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-131-final-wake-asset.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-131-final-native-brain.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libonnxruntime.so' | tee ../sage-131-final-onnxruntime.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so' | tee ../sage-131-final-sherpa-jni.txt
+          grep -F 'route=speech_lab_only executed=false' app/src/main/java/com/pineapple/sage/SageSherpaMicTester.java
+          grep -F 'SageVoiceService.ACTION_STOP' app/src/main/java/com/pineapple/sage/SageSpeechLabActivity.java
+          grep -F 'SageVoiceService.ACTION_START' app/src/main/java/com/pineapple/sage/SageSpeechLabActivity.java
+          grep -F 'Android SpeechRecognizer (current command recognizer)' app/src/main/java/com/pineapple/sage/SageSpeechBackendState.java
+          sha256sum "$APK" | tee ../Sage-Commander-1.31.0-acceptance.sha256
+          cp "$APK" ../Sage-Commander-1.31.0-acceptance.apk
+          git rev-parse HEAD | tee ../Sage-1.31.0-source-commit.txt
+
+      - name: Upload final Sage 1.31 acceptance candidate
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.31.0-acceptance
+          path: |
+            Sage-Commander-1.31.0-acceptance.apk
+            Sage-Commander-1.31.0-acceptance.sha256
+            Sage-1.31.0-source-commit.txt
+            sage-131-final-apksigner.txt
+            sage-131-final-badging.txt
+            sage-131-final-wake-asset.txt
+            sage-131-final-native-brain.txt
+            sage-131-final-onnxruntime.txt
+            sage-131-final-sherpa-jni.txt
+          if-no-files-found: error
+          retention-days: 30
