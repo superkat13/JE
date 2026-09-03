@@ -15,3 +15,43 @@
  import android.content.SharedPreferences;
  import android.media.AudioAttributes;
  import android.media.MediaPlayer;
+--- a/app/src/main/cpp/CMakeLists.txt
++++ b/app/src/main/cpp/CMakeLists.txt
+@@ -31,6 +31,35 @@ add_compile_options(
+     "-ffile-prefix-map=${LLAMA_DIR}=third_party/llama.cpp"
+ )
+ 
++# llama.cpp stamps its Git state into the runtime library. A copied checkout can
++# have stale index metadata even when its tracked bytes are identical, which
++# makes ggml report the exact pinned commit as "-dirty" and breaks reproducible
++# native output. Normalize and prove the tracked checkout before configuring it.
++set(SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862")
++find_program(SAGE_GIT_EXECUTABLE NAMES git git.exe NO_CMAKE_FIND_ROOT_PATH)
++if (NOT SAGE_GIT_EXECUTABLE)
++    message(FATAL_ERROR "git is required to verify the pinned Sage Brain source")
++endif()
++execute_process(
++    COMMAND "${SAGE_GIT_EXECUTABLE}" reset --hard "${SAGE_LLAMA_PIN}"
++    WORKING_DIRECTORY "${LLAMA_DIR}"
++    RESULT_VARIABLE SAGE_LLAMA_RESET_RESULT
++)
++if (NOT SAGE_LLAMA_RESET_RESULT EQUAL 0)
++    message(FATAL_ERROR "Could not normalize pinned llama.cpp checkout")
++endif()
++execute_process(
++    COMMAND "${SAGE_GIT_EXECUTABLE}" update-index -q --refresh
++    WORKING_DIRECTORY "${LLAMA_DIR}"
++    RESULT_VARIABLE SAGE_LLAMA_REFRESH_RESULT
++)
++execute_process(
++    COMMAND "${SAGE_GIT_EXECUTABLE}" diff-index --quiet HEAD -- .
++    WORKING_DIRECTORY "${LLAMA_DIR}"
++    RESULT_VARIABLE SAGE_LLAMA_DIRTY_RESULT
++)
++if (NOT SAGE_LLAMA_REFRESH_RESULT EQUAL 0 OR NOT SAGE_LLAMA_DIRTY_RESULT EQUAL 0)
++    message(FATAL_ERROR "Pinned llama.cpp checkout is not clean after normalization")
++endif()
++
+ add_subdirectory(${LLAMA_DIR} ${CMAKE_BINARY_DIR}/llama_build)
+ 
+ add_library(sage-brain SHARED
