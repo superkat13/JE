@@ -14,13 +14,13 @@ index be59289..7197b06 100644
 +        versionName = "1.33.3"
 +        buildConfigField("String", "SOURCE_BRANCH", "\"repair/normal-tablet-v1-33-3\"")
 +        buildConfigField("String", "SOURCE_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: System.getenv("SAGE_SOURCE_COMMIT") ?: "reconstructed-v1.33.3"}\"")
- 
+
          ndk {
              abiFilters += listOf("arm64-v8a")
 @@ -84,21 +84,34 @@ dependencies {
      testImplementation("junit:junit:4.13.2")
  }
- 
+
 +val sageSigningKeystore = System.getenv("SAGE_SIGNING_KEYSTORE")
 +val sageSigningStorePassword = System.getenv("SAGE_SIGNING_STORE_PASSWORD")
 +val sageSigningKeyAlias = System.getenv("SAGE_SIGNING_KEY_ALIAS")
@@ -133,14 +133,14 @@ index 5980400..ecf65f5 100644
 +            "hey page", "okay page", "ok page"
 +    };
      private static volatile boolean running;
- 
+
      private final Handler handler = new Handler(Looper.getMainLooper());
      private final ArrayList<String> partialChoices = new ArrayList<>();
 +    private final SageTypedCommandQueue pendingTypedCommands =
 +            new SageTypedCommandQueue(8);
      private final Runnable finishWakeCaptureRunnable = this::finishWakeCapture;
      private final Runnable conversationExpiryRunnable = this::expireConversationIfNeeded;
- 
+
 @@ -187,19 +195,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
          if (ACTION_TYPED_COMMAND.equals(action)) {
              String command = intent.getStringExtra(EXTRA_COMMAND);
@@ -175,7 +175,7 @@ index 5980400..ecf65f5 100644
 @@ -1572,6 +1569,52 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
          deliverCommandResult(result);
      }
- 
+
 +    private void acceptTypedCommand(String command) {
 +        String cleaned = command == null ? "" : command.trim();
 +        if (cleaned.isEmpty() || stopRequested) {
