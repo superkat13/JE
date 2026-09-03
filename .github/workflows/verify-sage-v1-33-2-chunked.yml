@@ -132,6 +132,7 @@ jobs:
         shell: bash
         run: |
           set -uo pipefail
+          exec > >(tee verification-result.txt) 2>&1
           failures=0
           pass() { printf 'PASS:%s\n' "$1"; }
           fail() { printf 'FAIL:%s\n' "$1"; failures=$((failures + 1)); }
@@ -187,6 +188,28 @@ jobs:
           printf 'VERIFIER_FAILURE_COUNT=%s\n' "$failures"
           if (( failures != 0 )); then printf 'VERIFIER_RESULT=FAIL\n'; exit 1; fi
           printf 'VERIFIER_RESULT=PASS\n'
+
+      - name: Upload verifier diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.33.2-verifier-diagnostics
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            verification-result.txt
+            payload-diff.txt
+            sage-1332-a-apksigner.txt
+            sage-1332-a-badging.txt
+            sage-1332-a-entries.txt
+            sage-1332-a-unexpected-abis.txt
+            sage-1332-a.sha256
+            sage-1332-b-apksigner.txt
+            sage-1332-b-badging.txt
+            sage-1332-b-entries.txt
+            sage-1332-b-unexpected-abis.txt
+            sage-1332-b.sha256
 
       - name: Package verified candidate
         shell: bash
