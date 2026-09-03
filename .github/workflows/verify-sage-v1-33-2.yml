@@ -172,15 +172,7 @@ jobs:
             unzip -Z1 "$APK" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so'
             test -z "$(unzip -Z1 "$APK" | grep '^lib/' | grep -v '^lib/arm64-v8a/' || true)"
             # Legacy packaging must compress native libraries so the APK remains below the delivery ceiling.
-            python3 - "$APK" <<'PY'
-import sys, zipfile
-apk=sys.argv[1]
-with zipfile.ZipFile(apk) as z:
-    libs=[i for i in z.infolist() if i.filename.startswith('lib/') and i.filename.endswith('.so')]
-    assert libs, 'no native libraries found'
-    uncompressed=[i.filename for i in libs if i.compress_type == zipfile.ZIP_STORED]
-    assert not uncompressed, 'uncompressed native libraries: ' + ', '.join(uncompressed)
-PY
+            python3 -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs=[i for i in z.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]; assert libs and all(i.compress_type != zipfile.ZIP_STORED for i in libs)' "$APK"
             sha256sum "$APK" | tee "$TAG.sha256"
           }
           verify_apk sage_build_1332_a sage-1332-a
@@ -189,25 +181,13 @@ PY
       - name: Compare unsigned APK payload content across independent builds
         run: |
           set -euo pipefail
-          python3 - <<'PY'
-from pathlib import Path
-import hashlib, zipfile
-
-def payload(path):
-    out={}
-    with zipfile.ZipFile(path) as z:
-        for info in z.infolist():
-            # Signing envelope lives outside normal entries; META-INF may vary too.
-            if info.filename.startswith('META-INF/'):
-                continue
-            out[info.filename]=(hashlib.sha256(z.read(info.filename)).hexdigest(), info.compress_type)
-    return out
-
-a=payload(Path('sage_build_1332_a/app/build/outputs/apk/release/app-release.apk'))
-b=payload(Path('sage_build_1332_b/app/build/outputs/apk/release/app-release.apk'))
-assert a == b, 'independent APK payloads differ'
-print(f'PASS - {len(a)} non-META-INF APK payload entries match byte-for-byte')
-PY
+          rm -rf /tmp/sage-apk-a /tmp/sage-apk-b
+          mkdir -p /tmp/sage-apk-a /tmp/sage-apk-b
+          unzip -q sage_build_1332_a/app/build/outputs/apk/release/app-release.apk -d /tmp/sage-apk-a
+          unzip -q sage_build_1332_b/app/build/outputs/apk/release/app-release.apk -d /tmp/sage-apk-b
+          rm -rf /tmp/sage-apk-a/META-INF /tmp/sage-apk-b/META-INF
+          diff -qr /tmp/sage-apk-a /tmp/sage-apk-b
+          echo 'PASS - independent APK payload entries match byte-for-byte'
 
       - name: Package verified Sage 1.33.2 delivery
         run: |
@@ -216,18 +196,17 @@ PY
           cp "$APK" Sage-1.33.2.apk
           sha256sum Sage-1.33.2.apk > SHA256SUMS-Sage-1.33.2.txt
           printf '%s\n' '${{ github.sha }}' > Sage-1.33.2-source-commit.txt
-          cat > Sage-1.33.2-PHYSICAL-TEST.txt <<'EOF'
-Install Sage-1.33.2.apk IN PLACE. Do not uninstall Sage 1.33.1.
-Physical acceptance targets:
-1. Wake then speak 20 ordinary commands; no fake silent close.
-2. Repeat with media playing.
-3. Ask multiple local Brain questions, including one that takes over 30 seconds.
-4. While Brain is thinking, say Sage; she should say "I'm thinking." without cancelling the answer.
-5. Verify custom "sage glitch" still enters Red Queen.
-6. Use typed chat; it must work independently of microphone permission and should remain text-only.
-7. Verify Owner Apps, memories, Core, Forge pairing, accessibility and authority state remain intact.
-8. Reboot and verify Sage background startup and wake behavior.
-EOF
+          printf '%s\n' \
+            'Install Sage-1.33.2.apk IN PLACE. Do not uninstall Sage 1.33.1.' \
+            'Physical acceptance targets:' \
+            '1. Wake then speak 20 ordinary commands; no fake silent close.' \
+            '2. Repeat with media playing.' \
+            '3. Ask multiple local Brain questions, including one that takes over 30 seconds.' \
+            "4. While Brain is thinking, say Sage; she should say \"I'm thinking.\" without cancelling the answer." \
+            '5. Verify custom "sage glitch" still enters Red Queen.' \
+            '6. Use typed chat; it must work independently of microphone permission and should remain text-only.' \
+            '7. Verify Owner Apps, memories, Core, Forge pairing, accessibility and authority state remain intact.' \
+            '8. Reboot and verify Sage background startup and wake behavior.' > Sage-1.33.2-PHYSICAL-TEST.txt
 
       - name: Upload Sage 1.33.2 physical acceptance candidate
         uses: actions/upload-artifact@v4
