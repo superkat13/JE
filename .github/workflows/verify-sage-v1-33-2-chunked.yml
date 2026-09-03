@@ -131,34 +131,86 @@ jobs:
       - name: Verify both APKs and compare payloads
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          failures=0
+          pass() { printf 'PASS:%s\n' "$1"; }
+          fail() { printf 'FAIL:%s\n' "$1"; failures=$((failures + 1)); }
+          check() {
+            local name="$1"
+            shift
+            printf 'CHECK:%s\n' "$name"
+            if "$@"; then pass "$name"; else fail "$name"; fi
+          }
           verify_apk() {
             local TREE="$1" TAG="$2" APK="$1/app/build/outputs/apk/release/app-release.apk"
-            test -s "$APK"
-            test "$(stat -c%s "$APK")" -lt 104857600
-            unzip -t "$APK" >/dev/null
-            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee "$TAG-apksigner.txt"
-            grep -Fi 'Signer #1 certificate SHA-256 digest: 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35' "$TAG-apksigner.txt"
-            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee "$TAG-badging.txt"
-            grep -F "package: name='com.pineapple.sagecommander.stable'" "$TAG-badging.txt"
-            grep -F "versionCode='48'" "$TAG-badging.txt"
-            grep -F "versionName='1.33.2'" "$TAG-badging.txt"
-            grep -F "application-label:'Sage Commander 1.33.2 · SageOS Repair'" "$TAG-badging.txt"
-            unzip -Z1 "$APK" | grep -F 'assets/model-en-us/am/final.mdl'
-            unzip -Z1 "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so'
-            unzip -Z1 "$APK" | grep -F 'lib/arm64-v8a/libonnxruntime.so'
-            unzip -Z1 "$APK" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so'
-            test -z "$(unzip -Z1 "$APK" | grep '^lib/' | grep -v '^lib/arm64-v8a/' || true)"
-            python3 -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs=[i for i in z.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]; assert libs and all(i.compress_type != zipfile.ZIP_STORED for i in libs)' "$APK"
+            printf '=== VERIFY:%s:%s ===\n' "$TAG" "$APK"
+            check "$TAG:apk-present" test -s "$APK"
+            if [[ -e "$APK" ]]; then
+              local bytes
+              bytes="$(stat -c%s "$APK" 2>/dev/null || echo 0)"
+              printf 'APK_SIZE:%s:%s\n' "$TAG" "$bytes"
+              if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes < 104857600 )); then pass "$TAG:apk-under-100MiB"; else fail "$TAG:apk-under-100MiB"; fi
+              check "$TAG:zip-integrity" unzip -t "$APK"
+            else
+              fail "$TAG:apk-under-100MiB"
+              fail "$TAG:zip-integrity"
+              return
+            fi
+
+            printf 'CHECK:%s:signature-valid\n' "$TAG"
+            if "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" 2>&1 | tee "$TAG-apksigner.txt"; then pass "$TAG:signature-valid"; else fail "$TAG:signature-valid"; fi
+            printf '%s\n' "--- $TAG apksigner output above ---"
+            if grep -Fiq 'Signer #1 certificate SHA-256 digest: 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35' "$TAG-apksigner.txt"; then pass "$TAG:signer-sha256"; else fail "$TAG:signer-sha256"; fi
+
+            printf 'CHECK:%s:aapt-badging\n' "$TAG"
+            if "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" 2>&1 | tee "$TAG-badging.txt"; then pass "$TAG:aapt-badging"; else fail "$TAG:aapt-badging"; fi
+            printf '%s\n' "--- $TAG aapt badging output above ---"
+            if grep -Fq "package: name='com.pineapple.sagecommander.stable'" "$TAG-badging.txt"; then pass "$TAG:package-name"; else fail "$TAG:package-name"; fi
+            if grep -Fq "versionCode='48'" "$TAG-badging.txt"; then pass "$TAG:version-code"; else fail "$TAG:version-code"; fi
+            if grep -Fq "versionName='1.33.2'" "$TAG-badging.txt"; then pass "$TAG:version-name"; else fail "$TAG:version-name"; fi
+            if grep -Fq "application-label:'Sage Commander 1.33.2 · SageOS Repair'" "$TAG-badging.txt"; then pass "$TAG:application-label"; else fail "$TAG:application-label"; fi
+
+            unzip -Z1 "$APK" > "$TAG-entries.txt"
+            if grep -Fxq 'assets/model-en-us/am/final.mdl' "$TAG-entries.txt"; then pass "$TAG:vosk-model"; else fail "$TAG:vosk-model"; fi
+            if grep -Fxq 'lib/arm64-v8a/libsage-brain.so' "$TAG-entries.txt"; then pass "$TAG:brain-native"; else fail "$TAG:brain-native"; fi
+            if grep -Fxq 'lib/arm64-v8a/libonnxruntime.so' "$TAG-entries.txt"; then pass "$TAG:onnx-native"; else fail "$TAG:onnx-native"; fi
+            if grep -Fxq 'lib/arm64-v8a/libsherpa-onnx-jni.so' "$TAG-entries.txt"; then pass "$TAG:sherpa-native"; else fail "$TAG:sherpa-native"; fi
+            if ! grep '^lib/' "$TAG-entries.txt" | grep -v '^lib/arm64-v8a/' > "$TAG-unexpected-abis.txt"; then pass "$TAG:arm64-only"; else printf '%s\n' "Unexpected ABI entries:"; cat "$TAG-unexpected-abis.txt"; fail "$TAG:arm64-only"; fi
+
+            printf 'CHECK:%s:native-libs-compressed\n' "$TAG"
+            if python3 - "$APK" <<'PY'
+import sys, zipfile
+apk = sys.argv[1]
+z = zipfile.ZipFile(apk)
+libs = [i for i in z.infolist() if i.filename.startswith('lib/') and i.filename.endswith('.so')]
+for i in libs:
+    print(f'LIB_META:{i.filename}:compress_type={i.compress_type}:size={i.file_size}:compressed={i.compress_size}')
+ok = bool(libs) and all(i.compress_type != zipfile.ZIP_STORED for i in libs)
+print(f'NATIVE_LIB_COUNT={len(libs)}')
+print(f'NATIVE_LIBS_COMPRESSED={ok}')
+sys.exit(0 if ok else 1)
+PY
+            then pass "$TAG:native-libs-compressed"; else fail "$TAG:native-libs-compressed"; fi
             sha256sum "$APK" | tee "$TAG.sha256"
           }
+
           verify_apk sage_build_1332_a sage-1332-a
           verify_apk sage_build_1332_b sage-1332-b
-          rm -rf /tmp/apk-a /tmp/apk-b; mkdir -p /tmp/apk-a /tmp/apk-b
+
+          printf 'CHECK:payload-match\n'
+          rm -rf /tmp/apk-a /tmp/apk-b
+          mkdir -p /tmp/apk-a /tmp/apk-b
           unzip -q sage_build_1332_a/app/build/outputs/apk/release/app-release.apk -d /tmp/apk-a
           unzip -q sage_build_1332_b/app/build/outputs/apk/release/app-release.apk -d /tmp/apk-b
           rm -rf /tmp/apk-a/META-INF /tmp/apk-b/META-INF
-          diff -qr /tmp/apk-a /tmp/apk-b
+          if diff -qr /tmp/apk-a /tmp/apk-b | tee payload-diff.txt; then pass 'payload-match'; else fail 'payload-match'; fi
+
+          printf 'VERIFIER_FAILURE_COUNT=%s\n' "$failures"
+          if (( failures != 0 )); then
+            printf 'VERIFIER_RESULT=FAIL\n'
+            exit 1
+          fi
+          printf 'VERIFIER_RESULT=PASS\n'
 
       - name: Package verified candidate
         shell: bash
