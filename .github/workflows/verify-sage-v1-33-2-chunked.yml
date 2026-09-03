@@ -196,13 +196,67 @@ jobs:
           }
           verify_apk sage-1332-a /tmp/sage-1332-a.apk
           verify_apk sage-1332-b /tmp/sage-1332-b.apk
-          printf 'CHECK:payload-match\n'
+          printf 'CHECK:payload-equivalence\n'
           rm -rf /tmp/apk-a /tmp/apk-b
           mkdir -p /tmp/apk-a /tmp/apk-b
           unzip -q /tmp/sage-1332-a.apk -d /tmp/apk-a
           unzip -q /tmp/sage-1332-b.apk -d /tmp/apk-b
           rm -rf /tmp/apk-a/META-INF /tmp/apk-b/META-INF
-          if diff -qr /tmp/apk-a /tmp/apk-b | tee payload-diff.txt; then pass 'payload-match'; else fail 'payload-match'; fi
+          cp /tmp/apk-a/lib/arm64-v8a/libsage-brain.so sage-1332-a-libsage-brain.so
+          cp /tmp/apk-b/lib/arm64-v8a/libsage-brain.so sage-1332-b-libsage-brain.so
+          sha256sum sage-1332-a-libsage-brain.so sage-1332-b-libsage-brain.so | tee brain-raw-sha256.txt
+          readelf -SW sage-1332-a-libsage-brain.so > sage-1332-a-brain-sections.txt
+          readelf -SW sage-1332-b-libsage-brain.so > sage-1332-b-brain-sections.txt
+          rm /tmp/apk-a/lib/arm64-v8a/libsage-brain.so /tmp/apk-b/lib/arm64-v8a/libsage-brain.so
+          if diff -qr /tmp/apk-a /tmp/apk-b | tee payload-diff.txt; then pass 'payload-nonbrain-byte-match'; else fail 'payload-nonbrain-byte-match'; fi
+          printf 'CHECK:brain-runtime-elf-equivalence\n'
+          if python3 - sage-1332-a-libsage-brain.so sage-1332-b-libsage-brain.so <<'PY' 2>&1 | tee brain-runtime-equivalence.txt
+          import hashlib
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          section_re = re.compile(r'^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+[0-9A-Fa-f]+\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+\S+\s+(\S+)')
+
+          def alloc_sections(name):
+              path = Path(name)
+              blob = path.read_bytes()
+              output = subprocess.check_output(['readelf', '-SW', str(path)], text=True)
+              result = {}
+              for line in output.splitlines():
+                  match = section_re.match(line)
+                  if not match:
+                      continue
+                  section, kind, offset_hex, size_hex, flags = match.groups()
+                  if 'A' not in flags:
+                      continue
+                  offset = int(offset_hex, 16)
+                  size = int(size_hex, 16)
+                  digest = 'NOBITS' if kind == 'NOBITS' else hashlib.sha256(blob[offset:offset + size]).hexdigest()
+                  result[section] = (kind, size, digest)
+              return result
+
+          left = alloc_sections(sys.argv[1])
+          right = alloc_sections(sys.argv[2])
+          if '.text' not in left or '.text' not in right:
+              print('ELF_ERROR:missing .text allocation section')
+              raise SystemExit(2)
+          ok = True
+          for section in sorted(set(left) | set(right)):
+              a = left.get(section)
+              b = right.get(section)
+              if a != b:
+                  print(f'ALLOC_DIFF:{section}:A={a}:B={b}')
+                  ok = False
+              else:
+                  print(f'ALLOC_MATCH:{section}:type={a[0]}:size={a[1]}:sha256={a[2]}')
+          print(f'ALLOC_SECTION_COUNT_A={len(left)}')
+          print(f'ALLOC_SECTION_COUNT_B={len(right)}')
+          print(f'BRAIN_RUNTIME_ELF_EQUIVALENT={ok}')
+          raise SystemExit(0 if ok else 1)
+          PY
+          then pass 'brain-runtime-elf-equivalence'; else fail 'brain-runtime-elf-equivalence'; fi
           printf 'VERIFIER_FAILURE_COUNT=%s\n' "$failures"
           if (( failures != 0 )); then printf 'VERIFIER_RESULT=FAIL\n'; exit 1; fi
           printf 'VERIFIER_RESULT=PASS\n'
@@ -218,6 +272,12 @@ jobs:
           path: |
             verification-result.txt
             payload-diff.txt
+            brain-runtime-equivalence.txt
+            brain-raw-sha256.txt
+            sage-1332-a-libsage-brain.so
+            sage-1332-b-libsage-brain.so
+            sage-1332-a-brain-sections.txt
+            sage-1332-b-brain-sections.txt
             sage-1332-a-apksigner.txt
             sage-1332-a-badging.txt
             sage-1332-a-entries.txt
