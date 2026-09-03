@@ -271,6 +271,10 @@ final class SageSherpaMicTester {
         long capturedSamples = 0L;
         String lastText = "";
         try {
+            if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                    != PackageManager.PERMISSION_GRANTED) {
+                throw new SecurityException("RECORD_AUDIO was revoked before Speech Lab worker start");
+            }
             recognizer = buildRecognizer();
             stream = recognizer.createStream("");
             int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE,
@@ -324,6 +328,13 @@ final class SageSherpaMicTester {
                             + " audio_ms=" + audioMs + " endpoint=true");
             running = false;
             if (listener != null) listener.onComplete(finalText, firstPartial, total, audioMs);
+        } catch (SecurityException problem) {
+            running = false;
+            String detail = "Local STT test needs Android microphone permission. Open the exact permission screen and retry.";
+            SageDiagnostics.recordError(context, detail + " " + safeProblem(problem));
+            SageDiagnostics.appendEvent(context, "SHERPA A/B",
+                    "route=speech_lab_only executed=false error=microphone_permission_revoked");
+            if (listener != null) listener.onError(detail);
         } catch (Throwable problem) {
             running = false;
             String detail = "Local STT test failed: " + safeProblem(problem);
