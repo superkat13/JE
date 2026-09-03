@@ -54,6 +54,12 @@ jobs:
           set -euo pipefail
           bash sage_tools/reconstruct_v1_33_2.sh sage_build_1332_a
           bash sage_tools/reconstruct_v1_33_2.sh sage_build_1332_b
+          patch -d sage_build_1332_a -p1 --forward --batch < sage_recovery/compile_fix_v1_33_2.patch
+          patch -d sage_build_1332_b -p1 --forward --batch < sage_recovery/compile_fix_v1_33_2.patch
+          grep -F 'import android.Manifest;' sage_build_1332_a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.content.pm.PackageManager;' sage_build_1332_a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.Manifest;' sage_build_1332_b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.content.pm.PackageManager;' sage_build_1332_b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
           python3 sage_tests/test_physical_acceptance_v1_33_2.py sage_build_1332_a
           python3 sage_tests/test_physical_acceptance_v1_33_2.py sage_build_1332_b
           grep -F 'versionCode = 48' sage_build_1332_a/app/build.gradle.kts
