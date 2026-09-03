@@ -17,7 +17,7 @@
  import android.media.MediaPlayer;
 --- a/app/src/main/cpp/CMakeLists.txt
 +++ b/app/src/main/cpp/CMakeLists.txt
-@@ -31,6 +31,35 @@ add_compile_options(
+@@ -31,6 +31,37 @@ add_compile_options(
      "-ffile-prefix-map=${LLAMA_DIR}=third_party/llama.cpp"
  )
  
