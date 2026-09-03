@@ -24,7 +24,11 @@ jobs:
           cat sage_recovery/chunks/part-*.b64 | tr -d '\r\n ' | base64 --decode > /tmp/sage-recovery.tar.xz
           echo '92ae23cc90f0da5c7aab16efe71c4d075b2dc28597a5bb519efa68510eb0fe17  /tmp/sage-recovery.tar.xz' | sha256sum -c -
           tar -xJf /tmp/sage-recovery.tar.xz
-          python3 -m py_compile sage_patches/owner_first_v1_32.py sage_patches/release_v1_32.py sage_patches/sageos_foundation_v1_33.py sage_patches/release_v1_33.py sage_tests/test_owner_first_v1_32.py sage_tests/test_sageos_foundation_v1_33.py sage_tests/test_physical_acceptance_v1_33_2.py
+          base64 --decode sage_recovery/sherpa_primary_v1_31.py.xz.b64 > /tmp/sherpa_primary_v1_31.py.xz
+          echo '19cfef2113c696bb7c3db1f98ff0bd8e2e7faa8c1ee65b0776532c1bbb8599b7  /tmp/sherpa_primary_v1_31.py.xz' | sha256sum -c -
+          xz -dc /tmp/sherpa_primary_v1_31.py.xz > sage_patches/sherpa_primary_v1_31.py
+          echo '7eee79ffb09a30eb65c9a8187475fa07bfbf392a28aadcbf64d6b03d8b4999a4  sage_patches/sherpa_primary_v1_31.py' | sha256sum -c -
+          python3 -m py_compile sage_patches/sherpa_primary_v1_31.py sage_patches/owner_first_v1_32.py sage_patches/release_v1_32.py sage_patches/sageos_foundation_v1_33.py sage_patches/release_v1_33.py sage_tests/test_owner_first_v1_32.py sage_tests/test_sageos_foundation_v1_33.py sage_tests/test_physical_acceptance_v1_33_2.py
           chmod +x sage_tools/reconstruct_v1_32.sh sage_tools/reconstruct_v1_33.sh sage_tools/reconstruct_v1_33_2.sh
 
       - name: Prove inherited 1.31 floor and preserved 1.32/1.33 lineage
