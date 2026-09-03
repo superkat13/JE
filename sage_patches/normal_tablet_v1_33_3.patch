@@ -1,0 +1,328 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index be59289..7197b06 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -15,10 +15,10 @@ android {
+         applicationId = "com.pineapple.sagecommander.stable"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 48
+-        versionName = "1.33.2"
+-        buildConfigField("String", "SOURCE_BRANCH", "\"repair/physical-acceptance-v1-33-2\"")
+-        buildConfigField("String", "SOURCE_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: System.getenv("SAGE_SOURCE_COMMIT") ?: "reconstructed-v1.33.2"}\"")
++        versionCode = 49
++        versionName = "1.33.3"
++        buildConfigField("String", "SOURCE_BRANCH", "\"repair/normal-tablet-v1-33-3\"")
++        buildConfigField("String", "SOURCE_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: System.getenv("SAGE_SOURCE_COMMIT") ?: "reconstructed-v1.33.3"}\"")
+ 
+         ndk {
+             abiFilters += listOf("arm64-v8a")
+@@ -84,21 +84,34 @@ dependencies {
+     testImplementation("junit:junit:4.13.2")
+ }
+ 
++val sageSigningKeystore = System.getenv("SAGE_SIGNING_KEYSTORE")
++val sageSigningStorePassword = System.getenv("SAGE_SIGNING_STORE_PASSWORD")
++val sageSigningKeyAlias = System.getenv("SAGE_SIGNING_KEY_ALIAS")
++val sageSigningKeyPassword = System.getenv("SAGE_SIGNING_KEY_PASSWORD")
++
+ android {
+-    signingConfigs {
+-        create("sagePermanentSigning") {
+-            storeFile = rootProject.file(System.getenv("SAGE_SIGNING_KEYSTORE") ?: System.getProperty("user.home") + "/.android/debug.keystore")
+-            storePassword = "android"
+-            keyAlias = "androiddebugkey"
+-            keyPassword = "android"
+-        }
+-    }
+-    buildTypes {
+-        getByName("debug") {
+-            signingConfig = signingConfigs.getByName("sagePermanentSigning")
++    if (listOf(
++            sageSigningKeystore,
++            sageSigningStorePassword,
++            sageSigningKeyAlias,
++            sageSigningKeyPassword
++        ).all { !it.isNullOrBlank() }
++    ) {
++        signingConfigs {
++            create("sageExternalSigning") {
++                storeFile = rootProject.file(sageSigningKeystore!!)
++                storePassword = sageSigningStorePassword
++                keyAlias = sageSigningKeyAlias
++                keyPassword = sageSigningKeyPassword
++            }
+         }
+-        getByName("release") {
+-            signingConfig = signingConfigs.getByName("sagePermanentSigning")
++        buildTypes {
++            getByName("debug") {
++                signingConfig = signingConfigs.getByName("sageExternalSigning")
++            }
++            getByName("release") {
++                signingConfig = signingConfigs.getByName("sageExternalSigning")
++            }
+         }
+     }
+ }
+diff --git a/sage_build_1333_new/app/src/main/java/com/pineapple/sage/SageTypedCommandQueue.java b/app/src/main/java/com/pineapple/sage/SageTypedCommandQueue.java
+new file mode 100644
+index 0000000..0fadd0d
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageTypedCommandQueue.java
+@@ -0,0 +1,45 @@
++package com.pineapple.sage;
++
++import java.util.ArrayDeque;
++
++final class SageTypedCommandQueue {
++    enum OfferResult {
++        QUEUED,
++        EMPTY,
++        FULL
++    }
++
++    private final ArrayDeque<String> commands = new ArrayDeque<>();
++    private final int capacity;
++
++    SageTypedCommandQueue(int capacity) {
++        if (capacity < 1) {
++            throw new IllegalArgumentException("capacity must be positive");
++        }
++        this.capacity = capacity;
++    }
++
++    OfferResult offer(String command) {
++        String cleaned = command == null ? "" : command.trim();
++        if (cleaned.isEmpty()) {
++            return OfferResult.EMPTY;
++        }
++        if (commands.size() >= capacity) {
++            return OfferResult.FULL;
++        }
++        commands.addLast(cleaned);
++        return OfferResult.QUEUED;
++    }
++
++    String poll() {
++        return commands.pollFirst();
++    }
++
++    int size() {
++        return commands.size();
++    }
++
++    void clear() {
++        commands.clear();
++    }
++}
+diff --git a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+index 5980400..ecf65f5 100644
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -84,11 +84,19 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             "hey stage", "okay stage", "ok stage",
+             "hey say age", "okay say age", "ok say age"
+     };
+-    private static final String[] SAFE_PREFIXED_WAKE_SOUNDALIKES = { };
++    private static final String[] SAFE_PREFIXED_WAKE_SOUNDALIKES = {
++            "hey safe", "okay safe", "ok safe",
++            "hey save", "okay save", "ok save",
++            "hey say", "okay say", "ok say",
++            "hey age", "okay age", "ok age",
++            "hey page", "okay page", "ok page"
++    };
+     private static volatile boolean running;
+ 
+     private final Handler handler = new Handler(Looper.getMainLooper());
+     private final ArrayList<String> partialChoices = new ArrayList<>();
++    private final SageTypedCommandQueue pendingTypedCommands =
++            new SageTypedCommandQueue(8);
+     private final Runnable finishWakeCaptureRunnable = this::finishWakeCapture;
+     private final Runnable conversationExpiryRunnable = this::expireConversationIfNeeded;
+ 
+@@ -187,19 +195,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         if (ACTION_TYPED_COMMAND.equals(action)) {
+             String command = intent.getStringExtra(EXTRA_COMMAND);
+             if (command != null && !command.trim().isEmpty()) {
+-                handler.post(() -> {
+-                    textOnlyTurn = true;
+-                    stopWakeListening();
+-                    destroyCommandRecognizer();
+-                    if (speaking && textToSpeech != null) {
+-                        textToSpeech.stop();
+-                        speaking = false;
+-                    }
+-                    SageConversationStateMachine.Decision typed = conversationMachine
+-                            .typedTranscript(command, System.currentTimeMillis());
+-                    recordSpeechDecision(typed);
+-                    handleCommand(command);
+-                });
++                handler.post(() -> acceptTypedCommand(command));
+             }
+         } else if (ACTION_REFRESH_LISTENING_MODE.equals(action)) {
+             closeConversationWindow();
+@@ -1412,7 +1408,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             resumeConversationOrWake(500);
+             return;
+         }
+-        if (isLikelySelfEcho(cleaned)) {
++        // A typed message came from the owner, not the speaker or microphone.
++        if (!textOnlyTurn && isLikelySelfEcho(cleaned)) {
+             SageDiagnostics.recognitionDecision(
+                     this,
+                     "[" + cleaned + "]",
+@@ -1572,6 +1569,52 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         deliverCommandResult(result);
+     }
+ 
++    private void acceptTypedCommand(String command) {
++        String cleaned = command == null ? "" : command.trim();
++        if (cleaned.isEmpty() || stopRequested) {
++            return;
++        }
++        if (brainInProgress || translationInProgress || speaking) {
++            SageTypedCommandQueue.OfferResult offered = pendingTypedCommands.offer(cleaned);
++            if (offered == SageTypedCommandQueue.OfferResult.QUEUED) {
++                SageDiagnostics.appendEvent(this, "TEXT CHAT",
++                        "queued_while_busy=true pending=" + pendingTypedCommands.size());
++                broadcastStatus("Message queued — Sage will answer it next");
++                updateNotification("Typed message queued");
++            } else if (offered == SageTypedCommandQueue.OfferResult.FULL) {
++                broadcastLine("Sage", "I already have eight typed messages waiting. Let me finish one, then send the next.");
++                broadcastStatus("Typed message queue is full");
++                updateNotification("Finish a queued message before adding another");
++            }
++            return;
++        }
++        dispatchTypedCommand(cleaned);
++    }
++
++    private void dispatchTypedCommand(String command) {
++        textOnlyTurn = true;
++        stopWakeListening();
++        destroyCommandRecognizer();
++        SageConversationStateMachine.Decision typed = conversationMachine
++                .typedTranscript(command, System.currentTimeMillis());
++        recordSpeechDecision(typed);
++        handleCommand(command);
++    }
++
++    private boolean dispatchNextTypedCommandIfReady() {
++        if (stopRequested || brainInProgress || translationInProgress || speaking) {
++            return false;
++        }
++        String next = pendingTypedCommands.poll();
++        if (next == null) {
++            return false;
++        }
++        SageDiagnostics.appendEvent(this, "TEXT CHAT",
++                "dispatching_queued=true remaining=" + pendingTypedCommands.size());
++        dispatchTypedCommand(next);
++        return true;
++    }
++
+     private boolean isOpenEndedBrainRequest(String command) {
+         String value = normalizeForEcho(command);
+         if (value.isEmpty()
+@@ -2046,6 +2089,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             finishTextOnlyTurn();
+             return;
+         }
++        if (dispatchNextTypedCommandIfReady()) {
++            return;
++        }
+         if (stopRequested) {
+             stopSelf();
+             return;
+@@ -2067,6 +2113,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         textOnlyTurn = false;
+         speaking = false;
+         listenForCommandAfterSpeech = false;
++        if (dispatchNextTypedCommandIfReady()) {
++            return;
++        }
+         broadcastStatus("Text chat ready");
+         updateNotification("Text chat ready");
+         if (stopRequested) {
+@@ -2152,6 +2201,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             }
+             return;
+         }
++        if (dispatchNextTypedCommandIfReady()) {
++            return;
++        }
+         lastSpokenFinishedAtMs = now;
+         boolean promptFollowUp = listenForCommandAfterSpeech;
+         long echoGuard = mediaResponseFinishing
+@@ -2427,6 +2479,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         conversationExpiresAtMs = 0L;
+         translationInProgress = false;
+         brainInProgress = false;
++        pendingTypedCommands.clear();
+         ++brainRequestGeneration;
+         if (brainManager != null) {
+             brainManager.cancelCurrentRequest();
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index df196fc..de15a07 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,5 +1,5 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="app_name">Sage Commander 1.33.2 · SageOS Repair</string>
++    <string name="app_name">Sage Commander 1.33.3 · Tablet Repair</string>
+     <string name="accessibility_description">Lets Sage perform the tablet commands you speak, including Home, Back, scrolling, tapping visible text, and typing.</string>
+ </resources>
+diff --git a/sage_build_1333_new/app/src/test/java/com/pineapple/sage/SageTypedCommandQueueTest.java b/app/src/test/java/com/pineapple/sage/SageTypedCommandQueueTest.java
+new file mode 100644
+index 0000000..e402a90
+--- /dev/null
++++ b/app/src/test/java/com/pineapple/sage/SageTypedCommandQueueTest.java
+@@ -0,0 +1,46 @@
++package com.pineapple.sage;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertNull;
++
++import org.junit.Test;
++
++public class SageTypedCommandQueueTest {
++    @Test
++    public void preservesTypedMessagesInArrivalOrder() {
++        SageTypedCommandQueue queue = new SageTypedCommandQueue(3);
++
++        assertEquals(SageTypedCommandQueue.OfferResult.QUEUED, queue.offer(" first "));
++        assertEquals(SageTypedCommandQueue.OfferResult.QUEUED, queue.offer("second"));
++        assertEquals("first", queue.poll());
++        assertEquals("second", queue.poll());
++        assertNull(queue.poll());
++    }
++
++    @Test
++    public void neverSilentlyOverwritesAQueuedMessage() {
++        SageTypedCommandQueue queue = new SageTypedCommandQueue(2);
++
++        assertEquals(SageTypedCommandQueue.OfferResult.QUEUED, queue.offer("one"));
++        assertEquals(SageTypedCommandQueue.OfferResult.QUEUED, queue.offer("two"));
++        assertEquals(SageTypedCommandQueue.OfferResult.FULL, queue.offer("three"));
++        assertEquals("one", queue.poll());
++        assertEquals("two", queue.poll());
++    }
++
++    @Test
++    public void ignoresBlankInputAndCanBeCleared() {
++        SageTypedCommandQueue queue = new SageTypedCommandQueue(2);
++
++        assertEquals(SageTypedCommandQueue.OfferResult.EMPTY, queue.offer("  "));
++        assertEquals(SageTypedCommandQueue.OfferResult.EMPTY, queue.offer(null));
++        assertEquals(SageTypedCommandQueue.OfferResult.QUEUED, queue.offer("kept"));
++        queue.clear();
++        assertNull(queue.poll());
++    }
++
++    @Test(expected = IllegalArgumentException.class)
++    public void rejectsInvalidCapacity() {
++        new SageTypedCommandQueue(0);
++    }
++}

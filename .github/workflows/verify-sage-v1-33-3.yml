@@ -1,0 +1,388 @@
+name: Verify Sage 1.33.3 normal tablet repair
+
+on:
+  push:
+    branches:
+      - repair/normal-tablet-v1-33-3
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Restore preserved source chain from verified chunks
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(find sage_recovery/chunks -maxdepth 1 -name 'part-*.b64' | wc -l)" -eq 7
+          cat sage_recovery/chunks/part-*.b64 | tr -d '\r\n ' | base64 --decode > /tmp/sage-recovery.tar.xz
+          echo '92ae23cc90f0da5c7aab16efe71c4d075b2dc28597a5bb519efa68510eb0fe17  /tmp/sage-recovery.tar.xz' | sha256sum -c -
+          tar -xJf /tmp/sage-recovery.tar.xz
+          base64 --decode sage_recovery/sherpa_primary_v1_31.py.xz.b64 > /tmp/sherpa_primary_v1_31.py.xz
+          echo '19cfef2113c696bb7c3db1f98ff0bd8e2e7faa8c1ee65b0776532c1bbb8599b7  /tmp/sherpa_primary_v1_31.py.xz' | sha256sum -c -
+          xz -dc /tmp/sherpa_primary_v1_31.py.xz > sage_patches/sherpa_primary_v1_31.py
+          echo '7eee79ffb09a30eb65c9a8187475fa07bfbf392a28aadcbf64d6b03d8b4999a4  sage_patches/sherpa_primary_v1_31.py' | sha256sum -c -
+          python3 -m py_compile sage_patches/sherpa_primary_v1_31.py sage_patches/owner_first_v1_32.py sage_patches/release_v1_32.py sage_patches/sageos_foundation_v1_33.py sage_patches/release_v1_33.py sage_tests/test_owner_first_v1_32.py sage_tests/test_sageos_foundation_v1_33.py sage_tests/test_physical_acceptance_v1_33_2.py sage_tests/test_normal_tablet_v1_33_3.py
+          chmod +x sage_tools/reconstruct_v1_32.sh sage_tools/reconstruct_v1_33.sh sage_tools/reconstruct_v1_33_2.sh sage_tools/reconstruct_v1_33_3.sh
+
+      - name: Prove inherited 1.31 floor and preserved 1.32/1.33 lineage
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_31.sh sage_build_131_floor
+          for test_file in sage_tests/test_*_v1_31.py; do python3 "$test_file" sage_build_131_floor; done
+          grep -F 'versionCode = 44' sage_build_131_floor/app/build.gradle.kts
+          grep -F 'versionName = "1.31.0"' sage_build_131_floor/app/build.gradle.kts
+          bash sage_tools/reconstruct_v1_32.sh sage_build_132_floor
+          python3 sage_tests/test_owner_first_v1_32.py sage_build_132_floor
+          grep -F 'versionCode = 45' sage_build_132_floor/app/build.gradle.kts
+          grep -F 'versionName = "1.32.0"' sage_build_132_floor/app/build.gradle.kts
+          bash sage_tools/reconstruct_v1_33.sh sage_build_133_floor
+          python3 sage_tests/test_sageos_foundation_v1_33.py sage_build_133_floor
+          grep -F 'versionCode = 46' sage_build_133_floor/app/build.gradle.kts
+          grep -F 'versionName = "1.33.0"' sage_build_133_floor/app/build.gradle.kts
+
+      - name: Reconstruct 1.33.3 twice and run normal-tablet static gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_33_3.sh sage_build_1333_a
+          bash sage_tools/reconstruct_v1_33_3.sh sage_build_1333_b
+          grep -F 'import android.Manifest;' sage_build_1333_a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.content.pm.PackageManager;' sage_build_1333_a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.Manifest;' sage_build_1333_b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          grep -F 'import android.content.pm.PackageManager;' sage_build_1333_b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          python3 sage_tests/test_normal_tablet_v1_33_3.py sage_build_1333_a
+          python3 sage_tests/test_normal_tablet_v1_33_3.py sage_build_1333_b
+          grep -F 'versionCode = 49' sage_build_1333_a/app/build.gradle.kts
+          grep -F 'versionName = "1.33.3"' sage_build_1333_a/app/build.gradle.kts
+          grep -F 'repair/normal-tablet-v1-33-3' sage_build_1333_a/app/build.gradle.kts
+          diff -qr --exclude=build --exclude=.gradle --exclude=.cxx sage_build_1333_a/app/src sage_build_1333_b/app/src
+          cmp sage_build_1333_a/app/build.gradle.kts sage_build_1333_b/app/build.gradle.kts
+
+      - name: Add exact pinned Brain, wake model and Sherpa engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_1333_a/third_party/llama.cpp
+          git -C sage_build_1333_a/third_party/llama.cpp init -q
+          git -C sage_build_1333_a/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_1333_a/third_party/llama.cpp fetch -q --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_1333_a/third_party/llama.cpp checkout -q --detach FETCH_HEAD
+          test "$(git -C sage_build_1333_a/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          mkdir -p /tmp/vosk sage_build_1333_a/app/src/main/assets
+          curl -L --fail --retry 3 -o /tmp/vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/vosk.zip -d /tmp/vosk
+          mv /tmp/vosk/vosk-model-small-en-us-0.15 sage_build_1333_a/app/src/main/assets/model-en-us
+          printf 'sage-v1.33.3-normal-tablet\n' > sage_build_1333_a/app/src/main/assets/model-en-us/uuid
+          test -s sage_build_1333_a/app/src/main/assets/model-en-us/am/final.mdl
+          AAR=/tmp/sherpa-onnx-1.13.4.aar
+          curl -L --fail --retry 3 -o "$AAR" https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.4/sherpa-onnx-1.13.4.aar
+          echo '03f9c4df965f21c71269365a7951a7f23b5696fddd093fa318c80d65550ab780  /tmp/sherpa-onnx-1.13.4.aar' | sha256sum -c -
+          unzip -l "$AAR" | grep -F 'jni/arm64-v8a/libonnxruntime.so'
+          unzip -l "$AAR" | grep -F 'jni/arm64-v8a/libsherpa-onnx-jni.so'
+          mkdir -p sage_build_1333_a/app/libs sage_build_1333_b/app/libs sage_build_1333_b/third_party sage_build_1333_b/app/src/main/assets
+          cp "$AAR" sage_build_1333_a/app/libs/sherpa-onnx-1.13.4.aar
+          cp "$AAR" sage_build_1333_b/app/libs/sherpa-onnx-1.13.4.aar
+          cp -a sage_build_1333_a/third_party/llama.cpp sage_build_1333_b/third_party/llama.cpp
+          cp -a sage_build_1333_a/app/src/main/assets/model-en-us sage_build_1333_b/app/src/main/assets/model-en-us
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - name: Install exact Android toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Restore signing identities and create Android 13 rotation lineage
+        shell: bash
+        env:
+          LEGACY_KEYSTORE_B64: ${{ secrets.SAGE_LEGACY_KEYSTORE_B64 }}
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.SAGE_LEGACY_KEYSTORE_PASSWORD }}
+          NEW_KEYSTORE_B64: ${{ secrets.SAGE_RELEASE_KEYSTORE_B64 }}
+          NEW_KEYSTORE_PASSWORD: ${{ secrets.SAGE_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$LEGACY_KEYSTORE_B64"
+          test -n "$LEGACY_KEYSTORE_PASSWORD"
+          test -n "$NEW_KEYSTORE_B64"
+          test -n "$NEW_KEYSTORE_PASSWORD"
+          printf '%s' "$LEGACY_KEYSTORE_B64" | base64 --decode > /tmp/sage-legacy.jks
+          printf '%s' "$NEW_KEYSTORE_B64" | base64 --decode > /tmp/sage-release-2026.jks
+          chmod 600 /tmp/sage-legacy.jks /tmp/sage-release-2026.jks
+          LEGACY_CERT="$(keytool -exportcert -keystore /tmp/sage-legacy.jks -storepass:env LEGACY_KEYSTORE_PASSWORD -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          NEW_CERT="$(keytool -exportcert -keystore /tmp/sage-release-2026.jks -storepass:env NEW_KEYSTORE_PASSWORD -alias sage-release-2026 | sha256sum | cut -d' ' -f1)"
+          test "$LEGACY_CERT" = 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          test "$NEW_CERT" = e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e
+          ROTATE_ARGS=(
+            --out /tmp/sage-signing-lineage
+            --old-signer
+            --ks /tmp/sage-legacy.jks
+            --ks-key-alias androiddebugkey
+            --ks-pass env:LEGACY_KEYSTORE_PASSWORD
+            --key-pass env:LEGACY_KEYSTORE_PASSWORD
+            --new-signer
+            --ks /tmp/sage-release-2026.jks
+            --ks-key-alias sage-release-2026
+            --ks-pass env:NEW_KEYSTORE_PASSWORD
+            --key-pass env:NEW_KEYSTORE_PASSWORD
+          )
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" rotate "${ROTATE_ARGS[@]}"
+          test -s /tmp/sage-signing-lineage
+
+      - name: Full independent release build A
+        working-directory: sage_build_1333_a
+        env:
+          SAGE_SOURCE_COMMIT: ${{ github.sha }}
+        run: gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+
+      - name: Preserve build A and reset canonical path for B
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp sage_build_1333_a/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sage-1333-a-unsigned.apk
+          test -s /tmp/sage-1333-a-unsigned.apk
+          rm -rf sage_build_1333_a
+          mv sage_build_1333_b sage_build_1333_a
+          test -f sage_build_1333_a/app/build.gradle.kts
+          test ! -e sage_build_1333_a/app/build/outputs/apk/release/app-release-unsigned.apk
+
+      - name: Full independent release build B from same canonical path
+        working-directory: sage_build_1333_a
+        env:
+          SAGE_SOURCE_COMMIT: ${{ github.sha }}
+        run: gradle --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+
+      - name: Preserve build B candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp sage_build_1333_a/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sage-1333-b-unsigned.apk
+          test -s /tmp/sage-1333-b-unsigned.apk
+
+      - name: Sign both candidates with proof of rotation
+        shell: bash
+        env:
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.SAGE_LEGACY_KEYSTORE_PASSWORD }}
+          NEW_KEYSTORE_PASSWORD: ${{ secrets.SAGE_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          sign_rotated() {
+            local unsigned="$1" signed="$2"
+            SIGN_ARGS=(
+              --out "$signed"
+              --v4-signing-enabled false
+              --lineage /tmp/sage-signing-lineage
+              --rotation-min-sdk-version 33
+              --ks /tmp/sage-legacy.jks
+              --ks-key-alias androiddebugkey
+              --ks-pass env:LEGACY_KEYSTORE_PASSWORD
+              --key-pass env:LEGACY_KEYSTORE_PASSWORD
+              --next-signer
+              --ks /tmp/sage-release-2026.jks
+              --ks-key-alias sage-release-2026
+              --ks-pass env:NEW_KEYSTORE_PASSWORD
+              --key-pass env:NEW_KEYSTORE_PASSWORD
+              "$unsigned"
+            )
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign "${SIGN_ARGS[@]}"
+            test -s "$signed"
+          }
+          sign_rotated /tmp/sage-1333-a-unsigned.apk /tmp/sage-1333-a.apk
+          sign_rotated /tmp/sage-1333-b-unsigned.apk /tmp/sage-1333-b.apk
+
+      - name: Verify both APKs and compare payloads
+        shell: bash
+        run: |
+          set -uo pipefail
+          exec > >(tee verification-result.txt) 2>&1
+          failures=0
+          pass() { printf 'PASS:%s\n' "$1"; }
+          fail() { printf 'FAIL:%s\n' "$1"; failures=$((failures + 1)); }
+          check() {
+            local name="$1"
+            shift
+            printf 'CHECK:%s\n' "$name"
+            if "$@"; then pass "$name"; else fail "$name"; fi
+          }
+          verify_apk() {
+            local TAG="$1" APK="$2"
+            printf '=== VERIFY:%s:%s ===\n' "$TAG" "$APK"
+            check "$TAG:apk-present" test -s "$APK"
+            if [[ -e "$APK" ]]; then
+              local bytes
+              bytes="$(stat -c%s "$APK" 2>/dev/null || echo 0)"
+              printf 'APK_SIZE:%s:%s\n' "$TAG" "$bytes"
+              if [[ "$bytes" =~ ^[0-9]+$ ]] && (( bytes < 104857600 )); then pass "$TAG:apk-under-100MiB"; else fail "$TAG:apk-under-100MiB"; fi
+              check "$TAG:zip-integrity" unzip -t "$APK"
+            else
+              fail "$TAG:apk-under-100MiB"
+              fail "$TAG:zip-integrity"
+              return
+            fi
+            printf 'CHECK:%s:signature-valid\n' "$TAG"
+            if "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" 2>&1 | tee "$TAG-apksigner.txt"; then pass "$TAG:signature-valid"; else fail "$TAG:signature-valid"; fi
+            if grep -Fiq 'e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e' "$TAG-apksigner.txt"; then pass "$TAG:rotated-signer-sha256"; else fail "$TAG:rotated-signer-sha256"; fi
+            if grep -Fiq '99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35' "$TAG-apksigner.txt"; then pass "$TAG:legacy-lineage-sha256"; else fail "$TAG:legacy-lineage-sha256"; fi
+            if "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --min-sdk-version 33 --max-sdk-version 33 "$APK"; then pass "$TAG:android-13-signature"; else fail "$TAG:android-13-signature"; fi
+            printf 'CHECK:%s:aapt-badging\n' "$TAG"
+            if "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" 2>&1 | tee "$TAG-badging.txt"; then pass "$TAG:aapt-badging"; else fail "$TAG:aapt-badging"; fi
+            if grep -Fq "package: name='com.pineapple.sagecommander.stable'" "$TAG-badging.txt"; then pass "$TAG:package-name"; else fail "$TAG:package-name"; fi
+            if grep -Fq "versionCode='49'" "$TAG-badging.txt"; then pass "$TAG:version-code"; else fail "$TAG:version-code"; fi
+            if grep -Fq "versionName='1.33.3'" "$TAG-badging.txt"; then pass "$TAG:version-name"; else fail "$TAG:version-name"; fi
+            if grep -Fq "application-label:'Sage Commander 1.33.3 · Tablet Repair'" "$TAG-badging.txt"; then pass "$TAG:application-label"; else fail "$TAG:application-label"; fi
+            unzip -Z1 "$APK" > "$TAG-entries.txt"
+            if grep -Fxq 'assets/model-en-us/am/final.mdl' "$TAG-entries.txt"; then pass "$TAG:vosk-model"; else fail "$TAG:vosk-model"; fi
+            if grep -Fxq 'lib/arm64-v8a/libsage-brain.so' "$TAG-entries.txt"; then pass "$TAG:brain-native"; else fail "$TAG:brain-native"; fi
+            if grep -Fxq 'lib/arm64-v8a/libonnxruntime.so' "$TAG-entries.txt"; then pass "$TAG:onnx-native"; else fail "$TAG:onnx-native"; fi
+            if grep -Fxq 'lib/arm64-v8a/libsherpa-onnx-jni.so' "$TAG-entries.txt"; then pass "$TAG:sherpa-native"; else fail "$TAG:sherpa-native"; fi
+            if ! grep '^lib/' "$TAG-entries.txt" | grep -v '^lib/arm64-v8a/' > "$TAG-unexpected-abis.txt"; then pass "$TAG:arm64-only"; else cat "$TAG-unexpected-abis.txt"; fail "$TAG:arm64-only"; fi
+            printf 'CHECK:%s:native-libs-compressed\n' "$TAG"
+            if python3 -c 'import sys,zipfile; z=zipfile.ZipFile(sys.argv[1]); libs=[i for i in z.infolist() if i.filename.startswith("lib/") and i.filename.endswith(".so")]; [print(f"LIB_META:{i.filename}:compress_type={i.compress_type}:size={i.file_size}:compressed={i.compress_size}") for i in libs]; ok=bool(libs) and all(i.compress_type != zipfile.ZIP_STORED for i in libs); print(f"NATIVE_LIB_COUNT={len(libs)}"); print(f"NATIVE_LIBS_COMPRESSED={ok}"); sys.exit(0 if ok else 1)' "$APK"; then pass "$TAG:native-libs-compressed"; else fail "$TAG:native-libs-compressed"; fi
+            sha256sum "$APK" | tee "$TAG.sha256"
+          }
+          verify_apk sage-1333-a /tmp/sage-1333-a.apk
+          verify_apk sage-1333-b /tmp/sage-1333-b.apk
+          printf 'CHECK:payload-equivalence\n'
+          rm -rf /tmp/apk-a /tmp/apk-b
+          mkdir -p /tmp/apk-a /tmp/apk-b
+          unzip -q /tmp/sage-1333-a.apk -d /tmp/apk-a
+          unzip -q /tmp/sage-1333-b.apk -d /tmp/apk-b
+          rm -rf /tmp/apk-a/META-INF /tmp/apk-b/META-INF
+          cp /tmp/apk-a/lib/arm64-v8a/libsage-brain.so sage-1333-a-libsage-brain.so
+          cp /tmp/apk-b/lib/arm64-v8a/libsage-brain.so sage-1333-b-libsage-brain.so
+          sha256sum sage-1333-a-libsage-brain.so sage-1333-b-libsage-brain.so | tee brain-raw-sha256.txt
+          readelf -SW sage-1333-a-libsage-brain.so > sage-1333-a-brain-sections.txt
+          readelf -SW sage-1333-b-libsage-brain.so > sage-1333-b-brain-sections.txt
+          rm /tmp/apk-a/lib/arm64-v8a/libsage-brain.so /tmp/apk-b/lib/arm64-v8a/libsage-brain.so
+          if diff -qr /tmp/apk-a /tmp/apk-b | tee payload-diff.txt; then pass 'payload-nonbrain-byte-match'; else fail 'payload-nonbrain-byte-match'; fi
+          printf 'CHECK:brain-runtime-elf-equivalence\n'
+          if python3 - sage-1333-a-libsage-brain.so sage-1333-b-libsage-brain.so <<'PY' 2>&1 | tee brain-runtime-equivalence.txt
+          import hashlib
+          from pathlib import Path
+          import re
+          import subprocess
+          import sys
+
+          section_re = re.compile(r'^\s*\[\s*\d+\]\s+(\S+)\s+(\S+)\s+[0-9A-Fa-f]+\s+([0-9A-Fa-f]+)\s+([0-9A-Fa-f]+)\s+\S+\s+(\S+)')
+
+          def alloc_sections(name):
+              path = Path(name)
+              blob = path.read_bytes()
+              output = subprocess.check_output(['readelf', '-SW', str(path)], text=True)
+              result = {}
+              for line in output.splitlines():
+                  match = section_re.match(line)
+                  if not match:
+                      continue
+                  section, kind, offset_hex, size_hex, flags = match.groups()
+                  if 'A' not in flags:
+                      continue
+                  offset = int(offset_hex, 16)
+                  size = int(size_hex, 16)
+                  digest = 'NOBITS' if kind == 'NOBITS' else hashlib.sha256(blob[offset:offset + size]).hexdigest()
+                  result[section] = (kind, size, digest)
+              return result
+
+          left = alloc_sections(sys.argv[1])
+          right = alloc_sections(sys.argv[2])
+          if '.text' not in left or '.text' not in right:
+              print('ELF_ERROR:missing .text allocation section')
+              raise SystemExit(2)
+          ok = True
+          for section in sorted(set(left) | set(right)):
+              a = left.get(section)
+              b = right.get(section)
+              if a != b:
+                  print(f'ALLOC_DIFF:{section}:A={a}:B={b}')
+                  ok = False
+              else:
+                  print(f'ALLOC_MATCH:{section}:type={a[0]}:size={a[1]}:sha256={a[2]}')
+          print(f'ALLOC_SECTION_COUNT_A={len(left)}')
+          print(f'ALLOC_SECTION_COUNT_B={len(right)}')
+          print(f'BRAIN_RUNTIME_ELF_EQUIVALENT={ok}')
+          raise SystemExit(0 if ok else 1)
+          PY
+          then pass 'brain-runtime-elf-equivalence'; else fail 'brain-runtime-elf-equivalence'; fi
+          printf 'VERIFIER_FAILURE_COUNT=%s\n' "$failures"
+          if (( failures != 0 )); then printf 'VERIFIER_RESULT=FAIL\n'; exit 1; fi
+          printf 'VERIFIER_RESULT=PASS\n'
+
+      - name: Upload verifier diagnostics
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.33.3-verifier-diagnostics
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            verification-result.txt
+            payload-diff.txt
+            brain-runtime-equivalence.txt
+            brain-raw-sha256.txt
+            sage-1333-a-libsage-brain.so
+            sage-1333-b-libsage-brain.so
+            sage-1333-a-brain-sections.txt
+            sage-1333-b-brain-sections.txt
+            sage-1333-a-apksigner.txt
+            sage-1333-a-badging.txt
+            sage-1333-a-entries.txt
+            sage-1333-a-unexpected-abis.txt
+            sage-1333-a.sha256
+            sage-1333-b-apksigner.txt
+            sage-1333-b-badging.txt
+            sage-1333-b-entries.txt
+            sage-1333-b-unexpected-abis.txt
+            sage-1333-b.sha256
+
+      - name: Package verified candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp /tmp/sage-1333-a.apk Sage-1.33.3.apk
+          sha256sum Sage-1.33.3.apk > SHA256SUMS-Sage-1.33.3.txt
+          printf '%s\n' '${{ github.sha }}' > Sage-1.33.3-source-commit.txt
+          cp /tmp/sage-signing-lineage Sage-1.33.3-signing-lineage
+          TEST_LINES=(
+            'Install IN PLACE over Sage 1.33.2. Do not uninstall and do not clear storage.'
+            'Android must identify this as an update to com.pineapple.sagecommander.stable.'
+            '1. Confirm Sage Core, memories, wake profiles, Red Queen profile, Owner Apps, Forge pairing, and settings remain present.'
+            '2. Run 20 wake-command turns including Sage, Hey Sage, Okay Sage, and the tablet mishearing Okay Sage as Okay Age.'
+            '3. Run voice turns while media is playing and confirm dead MIC capture falls back to Android voice typing.'
+            '4. Ask a local Brain question that takes over 30 seconds and confirm it completes or reaches the progress-aware timeout.'
+            '5. While Brain is thinking, say Sage and confirm she says I am thinking without cancelling the original answer.'
+            '6. During a voice Brain answer, type two messages and confirm both wait, appear once, answer in order, and remain text-only.'
+            '7. Disable microphone permission and confirm typed chat still works without requesting it.'
+            '8. Reboot and confirm background wake, accessibility, authority state, and saved data survive.'
+          )
+          printf '%s\n' "${TEST_LINES[@]}" > Sage-1.33.3-PHYSICAL-TEST.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.33.3-normal-tablet-repair
+          retention-days: 30
+          path: |
+            Sage-1.33.3.apk
+            SHA256SUMS-Sage-1.33.3.txt
+            Sage-1.33.3-source-commit.txt
+            Sage-1.33.3-PHYSICAL-TEST.txt
+            Sage-1.33.3-signing-lineage
+            sage-1333-a-apksigner.txt
+            sage-1333-a-badging.txt
+            sage-1333-a.sha256
+            sage-1333-b-apksigner.txt
+            sage-1333-b-badging.txt
+            sage-1333-b.sha256
