@@ -1,0 +1,444 @@
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index 7197b06..078cb33 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -15,10 +15,10 @@ android {
+         applicationId = "com.pineapple.sagecommander.stable"
+         minSdk = 26
+         targetSdk = 35
+-        versionCode = 49
+-        versionName = "1.33.3"
+-        buildConfigField("String", "SOURCE_BRANCH", "\"repair/normal-tablet-v1-33-3\"")
+-        buildConfigField("String", "SOURCE_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: System.getenv("SAGE_SOURCE_COMMIT") ?: "reconstructed-v1.33.3"}\"")
++        versionCode = 50
++        versionName = "1.33.4"
++        buildConfigField("String", "SOURCE_BRANCH", "\"repair/normal-tablet-v1-33-4\"")
++        buildConfigField("String", "SOURCE_COMMIT", "\"${System.getenv("GITHUB_SHA") ?: System.getenv("SAGE_SOURCE_COMMIT") ?: "reconstructed-v1.33.4"}\"")
+
+         ndk {
+             abiFilters += listOf("arm64-v8a")
+diff --git a/app/src/main/cpp/sage_brain.cpp b/app/src/main/cpp/sage_brain.cpp
+index 5e92b63..b420832 100644
+--- a/app/src/main/cpp/sage_brain.cpp
++++ b/app/src/main/cpp/sage_brain.cpp
+@@ -323,7 +323,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
+     }
+     g_last_prompt_token_count.store(static_cast<int>(prompt_tokens.size()), std::memory_order_release);
+
+-    int max_tokens = std::max(1, std::min(24, static_cast<int>(requested_tokens)));
++    int max_tokens = std::max(1, std::min(48, static_cast<int>(requested_tokens)));
+     if (prompt_tokens.size() + static_cast<size_t>(max_tokens) + 8U
+             > static_cast<size_t>(llama_n_ctx(g_context))) {
+         set_error("Brain prompt exceeded Sage's local context window");
+diff --git a/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java b/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
+index c463a9f..d4bc8df 100644
+--- a/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
++++ b/app/src/main/java/com/pineapple/sage/SageBrainRequestPolicy.java
+@@ -38,10 +38,12 @@ final class SageBrainRequestPolicy {
+         int available=Math.max(32,budget-TEMPLATE_RESERVE_CHARS); String system=system(mode,tone,request);
+         if(system.length()>available)system=system.substring(0,available);
+         int userBudget=Math.max(16,available-system.length()); StringBuilder user=new StringBuilder(); boolean cut=false;
+-        int selectedContext=0,selectedMemories=0; String requestLine=mode==PromptMode.EXACT_LITERAL?"Requested literal: "+literal:"User: "+request;
++        boolean continuation=isContinuationRequest(request); int selectedContext=0,selectedMemories=0; String requestLine=mode==PromptMode.EXACT_LITERAL?"Requested literal: "+literal:"User: "+request;
+         String bounded=boundedLine(requestLine,userBudget); cut|=!bounded.equals(requestLine); user.append(bounded);
+         if(mode!=PromptMode.EXACT_LITERAL){
+-            Selection contexts=select("Context: ",request,context,mode==PromptMode.CONVERSATIONAL?3:1,userBudget-user.length());
++            Selection contexts=continuation
++                    ?selectRecent("Context: ",context,4,userBudget-user.length())
++                    :select("Context: ",request,context,mode==PromptMode.CONVERSATIONAL?3:1,userBudget-user.length());
+             if(!contexts.text.isEmpty())user.append('\n').append(contexts.text); selectedContext=contexts.count; cut|=contexts.truncated;
+             if(mode==PromptMode.CONVERSATIONAL||mode==PromptMode.CONCISE_ANSWER){
+                 Selection memory=select("Memory: ",request,memories,mode==PromptMode.CONVERSATIONAL?3:1,userBudget-user.length());
+@@ -56,24 +58,24 @@ final class SageBrainRequestPolicy {
+     static PromptMode mode(String input){
+         String value=clean(input),lower=value.toLowerCase(Locale.US);
+         if(EXACT.matcher(value).matches())return PromptMode.EXACT_LITERAL;
+-        if(lower.contains("based on our conversation")||lower.contains("what did i")||lower.contains("earlier")||lower.contains("continue our"))return PromptMode.CONVERSATIONAL;
++        if(isContinuationRequest(lower)||lower.contains("based on our conversation")||lower.contains("what did i")||lower.contains("earlier")||lower.contains("continue our"))return PromptMode.CONVERSATIONAL;
+         if(lower.matches("^(open|tap|click|choose|select|scroll|search|find|type|play|pause|share|edit)\\b.*"))return PromptMode.ACTION_SELECTION;
+         return PromptMode.CONCISE_ANSWER;
+     }
+     static String exactLiteral(String input){Matcher m=EXACT.matcher(clean(input));return m.matches()?unwrapLiteral(m.group(1)):"";}
+     static int outputBudget(PromptMode mode,String literal,long prefillMs,float tps){
+         if(mode==PromptMode.EXACT_LITERAL)return Math.max(4,Math.min(12,estimateLiteralTokens(literal)+3));
+-        long reserve=Math.max(4000L,30000L-Math.max(0L,prefillMs)-2500L);float safe=tps>0f?tps:1f;
+-        int measured=Math.max(6,(int)(reserve*safe/1000f));int cap=mode==PromptMode.CONCISE_ANSWER?16:mode==PromptMode.ACTION_SELECTION?20:24;
++        long reserve=Math.max(8000L,90000L-Math.max(0L,prefillMs)-5000L);float safe=tps>0f?tps:1f;
++        int measured=Math.max(12,(int)(reserve*safe/1000f));int cap=mode==PromptMode.CONCISE_ANSWER?32:mode==PromptMode.ACTION_SELECTION?32:48;
+         return Math.min(cap,measured);
+     }
+     static boolean literalMatches(String generated,String expected){return unwrapLiteral(generated).equals(unwrapLiteral(expected));}
+     private static String system(PromptMode mode,String tone,String request){
+         switch(mode){
+             case EXACT_LITERAL:return "Output only the requested literal. No explanation. /no_think";
+-            case CONCISE_ANSWER:return "Answer truthfully and directly. "+clean(tone)+" /no_think";
++            case CONCISE_ANSWER:return "Answer truthfully and directly in complete sentences. Never stop mid-sentence. "+clean(tone)+" /no_think";
+             case ACTION_SELECTION:return "Select one real available action or answer directly. Relevant actions: "+capabilities(request)+". Format ACTION|command or ANSWER|text. "+clean(tone)+" /no_think";
+-            default:return "Continue naturally and concisely using only relevant supplied context. "+clean(tone)+" /no_think";
++            default:return "Continue the prior exchange naturally in complete sentences using the supplied recent turns. Never stop mid-sentence. "+clean(tone)+" /no_think";
+         }
+     }
+     private static String capabilities(String request){
+@@ -85,6 +87,12 @@ final class SageBrainRequestPolicy {
+         if(values.isEmpty())values.add("no applicable direct capability");return String.join("; ",values);
+     }
+     private static final class Selection{final String text;final int count;final boolean truncated;Selection(String t,int c,boolean x){text=t;count=c;truncated=x;}}
++    private static boolean isContinuationRequest(String input){String v=clean(input).toLowerCase(Locale.US);return v.equals("continue")||v.equals("go on")||v.equals("keep going")||v.equals("finish")||v.equals("finish your thought")||v.equals("finish what you were saying")||v.contains("continue what you were saying")||v.contains("you were saying");}
++    private static Selection selectRecent(String prefix,List<String> values,int limit,int space){
++        if(values==null||values.isEmpty()||space<=prefix.length()+4)return new Selection("",0,false);int start=Math.max(0,values.size()-Math.max(1,limit));StringBuilder out=new StringBuilder();int count=0;boolean cut=false;
++        for(int i=start;i<values.size();i++){String line=prefix+clean(values.get(i));int remaining=space-out.length()-(out.length()==0?0:1);if(remaining<=0){cut=true;break;}String bounded=boundedLine(line,remaining);if(out.length()>0)out.append('\n');out.append(bounded);count++;if(!bounded.equals(line)){cut=true;break;}}
++        return new Selection(out.toString(),count,cut);
++    }
+     private static Selection select(String prefix,String request,List<String> values,int max,int space){
+         if(values==null||space<=prefix.length()+4)return new Selection("",0,false);List<String> ranked=new ArrayList<>();
+         for(String value:values)if(score(request,value)>0)ranked.add(clean(value));Collections.sort(ranked,(a,b)->Integer.compare(score(request,b),score(request,a)));
+diff --git a/app/src/main/java/com/pineapple/sage/SageConversationRepairPolicy.java b/app/src/main/java/com/pineapple/sage/SageConversationRepairPolicy.java
+new file mode 100644
+index 0000000..60da7ac
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageConversationRepairPolicy.java
+@@ -0,0 +1,28 @@
++package com.pineapple.sage;
++
++import java.util.Locale;
++
++/** Natural-language repair rules that must run before generic Brain fallback. */
++final class SageConversationRepairPolicy {
++    private SageConversationRepairPolicy() {}
++
++    static boolean isCapabilityQuestion(String raw) {
++        String value = normalize(raw);
++        return value.equals("sage capability status")
++                || value.contains("what can you do")
++                || value.contains("what all can you do")
++                || value.contains("what can you use")
++                || value.contains("what all can you use")
++                || value.contains("what capabilities do you have")
++                || value.contains("what all capabilities do you have")
++                || value.contains("list your capabilities")
++                || value.contains("show your capabilities");
++    }
++
++    private static String normalize(String value) {
++        return value == null ? "" : value.toLowerCase(Locale.US)
++                .replaceAll("[^a-z0-9]+", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
++    }
++}
+diff --git a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+index ecf65f5..fec88e1 100644
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -82,7 +82,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     };
+     private static final String[] EXACT_WAKE_ALIASES = {
+             "hey stage", "okay stage", "ok stage",
+-            "hey say age", "okay say age", "ok say age"
++            "hey say age", "okay say age", "ok say age",
++            "say page"
+     };
+     private static final String[] SAFE_PREFIXED_WAKE_SOUNDALIKES = {
+             "hey safe", "okay safe", "ok safe",
+@@ -97,6 +98,8 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+     private final ArrayList<String> partialChoices = new ArrayList<>();
+     private final SageTypedCommandQueue pendingTypedCommands =
+             new SageTypedCommandQueue(8);
++    private final SageWakeFragmentTracker wakeFragmentTracker =
++            new SageWakeFragmentTracker();
+     private final Runnable finishWakeCaptureRunnable = this::finishWakeCapture;
+     private final Runnable conversationExpiryRunnable = this::expireConversationIfNeeded;
+
+@@ -415,6 +418,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+         handler.removeCallbacks(finishWakeCaptureRunnable);
+         wakeListening = false;
+         activeWakeSession = 0L;
++        wakeFragmentTracker.reset();
+         if (wakeSpeechService != null) {
+             try {
+                 wakeSpeechService.stop();
+@@ -437,10 +441,22 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+                             + " active=" + activeWakeSession);
+             return;
+         }
+-        String normalized = normalizeForEcho(text)
++        String rawNormalized = normalizeForEcho(text)
+                 .replaceAll("\\bunk\\b", " ")
+                 .replaceAll("\\s+", " ")
+                 .trim();
++        String normalized = wakeFragmentTracker.resolve(
++                rawNormalized, finalResult, System.currentTimeMillis());
++        if (finalResult && normalized.isEmpty() && wakeFragmentTracker.isHolding()) {
++            SageDiagnostics.appendEvent(this, "WAKE FRAGMENT",
++                    "held=" + rawNormalized + " window_ms="
++                            + SageWakeFragmentTracker.FRAGMENT_WINDOW_MS);
++            return;
++        }
++        if (!rawNormalized.equals(normalized)) {
++            SageDiagnostics.appendEvent(this, "WAKE FRAGMENT",
++                    "combined=" + normalized + " current=" + rawNormalized);
++        }
+         if (!startsWithWakePhrase(normalized, finalResult)) {
+             if (finalResult) {
+                 SageDiagnostics.recognitionDecision(
+@@ -1499,10 +1515,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+             handler.postDelayed(this::openRedQueenWorkspace, 250L);
+             return;
+         }
+-        String capabilityPhrase = cleaned == null ? "" : cleaned.trim().toLowerCase(java.util.Locale.US);
+-        if (capabilityPhrase.equals("what can you do right now")
+-                || capabilityPhrase.equals("what can you use right now")
+-                || capabilityPhrase.equals("sage capability status")) {
++        if (SageConversationRepairPolicy.isCapabilityQuestion(cleaned)) {
+             String capabilityReport = SageCapabilitySnapshot.report(this);
+             SageDiagnostics.appendEvent(this, "CAPABILITY SNAPSHOT", "voice=true");
+             broadcastLine("Sage", capabilityReport);
+diff --git a/app/src/main/java/com/pineapple/sage/SageWakeFragmentTracker.java b/app/src/main/java/com/pineapple/sage/SageWakeFragmentTracker.java
+new file mode 100644
+index 0000000..9ded304
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageWakeFragmentTracker.java
+@@ -0,0 +1,56 @@
++package com.pineapple.sage;
++
++import java.util.Arrays;
++import java.util.HashSet;
++import java.util.Locale;
++import java.util.Set;
++
++/** Rejoins only a bounded wake prefix and Sage-like suffix split by Vosk. */
++final class SageWakeFragmentTracker {
++    static final long FRAGMENT_WINDOW_MS = 2500L;
++    private static final Set<String> PREFIXES = new HashSet<>(
++            Arrays.asList("hey", "okay", "ok"));
++    private static final Set<String> SAGE_SUFFIXES = new HashSet<>(
++            Arrays.asList("sage", "stage", "safe", "save", "say", "age", "page"));
++
++    private String heldPrefix = "";
++    private long heldAtMs;
++
++    synchronized String resolve(String raw, boolean finalResult, long nowMs) {
++        String value = normalize(raw);
++        if (!finalResult) {
++            return value;
++        }
++        if (!heldPrefix.isEmpty() && nowMs - heldAtMs > FRAGMENT_WINDOW_MS) {
++            reset();
++        }
++        if (PREFIXES.contains(value)) {
++            heldPrefix = value;
++            heldAtMs = nowMs;
++            return "";
++        }
++        if (!heldPrefix.isEmpty() && SAGE_SUFFIXES.contains(value)) {
++            String combined = heldPrefix + " " + value;
++            reset();
++            return combined;
++        }
++        reset();
++        return value;
++    }
++
++    synchronized boolean isHolding() {
++        return !heldPrefix.isEmpty();
++    }
++
++    synchronized void reset() {
++        heldPrefix = "";
++        heldAtMs = 0L;
++    }
++
++    private static String normalize(String value) {
++        return value == null ? "" : value.toLowerCase(Locale.US)
++                .replaceAll("[^a-z0-9]+", " ")
++                .replaceAll("\\s+", " ")
++                .trim();
++    }
++}
+diff --git a/app/src/main/java/com/pineapple/sage/SageWakeProfileStore.java b/app/src/main/java/com/pineapple/sage/SageWakeProfileStore.java
+index e3111b7..47cf254 100644
+--- a/app/src/main/java/com/pineapple/sage/SageWakeProfileStore.java
++++ b/app/src/main/java/com/pineapple/sage/SageWakeProfileStore.java
+@@ -185,6 +185,10 @@ public final class SageWakeProfileStore {
+             phrases.add("hey " + profile.phrase);
+             phrases.add("okay " + profile.phrase);
+             phrases.add("ok " + profile.phrase);
++            String recovery = recoverySuffix(profile.phrase);
++            if (!recovery.isEmpty()) {
++                phrases.add(recovery);
++            }
+         }
+         return new ArrayList<>(phrases);
+     }
+@@ -212,10 +216,33 @@ public final class SageWakeProfileStore {
+                     );
+                 }
+             }
++            String recovery = recoverySuffix(profile.phrase);
++            if (!recovery.isEmpty() && normalized.equals(recovery)) {
++                return new Match(profile, "");
++            }
+         }
+         return null;
+     }
+
++    static String recoverySuffix(String phraseInput) {
++        String phrase = normalizePhrase(phraseInput);
++        String[] prefixes = {"okay sage ", "hey sage ", "ok sage ", "sage "};
++        for (String prefix : prefixes) {
++            if (!phrase.startsWith(prefix)) {
++                continue;
++            }
++            String suffix = phrase.substring(prefix.length()).trim();
++            if (suffix.length() < 4 || suffix.split(" ").length > 3) {
++                return "";
++            }
++            if (suffix.split(" ").length == 1 && UNSAFE_SINGLE_WORDS.contains(suffix)) {
++                return "";
++            }
++            return suffix;
++        }
++        return "";
++    }
++
+     public static String summary(Context context) {
+         ArrayList<Profile> profiles = new ArrayList<>(load(context));
+         profiles.sort(Comparator.comparing(profile -> profile.phrase));
+diff --git a/app/src/main/res/values/strings.xml b/app/src/main/res/values/strings.xml
+index de15a07..34fa7ae 100644
+--- a/app/src/main/res/values/strings.xml
++++ b/app/src/main/res/values/strings.xml
+@@ -1,5 +1,5 @@
+ <?xml version="1.0" encoding="utf-8"?>
+ <resources>
+-    <string name="app_name">Sage Commander 1.33.3 · Tablet Repair</string>
++    <string name="app_name">Sage Commander 1.33.4 · Tablet Repair</string>
+     <string name="accessibility_description">Lets Sage perform the tablet commands you speak, including Home, Back, scrolling, tapping visible text, and typing.</string>
+ </resources>
+diff --git a/app/src/test/java/com/pineapple/sage/SageBrainConversationRepairTest.java b/app/src/test/java/com/pineapple/sage/SageBrainConversationRepairTest.java
+new file mode 100644
+index 0000000..95ba5cb
+--- /dev/null
++++ b/app/src/test/java/com/pineapple/sage/SageBrainConversationRepairTest.java
+@@ -0,0 +1,30 @@
++package com.pineapple.sage;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertTrue;
++
++import java.util.Arrays;
++import java.util.Collections;
++
++import org.junit.Test;
++
++public final class SageBrainConversationRepairTest {
++    @Test public void finishYourThoughtCarriesTheLatestExchange() {
++        SageBrainRequestPolicy.Prompt prompt = SageBrainRequestPolicy.build(
++                "finish your thought", "normal",
++                Arrays.asList("User: Tell me about the repair.",
++                        "Sage: The repair includes three important"),
++                Collections.emptyList(), 30000L, 2.0f);
++        assertEquals(SageBrainRequestPolicy.PromptMode.CONVERSATIONAL, prompt.mode);
++        assertTrue(prompt.user.contains("The repair includes three important"));
++        assertTrue(prompt.system.contains("Never stop mid-sentence"));
++    }
++
++    @Test public void normalAnswersHaveAUsefulCompletionBudget() {
++        SageBrainRequestPolicy.Prompt prompt = SageBrainRequestPolicy.build(
++                "Tell me something useful", "normal",
++                Collections.emptyList(), Collections.emptyList(), 30000L, 2.0f);
++        assertTrue(prompt.outputTokens > 16);
++        assertTrue(prompt.outputTokens <= 48);
++    }
++}
+diff --git a/app/src/test/java/com/pineapple/sage/SageConversationRepairPolicyTest.java b/app/src/test/java/com/pineapple/sage/SageConversationRepairPolicyTest.java
+new file mode 100644
+index 0000000..0a2b5a1
+--- /dev/null
++++ b/app/src/test/java/com/pineapple/sage/SageConversationRepairPolicyTest.java
+@@ -0,0 +1,23 @@
++package com.pineapple.sage;
++
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++
++public final class SageConversationRepairPolicyTest {
++    @Test public void routesObservedCapabilityParaphrasesDeterministically() {
++        assertTrue(SageConversationRepairPolicy.isCapabilityQuestion(
++                "What all capabilities do you have?"));
++        assertTrue(SageConversationRepairPolicy.isCapabilityQuestion(
++                "Trying to hold a conversation with you. What all can you do?"));
++        assertTrue(SageConversationRepairPolicy.isCapabilityQuestion(
++                "Show your capabilities"));
++    }
++
++    @Test public void ordinaryConversationDoesNotOpenCapabilitySnapshot() {
++        assertFalse(SageConversationRepairPolicy.isCapabilityQuestion(
++                "What do you think about this?"));
++        assertFalse(SageConversationRepairPolicy.isCapabilityQuestion("Hello Sage"));
++    }
++}
+diff --git a/app/src/test/java/com/pineapple/sage/SageWakeFragmentTrackerTest.java b/app/src/test/java/com/pineapple/sage/SageWakeFragmentTrackerTest.java
+new file mode 100644
+index 0000000..cb700d1
+--- /dev/null
++++ b/app/src/test/java/com/pineapple/sage/SageWakeFragmentTrackerTest.java
+@@ -0,0 +1,32 @@
++package com.pineapple.sage;
++
++import static org.junit.Assert.assertEquals;
++import static org.junit.Assert.assertFalse;
++import static org.junit.Assert.assertTrue;
++
++import org.junit.Test;
++
++public final class SageWakeFragmentTrackerTest {
++    @Test public void combinesOnlyRecentPrefixAndSageLikeSuffix() {
++        SageWakeFragmentTracker tracker = new SageWakeFragmentTracker();
++        assertEquals("", tracker.resolve("okay", true, 1000L));
++        assertTrue(tracker.isHolding());
++        assertEquals("okay age", tracker.resolve("age", true, 2200L));
++        assertFalse(tracker.isHolding());
++    }
++
++    @Test public void expiredOrStandaloneSuffixNeverBecomesAWakePhrase() {
++        SageWakeFragmentTracker tracker = new SageWakeFragmentTracker();
++        assertEquals("age", tracker.resolve("age", true, 1000L));
++        assertEquals("", tracker.resolve("okay", true, 2000L));
++        assertEquals("save", tracker.resolve("save", true, 5001L));
++        assertFalse(tracker.isHolding());
++    }
++
++    @Test public void unrelatedSpeechClearsPendingPrefix() {
++        SageWakeFragmentTracker tracker = new SageWakeFragmentTracker();
++        assertEquals("", tracker.resolve("hey", true, 1000L));
++        assertEquals("weather", tracker.resolve("weather", true, 1200L));
++        assertEquals("page", tracker.resolve("page", true, 1300L));
++    }
++}
+diff --git a/app/src/test/java/com/pineapple/sage/SageWakeProfileRecoveryTest.java b/app/src/test/java/com/pineapple/sage/SageWakeProfileRecoveryTest.java
+new file mode 100644
+index 0000000..a9fa86d
+--- /dev/null
++++ b/app/src/test/java/com/pineapple/sage/SageWakeProfileRecoveryTest.java
+@@ -0,0 +1,18 @@
++package com.pineapple.sage;
++
++import static org.junit.Assert.assertEquals;
++
++import org.junit.Test;
++
++public final class SageWakeProfileRecoveryTest {
++    @Test public void recoversDistinctiveSuffixWhenVoskDropsSage() {
++        assertEquals("glitch", SageWakeProfileStore.recoverySuffix("sage glitch"));
++        assertEquals("red mode", SageWakeProfileStore.recoverySuffix("okay sage red mode"));
++    }
++
++    @Test public void neverRecoversUnsafeOrUnprefixedWords() {
++        assertEquals("", SageWakeProfileStore.recoverySuffix("sage save"));
++        assertEquals("", SageWakeProfileStore.recoverySuffix("glitch"));
++        assertEquals("", SageWakeProfileStore.recoverySuffix("sage go"));
++    }
++}
