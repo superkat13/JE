@@ -13,16 +13,31 @@ import org.junit.Test
 class SageRuntimeTest {
     @Test fun speechInputIsAttachedDirectlyToSingleRuntimeCoordinator() {
         val f = Fixture(); f.runtime.start(); assertNotNull(f.speech.listener)
-        f.speech.listener!!.onWakeDetected(f.runtime.snapshot().recognizerGeneration)
+        f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
         assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, f.runtime.snapshot().state)
     }
 
     @Test fun recognitionErrorReturnsToUsableConversationPath() {
-        val f = Fixture(); f.runtime.start(); f.speech.listener!!.onWakeDetected(f.runtime.snapshot().recognizerGeneration)
+        val f = Fixture(); f.runtime.start()
+        f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
         f.speech.completeLastSpeech(); val s = f.runtime.snapshot()
         f.speech.listener!!.onRecognitionError(s.activeTurnId, s.recognizerGeneration, 7)
         assertEquals(SageRuntimeState.SPEAKING, f.runtime.snapshot().state)
         assertEquals("I didn't catch that.", f.speech.spoken.last().second)
+    }
+
+    @Test fun customWakeProfileActivatesModeInsideSameRuntime() {
+        val f = Fixture(); f.runtime.start()
+        f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage_glitch", "red_queen", "Yes"))
+        assertEquals("red_queen", com.pineapple.sageos2.mode.DefaultSageModeController.current().modeId)
+    }
+
+    @Test fun deepBrainReceivesRenderedVirtualTwinContext() {
+        val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("tell me something useful"))
+        assertEquals(1, f.brain.requests.size)
+        val request = f.brain.requests.single()
+        assertTrue(request.twinContextText?.contains("virtual twin") == true)
+        assertTrue(request.twinContextText?.contains("Self restrictions: (none)") == true)
     }
 
     @Test fun fastDeviceCommandBypassesBrain() {
