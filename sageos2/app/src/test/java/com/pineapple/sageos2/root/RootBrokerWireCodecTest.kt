@@ -2,6 +2,7 @@ package com.pineapple.sageos2.root
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.ByteArrayInputStream
@@ -58,5 +59,20 @@ class RootBrokerWireCodecTest {
         assertEquals("a1", decoded.auditId)
         assertEquals(0, decoded.exitCode)
         assertEquals("1000\n", decoded.stdout)
+    }
+
+    @Test
+    fun truncatedResponseIsNeverAccepted() {
+        val response = """
+            SAGE_ROOTD 1
+            id 7231
+            success 1
+            code 4f4b
+            detail 6f6b
+        """.trimIndent() + "\n"
+        val error = assertThrows(IllegalArgumentException::class.java) {
+            RootBrokerWireCodec.decode(ByteArrayInputStream(response.toByteArray()))
+        }
+        assertTrue(error.message.orEmpty().contains("terminator"))
     }
 }
