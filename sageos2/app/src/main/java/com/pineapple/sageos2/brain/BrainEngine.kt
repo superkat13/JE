@@ -28,7 +28,8 @@ data class BrainProvenance(
     val engine: String,
     val provider: String? = null,
     val model: String? = null,
-    val limitation: String? = null
+    val limitation: String? = null,
+    val attempts: List<String> = emptyList()
 )
 
 interface BrainJob { val turnId: Long; fun cancel() }
