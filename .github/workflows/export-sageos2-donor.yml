@@ -1,5 +1,5 @@
 name: Export SageOS 2 donor source
-run-name: Reconstruct verified 1.33.3 donor for SageOS 2
+run-name: Reconstruct and transplant verified 1.33.3 donor for SageOS 2
 
 on:
   push:
@@ -7,12 +7,21 @@ on:
     paths: ['.github/workflows/export-sageos2-donor.yml']
   workflow_dispatch:
 
+permissions:
+  contents: write
+
+concurrency:
+  group: sageos2-donor-transplant
+  cancel-in-progress: true
+
 jobs:
   export:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Reconstruct verified Sage 1.33.3 donor
         run: |
           set -euo pipefail
@@ -28,7 +37,8 @@ jobs:
               cp "$file" "$DEST/java/$(basename "$file")"
             done < <(find "$OUT" -type f -name "$name" -print)
           done
-          if [ -d "$OUT/app/src/main/cpp" ]; then cp -a "$OUT/app/src/main/cpp/." "$DEST/native/"; fi
+          test -d "$OUT/app/src/main/cpp"
+          cp -a "$OUT/app/src/main/cpp/." "$DEST/native/"
           for file in "$OUT/app/build.gradle" "$OUT/app/build.gradle.kts" "$OUT/build.gradle" "$OUT/settings.gradle"; do
             [ -f "$file" ] && cp "$file" "$DEST/build/$(basename "$file")"
           done
@@ -36,6 +46,29 @@ jobs:
           test -s "$DEST/java/SageForgeClient.java"
           test -s "$DEST/java/SageForgeStore.java"
           test -s "$DEST/java/SageBrainManager.java"
+          test -s "$DEST/native/sage_brain.cpp"
+          test -s "$DEST/native/CMakeLists.txt"
+      - name: Transplant only verified native Brain source
+        run: |
+          set -euo pipefail
+          mkdir -p sageos2/app/src/main/cpp
+          cp /tmp/sageos2-donor/native/sage_brain.cpp sageos2/app/src/main/cpp/sage_brain.cpp
+          cp /tmp/sageos2-donor/native/CMakeLists.txt sageos2/app/src/main/cpp/CMakeLists.txt
+          git diff --check
+          git status --short
+      - name: Commit native transplant when changed
+        run: |
+          set -euo pipefail
+          git config user.name "SageOS 2 Builder"
+          git config user.email "83181070+superkat13@users.noreply.github.com"
+          git add sageos2/app/src/main/cpp/sage_brain.cpp sageos2/app/src/main/cpp/CMakeLists.txt
+          if git diff --cached --quiet; then
+            echo "Verified native donor already matches SageOS 2"
+            exit 0
+          fi
+          git commit -m "feat: transplant verified native Sage Brain source"
+          git pull --rebase origin sageos-2
+          git push origin HEAD:sageos-2
       - uses: actions/upload-artifact@v4
         with:
           name: sageos2-verified-1333-donor-source
