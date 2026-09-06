@@ -7,6 +7,7 @@ import java.nio.charset.StandardCharsets
 object RootBrokerWireCodec {
     private const val HEADER = "SAGE_ROOTD 1"
     private const val MAX_RESPONSE_BYTES = 256 * 1024
+    private val TERMINATOR = "\nEND\n".toByteArray(StandardCharsets.UTF_8)
 
     fun encode(request: RootBrokerRequest): ByteArray {
         require(request.requestId.isNotBlank() && request.requestId.length <= 128)
@@ -33,16 +34,32 @@ object RootBrokerWireCodec {
 
     fun decode(input: InputStream): RootBrokerResult {
         val bytes = ByteArrayOutputStream()
-        val one = ByteArray(1)
-        var tail = ""
+        var matchedTerminatorBytes = 0
+        var terminated = false
+
         while (bytes.size() < MAX_RESPONSE_BYTES) {
-            val read = input.read(one)
-            if (read < 0) break
-            bytes.write(one, 0, read)
-            tail = (tail + one[0].toInt().toChar()).takeLast(5)
-            if (tail == "END\n" && bytes.toString(StandardCharsets.UTF_8.name()).contains("\nEND\n")) break
+            val next = input.read()
+            if (next < 0) break
+            val byte = next.toByte()
+            bytes.write(next)
+
+            matchedTerminatorBytes = if (byte == TERMINATOR[matchedTerminatorBytes]) {
+                matchedTerminatorBytes + 1
+            } else if (byte == TERMINATOR[0]) {
+                1
+            } else {
+                0
+            }
+
+            if (matchedTerminatorBytes == TERMINATOR.size) {
+                terminated = true
+                break
+            }
         }
+
         require(bytes.size() < MAX_RESPONSE_BYTES) { "Root broker response exceeded protocol limit" }
+        require(terminated) { "Root broker response ended before protocol terminator" }
+
         val lines = bytes.toString(StandardCharsets.UTF_8.name()).lineSequence().toList()
         require(lines.firstOrNull() == HEADER) { "Root broker protocol mismatch" }
         val values = linkedMapOf<String, String>()
@@ -50,7 +67,9 @@ object RootBrokerWireCodec {
             if (line == "END") break
             val split = line.indexOf(' ')
             require(split > 0) { "Malformed root broker response line" }
-            values[line.substring(0, split)] = line.substring(split + 1)
+            val key = line.substring(0, split)
+            require(key !in values) { "Duplicate root broker response field: $key" }
+            values[key] = line.substring(split + 1)
         }
         val requestId = unhex(values.getValue("id"))
         val success = when (values.getValue("success")) {
