@@ -12,6 +12,8 @@ import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
 import com.pineapple.sageos2.identity.EmptySageCoreProvider
 import com.pineapple.sageos2.identity.SageCoreProvider
+import com.pineapple.sageos2.memory.EmptyTwinMemoryProvider
+import com.pineapple.sageos2.memory.TwinMemoryProvider
 import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.workflow.WorkflowEngine
@@ -25,6 +27,7 @@ class SageRuntime(
     private val scheduler: RuntimeScheduler,
     private val observer: RuntimeObserver = NoOpRuntimeObserver,
     private val sageCore: SageCoreProvider = EmptySageCoreProvider,
+    private val twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
     private val echoGuardMs: Long = 450L
 ) {
     init {
@@ -72,9 +75,19 @@ class SageRuntime(
             }
             is SageEffect.QueryDeepBrain -> {
                 brainJob?.cancel()
-                brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt, sageCore.current())) { result ->
+                brainJob = brain.start(
+                    BrainRequest(
+                        turnId = effect.turnId,
+                        prompt = effect.prompt,
+                        sageCore = sageCore.current(),
+                        twinMemory = twinMemory.snapshot()
+                    )
+                ) { result ->
                     result.fold(
-                        onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, true)) },
+                        onSuccess = { response ->
+                            response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }
+                            submit(SageEvent.ResponseReady(response.turnId, response.text, true))
+                        },
                         onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) }
                     )
                 }
