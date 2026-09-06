@@ -5,6 +5,7 @@ plugins {
 android {
     namespace = "com.pineapple.sageos2"
     compileSdk = 35
+    ndkVersion = "28.2.13676358"
 
     defaultConfig {
         applicationId = "com.pineapple.sagecommander.stable"
@@ -14,6 +15,10 @@ android {
         versionName = "2.0.0"
 
         testInstrumentationRunner = "android.app.Instrumentation"
+
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -25,6 +30,13 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+    }
+
+    externalNativeBuild {
+        cmake {
+            path = file("src/main/cpp/CMakeLists.txt")
+            version = "3.22.1"
+        }
     }
 }
 

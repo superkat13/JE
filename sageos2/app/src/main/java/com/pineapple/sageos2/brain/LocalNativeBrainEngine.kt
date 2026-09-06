@@ -1,6 +1,5 @@
 package com.pineapple.sageos2.brain
 
-import com.pineapple.sage.SageBrainManager
 import java.io.File
 import java.util.concurrent.Executors
 import java.util.concurrent.Future
@@ -10,7 +9,7 @@ import java.util.concurrent.atomic.AtomicLong
 class LocalNativeBrainEngine(
     private val modelPath: String,
     private val maxTokens: Int = 192,
-    private val manager: SageBrainManager = SageBrainManager(),
+    private val bridge: NativeBrainBridge = JniNativeBrainBridge(),
     private val libraryLoader: () -> Unit = { System.loadLibrary("sage-brain") }
 ) : BrainEngine {
     override val name: String = "sage-local-native"
@@ -57,7 +56,7 @@ class LocalNativeBrainEngine(
             override val turnId: Long = request.turnId
             override fun cancel() {
                 if (cancelled.compareAndSet(false, true)) {
-                    runCatching { manager.nativeCancelGeneration(request.turnId) }
+                    runCatching { bridge.cancel(request.turnId) }
                     future?.cancel(true)
                 }
             }
@@ -66,13 +65,14 @@ class LocalNativeBrainEngine(
         future = executor.submit {
             val started = System.nanoTime()
             try {
-                val context = request.twinContextText.orEmpty()
-                val text = manager.nativeGenerate(
-                    request.turnId,
-                    request.prompt,
-                    context,
-                    maxTokens,
-                    false
+                val systemPrompt = request.twinContextText.orEmpty()
+                val userPrompt = request.prompt
+                val text = bridge.generate(
+                    requestId = request.turnId,
+                    systemPrompt = systemPrompt,
+                    userPrompt = userPrompt,
+                    maxTokens = maxTokens,
+                    deterministic = false
                 ).trim()
                 val elapsed = (System.nanoTime() - started) / 1_000_000L
                 lastLatency.set(elapsed)
@@ -81,7 +81,7 @@ class LocalNativeBrainEngine(
                     callback(Result.failure(BrainFailureException(
                         kind = BrainFailureKind.MODEL_ERROR,
                         engineName = name,
-                        message = "native Brain returned an empty response"
+                        message = "native Brain returned an empty response [stage=${safeStage()}]"
                     )))
                 } else {
                     callback(Result.success(BrainResponse(
@@ -91,17 +91,24 @@ class LocalNativeBrainEngine(
                         provenance = BrainProvenance(
                             engine = name,
                             provider = "on-device",
-                            model = File(modelPath).name
+                            model = File(modelPath).name,
+                            attempts = listOf(
+                                "first_token_ms=${safeLong { bridge.firstTokenLatencyMs() }}",
+                                "generation_ms=${safeLong { bridge.generationDurationMs() }}",
+                                "prompt_tokens=${safeInt { bridge.promptTokenCount() }}",
+                                "generated_tokens=${safeInt { bridge.generatedTokenCount() }}"
+                            )
                         )
                     )))
                 }
             } catch (t: Throwable) {
-                lastError = t.message ?: t::class.simpleName
+                val nativeError = runCatching { bridge.lastError().trim() }.getOrDefault("")
+                lastError = nativeError.ifBlank { t.message ?: t::class.simpleName }
                 if (!cancelled.get()) {
                     callback(Result.failure(BrainFailureException(
                         kind = BrainFailureKind.MODEL_ERROR,
                         engineName = name,
-                        message = "native Brain failed: ${lastError.orEmpty()}"
+                        message = "native Brain failed: ${lastError.orEmpty()} [stage=${safeStage()}]"
                     )))
                 }
             }
@@ -114,14 +121,20 @@ class LocalNativeBrainEngine(
         if (loaded.get()) return true
         if (loadAttempted.get()) return false
         loadAttempted.set(true)
-        return runCatching { manager.nativeLoadModel(modelPath) }
+        return runCatching { bridge.loadModel(modelPath) }
             .onFailure { lastError = "model load failed: ${it.message ?: it::class.simpleName}" }
             .getOrDefault(false)
             .also {
                 loaded.set(it)
-                if (!it && lastError == null) lastError = "nativeLoadModel returned false"
+                if (!it && lastError == null) {
+                    lastError = runCatching { bridge.lastError().trim() }.getOrDefault("").ifBlank { "nativeLoadModel returned false" }
+                }
             }
     }
+
+    private fun safeStage() = runCatching { bridge.stage().trim() }.getOrDefault("")
+    private inline fun safeLong(block: () -> Long) = runCatching(block).getOrDefault(-1L)
+    private inline fun safeInt(block: () -> Int) = runCatching(block).getOrDefault(-1)
 
     private fun completedJob(turnId: Long) = object : BrainJob {
         override val turnId: Long = turnId
