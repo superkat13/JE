@@ -4,10 +4,11 @@ import android.app.Activity
 import android.os.Bundle
 import android.widget.LinearLayout
 import android.widget.TextView
+import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageTurnCoordinator
 
-class MainActivity : Activity() {
+open class MainActivity : Activity() {
     private val coordinator = SageTurnCoordinator()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -31,6 +32,10 @@ class MainActivity : Activity() {
 
         coordinator.handle(SageEvent.Start)
         val snapshot = coordinator.snapshot()
-        status.text = "Core runtime: ${snapshot.state}\nListening: ${snapshot.listeningMode}\nOne Sage. One turn coordinator."
+        val activeCapabilities = AndroidCapabilityBroker(this)
+            .snapshot()
+            .states
+            .count { it.value.name == "ACTIVE" }
+        status.text = "Core runtime: ${snapshot.state}\nListening: ${snapshot.listeningMode}\nActive authority probes: $activeCapabilities\nOne Sage. One turn coordinator."
     }
 }
