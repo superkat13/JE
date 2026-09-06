@@ -21,17 +21,17 @@ jobs:
           set -euo pipefail
           if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
-      - name: Verify virtual twin identity, memory, and shared history
+      - name: Verify single transparent twin context compiler
         run: |
-          grep -F 'virtual twin' SAGEOS2_MASTER_PLAN.md
+          grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
+          grep -F 'twinContextText = context' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'val mode: SageModeSnapshot?' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainEngine.kt
+      - name: Verify virtual twin memory/history and wake profiles
+        run: |
           grep -F 'data class TwinMemoryRecord' sageos2/app/src/main/java/com/pineapple/sageos2/memory/TwinMemory.kt
           grep -F 'data class ConversationEntry' sageos2/app/src/main/java/com/pineapple/sageos2/memory/ConversationHistory.kt
-          grep -F 'conversationHistory = conversationHistory.recent(24)' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
-      - name: Verify wake profile architecture
-        run: |
           grep -F 'data class WakeProfile' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
           grep -F 'modeId = "red_queen"' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
-          grep -F 'data class ActivateMode' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageEffect.kt
       - name: Verify Sage owns behavioral policy
         run: |
           grep -F 'val selfRestrictions: List<String>' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt

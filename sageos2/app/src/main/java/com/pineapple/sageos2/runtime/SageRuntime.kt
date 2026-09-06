@@ -12,6 +12,7 @@ import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
 import com.pineapple.sageos2.identity.EmptySageCoreProvider
 import com.pineapple.sageos2.identity.SageCoreProvider
+import com.pineapple.sageos2.identity.TwinContextRenderer
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.ConversationHistoryProvider
 import com.pineapple.sageos2.memory.ConversationHistoryStore
@@ -40,6 +41,7 @@ class SageRuntime(
     private val twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
     private val conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
     private val modes: SageModeController = DefaultSageModeController,
+    private val twinContextRenderer: TwinContextRenderer = TwinContextRenderer(),
     private val echoGuardMs: Long = 450L
 ) {
     init {
@@ -117,13 +119,20 @@ class SageRuntime(
             }
             is SageEffect.QueryDeepBrain -> {
                 brainJob?.cancel()
+                val core = sageCore.current()
+                val memory = twinMemory.snapshot()
+                val history = conversationHistory.recent(24)
+                val mode = modes.current()
+                val context = twinContextRenderer.render(core, memory, history, mode)
                 brainJob = brain.start(
                     BrainRequest(
                         turnId = effect.turnId,
                         prompt = effect.prompt,
-                        sageCore = sageCore.current(),
-                        twinMemory = twinMemory.snapshot(),
-                        conversationHistory = conversationHistory.recent(24)
+                        sageCore = core,
+                        twinMemory = memory,
+                        conversationHistory = history,
+                        mode = mode,
+                        twinContextText = context
                     )
                 ) { result ->
                     result.fold(
