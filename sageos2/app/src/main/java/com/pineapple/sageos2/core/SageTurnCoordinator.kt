@@ -1,22 +1,39 @@
 package com.pineapple.sageos2.core
 
+import java.util.ArrayDeque
+
 data class SageRuntimeSnapshot(
     val state: SageRuntimeState,
+    val listeningMode: SageListeningMode,
     val activeTurnId: Long,
-    val recognizerGeneration: Long
+    val recognizerGeneration: Long,
+    val queuedTextCount: Int
 )
 
 class SageTurnCoordinator(
-    private val router: SageCommandRouter = SageCommandRouter()
+    private val router: SageCommandRouter = SageCommandRouter(),
+    private val typedQueueCapacity: Int = 16
 ) {
+    init {
+        require(typedQueueCapacity > 0) { "typedQueueCapacity must be positive" }
+    }
+
     private var state = SageRuntimeState.STOPPED
+    private var listeningMode = SageListeningMode.OFF
     private var activeTurnId = 0L
     private var recognizerGeneration = 0L
     private var nextTurnId = 1L
     private var followUpAfterSpeech = false
+    private val pendingTypedInputs = ArrayDeque<String>()
 
     @Synchronized
-    fun snapshot() = SageRuntimeSnapshot(state, activeTurnId, recognizerGeneration)
+    fun snapshot() = SageRuntimeSnapshot(
+        state = state,
+        listeningMode = listeningMode,
+        activeTurnId = activeTurnId,
+        recognizerGeneration = recognizerGeneration,
+        queuedTextCount = pendingTypedInputs.size
+    )
 
     @Synchronized
     fun handle(event: SageEvent): List<SageEffect> = when (event) {
@@ -35,22 +52,24 @@ class SageTurnCoordinator(
     private fun start(): List<SageEffect> {
         if (state != SageRuntimeState.STOPPED && state != SageRuntimeState.ERROR) return emptyList()
         activeTurnId = 0L
-        recognizerGeneration += 1
         state = SageRuntimeState.IDLE_WAKE
-        return listOf(SageEffect.StartWakeListening(recognizerGeneration))
+        return listOf(changeListening(SageListeningMode.WAKE_ONLY))
     }
 
     private fun stop(): List<SageEffect> {
-        val effects = mutableListOf<SageEffect>(SageEffect.StopListening)
+        val effects = mutableListOf<SageEffect>()
+        effects += changeListening(SageListeningMode.OFF)
         if (activeTurnId != 0L) effects += SageEffect.CancelTurn(activeTurnId)
+        pendingTypedInputs.clear()
+        followUpAfterSpeech = false
         state = SageRuntimeState.STOPPED
         activeTurnId = 0L
         return effects
     }
 
     private fun onWake(event: SageEvent.WakeDetected): List<SageEffect> {
-        if (event.recognizerGeneration != recognizerGeneration) {
-            return listOf(SageEffect.IgnoreStaleCallback("wake generation ${event.recognizerGeneration} != $recognizerGeneration"))
+        if (event.recognizerGeneration != recognizerGeneration || listeningMode != SageListeningMode.WAKE_ONLY) {
+            return stale("wake generation/mode mismatch")
         }
 
         if (state == SageRuntimeState.THINKING_FAST || state == SageRuntimeState.THINKING_DEEP) {
@@ -63,60 +82,95 @@ class SageTurnCoordinator(
 
         activeTurnId = nextTurnId++
         state = SageRuntimeState.ACKNOWLEDGING_WAKE
-        return listOf(SageEffect.StopListening, SageEffect.Speak(activeTurnId, "Yes"))
+        return listOf(
+            changeListening(SageListeningMode.OFF),
+            SageEffect.Speak(activeTurnId, "Yes")
+        )
     }
 
     private fun onWakeAckSpoken(event: SageEvent.WakeAcknowledgementSpoken): List<SageEffect> {
-        if (event.turnId != activeTurnId || state != SageRuntimeState.ACKNOWLEDGING_WAKE) return stale("wake acknowledgement")
-        recognizerGeneration += 1
+        if (event.turnId != activeTurnId || state != SageRuntimeState.ACKNOWLEDGING_WAKE) {
+            return stale("wake acknowledgement")
+        }
         state = SageRuntimeState.COMMAND_LISTENING
-        return listOf(SageEffect.StartCommandListening(activeTurnId, recognizerGeneration))
+        return listOf(changeListening(SageListeningMode.COMMAND, activeTurnId))
     }
 
     private fun onTranscript(event: SageEvent.TranscriptFinal): List<SageEffect> {
         if (event.turnId != activeTurnId) return stale("turn ${event.turnId} != $activeTurnId")
-        if (event.recognizerGeneration != recognizerGeneration) return stale("transcript generation ${event.recognizerGeneration} != $recognizerGeneration")
-        if (state != SageRuntimeState.COMMAND_LISTENING && state != SageRuntimeState.FOLLOW_UP_LISTENING) return stale("transcript in $state")
+        if (event.recognizerGeneration != recognizerGeneration) {
+            return stale("transcript generation ${event.recognizerGeneration} != $recognizerGeneration")
+        }
+        val expectedMode = when (state) {
+            SageRuntimeState.COMMAND_LISTENING -> SageListeningMode.COMMAND
+            SageRuntimeState.FOLLOW_UP_LISTENING -> SageListeningMode.FOLLOW_UP
+            else -> null
+        }
+        if (expectedMode == null || listeningMode != expectedMode) return stale("transcript in $state/$listeningMode")
         return dispatch(activeTurnId, event.text)
     }
 
     private fun onText(event: SageEvent.TextSubmitted): List<SageEffect> {
-        if (activeTurnId != 0L && state != SageRuntimeState.IDLE_WAKE && state != SageRuntimeState.STOPPED) {
-            return listOf(SageEffect.RecordDiagnostic("text queued until active turn closes"))
+        val cleaned = event.text.trim()
+        if (cleaned.isEmpty()) return listOf(SageEffect.TypedInputRejected("empty input"))
+
+        val canDispatchImmediately = state == SageRuntimeState.IDLE_WAKE ||
+            state == SageRuntimeState.STOPPED ||
+            state == SageRuntimeState.FOLLOW_UP_LISTENING
+
+        if (canDispatchImmediately) {
+            activeTurnId = nextTurnId++
+            return dispatch(activeTurnId, cleaned)
         }
-        activeTurnId = nextTurnId++
-        return dispatch(activeTurnId, event.text)
+
+        if (pendingTypedInputs.size >= typedQueueCapacity) {
+            return listOf(SageEffect.TypedInputRejected("typed queue full"))
+        }
+
+        pendingTypedInputs.addLast(cleaned)
+        return listOf(SageEffect.TypedInputQueued(pendingTypedInputs.size))
     }
 
     private fun dispatch(turnId: Long, text: String): List<SageEffect> {
+        followUpAfterSpeech = false
         val decision = router.route(text)
         return when (decision.route) {
             SageRoute.OWNER_WORKFLOW -> {
                 state = SageRuntimeState.IDLE_WAKE
                 activeTurnId = 0L
-                recognizerGeneration += 1
                 listOf(
-                    SageEffect.StopListening,
-                    SageEffect.LaunchOwnerWorkflow(turnId, requireNotNull(decision.workflowId)),
-                    SageEffect.StartWakeListening(recognizerGeneration)
+                    changeListening(SageListeningMode.WAKE_ONLY),
+                    SageEffect.LaunchOwnerWorkflow(turnId, requireNotNull(decision.workflowId))
                 )
             }
             SageRoute.FAST_DEVICE -> {
                 state = SageRuntimeState.THINKING_FAST
-                listOf(SageEffect.StopListening, SageEffect.ExecuteFast(turnId, decision.normalizedText))
+                listOf(
+                    changeListening(SageListeningMode.WAKE_ONLY, turnId),
+                    SageEffect.ExecuteFast(turnId, decision.normalizedText)
+                )
             }
             SageRoute.DEEP_REASONING -> {
                 state = SageRuntimeState.THINKING_DEEP
-                listOf(SageEffect.StopListening, SageEffect.QueryDeepBrain(turnId, decision.normalizedText))
+                listOf(
+                    changeListening(SageListeningMode.WAKE_ONLY, turnId),
+                    SageEffect.QueryDeepBrain(turnId, decision.normalizedText)
+                )
             }
         }
     }
 
     private fun onResponse(event: SageEvent.ResponseReady): List<SageEffect> {
-        if (event.turnId != activeTurnId || (state != SageRuntimeState.THINKING_FAST && state != SageRuntimeState.THINKING_DEEP)) return stale("response")
+        if (event.turnId != activeTurnId ||
+            (state != SageRuntimeState.THINKING_FAST && state != SageRuntimeState.THINKING_DEEP)
+        ) return stale("response")
+
         followUpAfterSpeech = event.allowFollowUp
         state = SageRuntimeState.SPEAKING
-        return listOf(SageEffect.Speak(activeTurnId, event.text))
+        return listOf(
+            changeListening(SageListeningMode.OFF),
+            SageEffect.Speak(activeTurnId, event.text)
+        )
     }
 
     private fun onBrainFailed(event: SageEvent.BrainFailed): List<SageEffect> {
@@ -124,6 +178,7 @@ class SageTurnCoordinator(
         followUpAfterSpeech = true
         state = SageRuntimeState.SPEAKING
         return listOf(
+            changeListening(SageListeningMode.OFF),
             SageEffect.RecordDiagnostic("brain failed: ${event.reason}"),
             SageEffect.Speak(activeTurnId, "I hit a brain problem, but I'm still here.")
         )
@@ -137,16 +192,27 @@ class SageTurnCoordinator(
 
     private fun onEchoGuardElapsed(event: SageEvent.EchoGuardElapsed): List<SageEffect> {
         if (event.turnId != activeTurnId || state != SageRuntimeState.ECHO_GUARD) return stale("echo guard")
+
+        if (pendingTypedInputs.isNotEmpty()) {
+            val next = pendingTypedInputs.removeFirst()
+            activeTurnId = nextTurnId++
+            return listOf(SageEffect.RecordDiagnostic("dispatching queued typed input")) + dispatch(activeTurnId, next)
+        }
+
         return if (followUpAfterSpeech) {
-            recognizerGeneration += 1
             state = SageRuntimeState.FOLLOW_UP_LISTENING
-            listOf(SageEffect.StartFollowUpListening(activeTurnId, recognizerGeneration))
+            listOf(changeListening(SageListeningMode.FOLLOW_UP, activeTurnId))
         } else {
             activeTurnId = 0L
-            recognizerGeneration += 1
             state = SageRuntimeState.IDLE_WAKE
-            listOf(SageEffect.StartWakeListening(recognizerGeneration))
+            listOf(changeListening(SageListeningMode.WAKE_ONLY))
         }
+    }
+
+    private fun changeListening(mode: SageListeningMode, turnId: Long = 0L): SageEffect.SetListeningMode {
+        recognizerGeneration += 1
+        listeningMode = mode
+        return SageEffect.SetListeningMode(mode, recognizerGeneration, turnId)
     }
 
     private fun stale(reason: String) = listOf(SageEffect.IgnoreStaleCallback(reason))

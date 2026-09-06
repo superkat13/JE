@@ -30,6 +30,7 @@ class MainActivity : Activity() {
         setContentView(root)
 
         coordinator.handle(SageEvent.Start)
-        status.text = "Core runtime: ${coordinator.snapshot().state}\nOne Sage. One turn coordinator."
+        val snapshot = coordinator.snapshot()
+        status.text = "Core runtime: ${snapshot.state}\nListening: ${snapshot.listeningMode}\nOne Sage. One turn coordinator."
     }
 }

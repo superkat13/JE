@@ -9,9 +9,9 @@ class SageTurnCoordinatorTest {
     fun wakeFlowSaysYesThenListensForCommand() {
         val coordinator = SageTurnCoordinator()
         coordinator.handle(SageEvent.Start)
-        val generation = coordinator.snapshot().recognizerGeneration
+        val wakeGeneration = coordinator.snapshot().recognizerGeneration
 
-        val wakeEffects = coordinator.handle(SageEvent.WakeDetected(generation))
+        val wakeEffects = coordinator.handle(SageEvent.WakeDetected(wakeGeneration))
         val turn = coordinator.snapshot().activeTurnId
 
         assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, coordinator.snapshot().state)
@@ -19,21 +19,26 @@ class SageTurnCoordinatorTest {
 
         val ackEffects = coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
         assertEquals(SageRuntimeState.COMMAND_LISTENING, coordinator.snapshot().state)
-        assertTrue(ackEffects.any { it is SageEffect.StartCommandListening })
+        assertEquals(SageListeningMode.COMMAND, coordinator.snapshot().listeningMode)
+        assertTrue(ackEffects.any { it is SageEffect.SetListeningMode && it.mode == SageListeningMode.COMMAND })
     }
 
     @Test
-    fun wakeWhileThinkingAcknowledgesWithoutCancellingThought() {
+    fun thinkingUsesWakeOnlyAndAcknowledgesWakeWithoutCancellingThought() {
         val coordinator = SageTurnCoordinator()
         coordinator.handle(SageEvent.Start)
-        val generation = coordinator.snapshot().recognizerGeneration
+        var generation = coordinator.snapshot().recognizerGeneration
         coordinator.handle(SageEvent.WakeDetected(generation))
         val turn = coordinator.snapshot().activeTurnId
         coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        val commandGeneration = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.TranscriptFinal(turn, commandGeneration, "explain quantum tunneling"))
+        generation = coordinator.snapshot().recognizerGeneration
+        coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "explain quantum tunneling"))
 
-        val effects = coordinator.handle(SageEvent.WakeDetected(commandGeneration))
+        val thinking = coordinator.snapshot()
+        assertEquals(SageRuntimeState.THINKING_DEEP, thinking.state)
+        assertEquals(SageListeningMode.WAKE_ONLY, thinking.listeningMode)
+
+        val effects = coordinator.handle(SageEvent.WakeDetected(thinking.recognizerGeneration))
         assertEquals(SageRuntimeState.THINKING_DEEP, coordinator.snapshot().state)
         assertTrue(effects.contains(SageEffect.SpeakTransient("I'm thinking")))
     }
@@ -42,19 +47,20 @@ class SageTurnCoordinatorTest {
     fun chickenTonightTriggerIsSilentAndRoutesToWorkflow() {
         val coordinator = SageTurnCoordinator()
         coordinator.handle(SageEvent.Start)
-        val generation = coordinator.snapshot().recognizerGeneration
+        var generation = coordinator.snapshot().recognizerGeneration
         coordinator.handle(SageEvent.WakeDetected(generation))
         val turn = coordinator.snapshot().activeTurnId
         coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        val commandGeneration = coordinator.snapshot().recognizerGeneration
+        generation = coordinator.snapshot().recognizerGeneration
 
         val effects = coordinator.handle(
-            SageEvent.TranscriptFinal(turn, commandGeneration, "Do you feel like chicken tonight?")
+            SageEvent.TranscriptFinal(turn, generation, "Do you feel like chicken tonight?")
         )
 
         assertTrue(effects.any { it == SageEffect.LaunchOwnerWorkflow(turn, "chicken_tonight") })
         assertTrue(effects.none { it is SageEffect.Speak })
         assertEquals(SageRuntimeState.IDLE_WAKE, coordinator.snapshot().state)
+        assertEquals(SageListeningMode.WAKE_ONLY, coordinator.snapshot().listeningMode)
     }
 
     @Test
@@ -65,6 +71,44 @@ class SageTurnCoordinatorTest {
         val effects = coordinator.handle(SageEvent.WakeDetected(staleGeneration))
         assertTrue(effects.single() is SageEffect.IgnoreStaleCallback)
         assertEquals(SageRuntimeState.IDLE_WAKE, coordinator.snapshot().state)
+    }
+
+    @Test
+    fun typedMessageWhileBusyIsQueuedAndDispatchedNext() {
+        val coordinator = SageTurnCoordinator()
+        coordinator.handle(SageEvent.Start)
+
+        val firstEffects = coordinator.handle(SageEvent.TextSubmitted("Explain gravity"))
+        val firstTurn = coordinator.snapshot().activeTurnId
+        assertTrue(firstEffects.any { it is SageEffect.QueryDeepBrain })
+        assertEquals(SageRuntimeState.THINKING_DEEP, coordinator.snapshot().state)
+
+        val queued = coordinator.handle(SageEvent.TextSubmitted("Open YouTube"))
+        assertTrue(queued.contains(SageEffect.TypedInputQueued(1)))
+        assertEquals(1, coordinator.snapshot().queuedTextCount)
+
+        coordinator.handle(SageEvent.ResponseReady(firstTurn, "Gravity answer", allowFollowUp = false))
+        coordinator.handle(SageEvent.SpeechFinished(firstTurn))
+        val nextEffects = coordinator.handle(SageEvent.EchoGuardElapsed(firstTurn))
+
+        assertEquals(0, coordinator.snapshot().queuedTextCount)
+        assertEquals(SageRuntimeState.THINKING_FAST, coordinator.snapshot().state)
+        assertTrue(nextEffects.any { it is SageEffect.ExecuteFast && it.command == "open youtube" })
+    }
+
+    @Test
+    fun staleCommandCallbackIsInvalidatedWhenThinkingStarts() {
+        val coordinator = SageTurnCoordinator()
+        coordinator.handle(SageEvent.Start)
+        var generation = coordinator.snapshot().recognizerGeneration
+        coordinator.handle(SageEvent.WakeDetected(generation))
+        val turn = coordinator.snapshot().activeTurnId
+        coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
+        generation = coordinator.snapshot().recognizerGeneration
+        coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "why is the sky blue"))
+
+        val stale = coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "late duplicate"))
+        assertTrue(stale.single() is SageEffect.IgnoreStaleCallback)
     }
 
     @Test
