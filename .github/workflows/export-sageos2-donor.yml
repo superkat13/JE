@@ -1,0 +1,43 @@
+name: Export SageOS 2 donor source
+
+on:
+  push:
+    branches: [sageos-2]
+    paths: ['.github/workflows/export-sageos2-donor.yml']
+  workflow_dispatch:
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct verified Sage 1.33.3 donor
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
+      - name: Export only relevant donor source
+        run: |
+          set -euo pipefail
+          OUT=/tmp/sage1333
+          DEST=/tmp/sageos2-donor
+          mkdir -p "$DEST/java" "$DEST/native" "$DEST/build"
+          for name in SageForgeClient.java SageForgeStore.java SageBrainManager.java SageBrainRequestPolicy.java SageForgeActivity.java SageAutonomyActivity.java SageVoiceService.java; do
+            while IFS= read -r file; do
+              cp "$file" "$DEST/java/$(basename "$file")"
+            done < <(find "$OUT" -type f -name "$name" -print)
+          done
+          if [ -d "$OUT/app/src/main/cpp" ]; then cp -a "$OUT/app/src/main/cpp/." "$DEST/native/"; fi
+          for file in "$OUT/app/build.gradle" "$OUT/app/build.gradle.kts" "$OUT/build.gradle" "$OUT/settings.gradle"; do
+            [ -f "$file" ] && cp "$file" "$DEST/build/$(basename "$file")"
+          done
+          find "$DEST" -type f -maxdepth 4 -print | sort
+          test -s "$DEST/java/SageForgeClient.java"
+          test -s "$DEST/java/SageForgeStore.java"
+          test -s "$DEST/java/SageBrainManager.java"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sageos2-verified-1333-donor-source
+          path: /tmp/sageos2-donor
+          if-no-files-found: error
+          retention-days: 14
