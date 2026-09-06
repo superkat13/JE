@@ -23,3 +23,11 @@ interface CapabilityBroker {
     fun snapshot(): CapabilitySnapshot
     fun execute(action: DeviceAction): CapabilityResult
 }
+
+object EmptyCapabilityBroker : CapabilityBroker {
+    override fun snapshot() = CapabilitySnapshot(emptyMap())
+    override fun execute(action: DeviceAction) = CapabilityResult(
+        success = false,
+        detail = "Capability '${action.name}' is not available in this runtime"
+    )
+}
