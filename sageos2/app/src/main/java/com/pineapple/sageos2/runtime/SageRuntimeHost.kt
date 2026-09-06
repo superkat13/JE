@@ -98,7 +98,7 @@ class SageRuntimeHost private constructor(context: Context) {
     fun snapshot(): SageRuntimeSnapshot = runtime.snapshot()
     fun brainStatus() = brain.health()
     fun wakeStatus() = wakeEngine.health()
-    fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit)
+    fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
     fun addListener(listener: SageRuntimeListener) { listeners += listener }
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }
 
