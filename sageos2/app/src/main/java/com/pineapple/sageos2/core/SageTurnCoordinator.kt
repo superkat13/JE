@@ -60,7 +60,11 @@ class SageTurnCoordinator(
         if (state != SageRuntimeState.IDLE_WAKE && state != SageRuntimeState.FOLLOW_UP_LISTENING) return listOf(SageEffect.RecordDiagnostic("wake ignored in state $state"))
         activeTurnId = nextTurnId++
         state = SageRuntimeState.ACKNOWLEDGING_WAKE
-        return listOf(changeListening(SageListeningMode.OFF), SageEffect.Speak(activeTurnId, "Yes"))
+        return listOf(
+            changeListening(SageListeningMode.OFF),
+            SageEffect.ActivateMode(event.profileId, event.modeId),
+            SageEffect.Speak(activeTurnId, event.acknowledgement.ifBlank { "Yes" })
+        )
     }
 
     private fun onWakeAckSpoken(event: SageEvent.WakeAcknowledgementSpoken): List<SageEffect> {

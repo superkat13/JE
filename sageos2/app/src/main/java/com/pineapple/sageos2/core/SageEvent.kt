@@ -3,7 +3,12 @@ package com.pineapple.sageos2.core
 sealed interface SageEvent {
     data object Start : SageEvent
     data object Stop : SageEvent
-    data class WakeDetected(val recognizerGeneration: Long) : SageEvent
+    data class WakeDetected(
+        val recognizerGeneration: Long,
+        val profileId: String = "sage",
+        val modeId: String? = null,
+        val acknowledgement: String = "Yes"
+    ) : SageEvent
     data class WakeAcknowledgementSpoken(val turnId: Long) : SageEvent
     data class TranscriptFinal(
         val turnId: Long,

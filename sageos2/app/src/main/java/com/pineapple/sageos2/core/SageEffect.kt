@@ -7,6 +7,7 @@ sealed interface SageEffect {
         val turnId: Long = 0L
     ) : SageEffect
 
+    data class ActivateMode(val profileId: String, val modeId: String?) : SageEffect
     data class Speak(val turnId: Long, val text: String) : SageEffect
     data class SpeakTransient(val text: String) : SageEffect
     data class ExecuteFast(val turnId: Long, val command: String) : SageEffect

@@ -20,8 +20,11 @@ import com.pineapple.sageos2.memory.ConversationSpeaker
 import com.pineapple.sageos2.memory.EmptyConversationHistoryProvider
 import com.pineapple.sageos2.memory.EmptyTwinMemoryProvider
 import com.pineapple.sageos2.memory.TwinMemoryProvider
+import com.pineapple.sageos2.mode.DefaultSageModeController
+import com.pineapple.sageos2.mode.SageModeController
 import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
+import com.pineapple.sageos2.speech.WakeHit
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import java.util.UUID
 
@@ -36,12 +39,15 @@ class SageRuntime(
     private val sageCore: SageCoreProvider = EmptySageCoreProvider,
     private val twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
     private val conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
+    private val modes: SageModeController = DefaultSageModeController,
     private val echoGuardMs: Long = 450L
 ) {
     init {
         require(echoGuardMs >= 0L) { "echoGuardMs must be non-negative" }
         speech.attach(object : SpeechInputListener {
-            override fun onWakeDetected(generation: Long) = submit(SageEvent.WakeDetected(generation))
+            override fun onWakeDetected(hit: WakeHit) = submit(
+                SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement)
+            )
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
             override fun onRecognitionError(turnId: Long, generation: Long, code: Int) = submit(SageEvent.RecognitionFailed(turnId, generation, code))
             override fun onSpeechDiagnostic(message: String) = observer.onDiagnostic("speech: $message")
@@ -85,6 +91,7 @@ class SageRuntime(
     private fun process(effect: SageEffect) {
         when (effect) {
             is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
+            is SageEffect.ActivateMode -> modes.activate(effect.profileId, effect.modeId)
             is SageEffect.Speak -> {
                 val beforeSpeak = coordinator.snapshot()
                 if (beforeSpeak.state == SageRuntimeState.SPEAKING) {

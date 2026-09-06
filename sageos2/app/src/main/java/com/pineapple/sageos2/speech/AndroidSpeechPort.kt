@@ -17,7 +17,8 @@ import java.util.UUID
 
 class AndroidSpeechPort(
     context: Context,
-    private val wakeWordEngine: WakeWordEngine
+    private val wakeWordEngine: WakeWordEngine,
+    private val wakeProfiles: WakeProfileProvider = SharedPreferencesWakeProfileStore(context)
 ) : SpeechPort, RecognitionListener, TextToSpeech.OnInitListener {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
@@ -32,6 +33,7 @@ class AndroidSpeechPort(
     private var destroyed = false
 
     init {
+        wakeWordEngine.configure(wakeProfiles.profiles())
         main.post { if (!destroyed) tts = TextToSpeech(appContext, this) }
     }
 
@@ -115,7 +117,8 @@ class AndroidSpeechPort(
 
     private fun startWake(generation: Long) {
         try {
-            wakeWordEngine.start(generation) { heardGeneration -> listener?.onWakeDetected(heardGeneration) }
+            wakeWordEngine.configure(wakeProfiles.profiles())
+            wakeWordEngine.start(generation) { hit -> listener?.onWakeDetected(hit) }
         } catch (t: Throwable) {
             listener?.onSpeechDiagnostic("wake start failed: ${t.message}")
         }
@@ -144,8 +147,7 @@ class AndroidSpeechPort(
         if (recognizer != null) return true
         return try {
             recognizer = when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) ->
-                    SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
+                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
                 SpeechRecognizer.isRecognitionAvailable(appContext) -> SpeechRecognizer.createSpeechRecognizer(appContext)
                 else -> null
             }

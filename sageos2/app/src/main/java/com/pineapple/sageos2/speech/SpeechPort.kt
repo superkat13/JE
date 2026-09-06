@@ -3,7 +3,7 @@ package com.pineapple.sageos2.speech
 import com.pineapple.sageos2.core.SageListeningMode
 
 interface SpeechInputListener {
-    fun onWakeDetected(generation: Long)
+    fun onWakeDetected(hit: WakeHit)
     fun onTranscriptFinal(turnId: Long, generation: Long, text: String)
     fun onRecognitionError(turnId: Long, generation: Long, code: Int)
     fun onSpeechDiagnostic(message: String) = Unit
