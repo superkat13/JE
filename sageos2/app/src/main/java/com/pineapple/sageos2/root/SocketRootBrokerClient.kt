@@ -4,9 +4,7 @@ import android.net.LocalSocket
 import android.net.LocalSocketAddress
 import java.util.UUID
 
-class SocketRootBrokerClient(
-    private val connectTimeoutMs: Int = 2_000
-) : RootBrokerClient {
+class SocketRootBrokerClient : RootBrokerClient {
 
     override fun health(): RootBrokerHealth {
         val result = execute(RootBrokerRequest(UUID.randomUUID().toString(), RootOperation.Health))
@@ -19,7 +17,7 @@ class SocketRootBrokerClient(
     override fun execute(request: RootBrokerRequest): RootBrokerResult {
         return try {
             LocalSocket().use { socket ->
-                socket.soTimeout = connectTimeoutMs
+                socket.soTimeout = responseTimeoutMs(request.operation)
                 socket.connect(LocalSocketAddress(SOCKET_NAME, LocalSocketAddress.Namespace.RESERVED))
                 socket.outputStream.write(RootBrokerWireCodec.encode(request))
                 socket.outputStream.flush()
@@ -33,6 +31,13 @@ class SocketRootBrokerClient(
                 detail = "SageOS root broker handshake failed: ${t.message ?: t::class.java.simpleName}"
             )
         }
+    }
+
+    private fun responseTimeoutMs(operation: RootOperation): Int = when (operation) {
+        RootOperation.Health -> 3_000
+        is RootOperation.InstallPackage, is RootOperation.UninstallPackage -> 130_000
+        is RootOperation.ExecuteProcess -> (operation.timeoutMs + 5_000L).coerceIn(6_000L, 305_000L).toInt()
+        else -> 35_000
     }
 
     companion object {
