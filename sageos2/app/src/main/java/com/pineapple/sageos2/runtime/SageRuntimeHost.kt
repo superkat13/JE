@@ -4,6 +4,7 @@ import android.content.Context
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
+import com.pineapple.sageos2.authority.AuthorityBroker
 import com.pineapple.sageos2.brain.BrainRouterEngine
 import com.pineapple.sageos2.brain.LocalNativeBrainEngine
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
@@ -18,6 +19,7 @@ import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
+import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.speech.SherpaWakeWordEngine
@@ -45,6 +47,8 @@ class SageRuntimeHost private constructor(context: Context) {
     val modes = SharedPreferencesSageModeController(appContext)
     val forgeStore = ForgeStore(appContext)
     val forge = ForgeClient(appContext, forgeStore)
+    val rootBroker = SocketRootBrokerClient()
+    val authorities = AuthorityBroker(appContext, rootBroker)
 
     private val persistentObserver = PersistentRuntimeObserver(traces)
     private val observer = object : RuntimeObserver {
@@ -88,7 +92,8 @@ class SageRuntimeHost private constructor(context: Context) {
 
     fun start() {
         if (started.compareAndSet(false, true)) {
-            traces.record("host", "Sage runtime starting")
+            val authority = authorities.snapshot()
+            traces.record("host", "Sage runtime starting; root=${authority.root.available}; deviceOwner=${authority.deviceOwner}; accessibility=${authority.accessibility}")
             runtime.start()
         }
     }
@@ -98,6 +103,7 @@ class SageRuntimeHost private constructor(context: Context) {
     fun snapshot(): SageRuntimeSnapshot = runtime.snapshot()
     fun brainStatus() = brain.health()
     fun wakeStatus() = wakeEngine.health()
+    fun authorityStatus() = authorities.snapshot()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
     fun addListener(listener: SageRuntimeListener) { listeners += listener }
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }

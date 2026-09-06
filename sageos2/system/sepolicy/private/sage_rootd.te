@@ -1,0 +1,23 @@
+type sage_rootd, domain;
+type sage_rootd_exec, system_file_type, exec_type, file_type;
+type sage_rootd_socket, file_type;
+type sage_rootd_data_file, file_type, data_file_type, core_data_file_type;
+
+init_daemon_domain(sage_rootd)
+
+# The broker owns only its socket/audit area. Device-specific SageOS policy adds
+# the Binder/service-manager permissions required by typed system operations.
+allow sage_rootd sage_rootd_socket:sock_file { create getattr open read setattr unlink write };
+allow sage_rootd sage_rootd_data_file:dir create_dir_perms;
+allow sage_rootd sage_rootd_data_file:file create_file_perms;
+
+# sage-rootd launches absolute argv-based executables without a shell.
+allow sage_rootd system_file:file { execute execute_no_trans getattr map open read };
+allow sage_rootd shell_exec:file { execute execute_no_trans getattr map open read };
+allow sage_rootd toolbox_exec:file { execute execute_no_trans getattr map open read };
+
+# Typed Android commands talk to system_server/services while remaining in the
+# confined broker domain. Final device policy narrows/finds concrete service
+# labels from VASOUN AVC traces instead of granting another app-domain escape.
+binder_use(sage_rootd)
+binder_call(sage_rootd, system_server)

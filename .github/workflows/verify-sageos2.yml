@@ -28,6 +28,20 @@ jobs:
           set -euo pipefail
           if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
+      - name: Verify root broker trust boundary and host syntax
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -D_GNU_SOURCE -Wall -Wextra -Werror -fsyntax-only sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'SO_PEERCRED' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'SO_PEERSEC' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'kAllowedPeerPrefix = "u:r:sage_app:s0"' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'socket sage_rootd stream 0666 root root' sageos2/system/rootd/sage_rootd.rc
+          grep -F 'seinfo=platform name=com.pineapple.sagecommander.stable domain=sage_app' sageos2/system/sepolicy/private/seapp_contexts
+          grep -F 'allow sage_app sage_rootd:unix_stream_socket connectto;' sageos2/system/sepolicy/private/sage_app.te
+          grep -F 'class SocketRootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/SocketRootBrokerClient.kt
+          grep -F 'class AuthorityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/authority/AuthorityBroker.kt
+          ! grep -Rni 'permissive sage_rootd' sageos2/system
+          ! grep -Rni 'sh -c' sageos2/system/rootd
       - name: Prepare pinned offline wake dependencies
         run: |
           set -euo pipefail
@@ -91,7 +105,7 @@ jobs:
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
           for component in com.pineapple.sage.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
-      - name: Verify core, compile native Brain, and build debug APK
+      - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
         run: |

@@ -1,0 +1,12 @@
+service sage-rootd /system/bin/sage-rootd
+    class core
+    user root
+    group root system
+    seclabel u:r:sage_rootd:s0
+    socket sage_rootd stream 0666 root root
+    disabled
+
+on post-fs-data
+    mkdir /data/misc/sage 0700 root root
+    restorecon_recursive /data/misc/sage
+    start sage-rootd
