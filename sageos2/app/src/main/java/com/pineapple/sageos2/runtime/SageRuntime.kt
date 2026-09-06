@@ -10,6 +10,7 @@ import com.pineapple.sageos2.core.SageEffect
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
+import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.workflow.WorkflowEngine
 
@@ -25,6 +26,19 @@ class SageRuntime(
 ) {
     init {
         require(echoGuardMs >= 0L) { "echoGuardMs must be non-negative" }
+        speech.attach(object : SpeechInputListener {
+            override fun onWakeDetected(generation: Long) {
+                submit(SageEvent.WakeDetected(generation))
+            }
+
+            override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) {
+                submit(SageEvent.TranscriptFinal(turnId, generation, text))
+            }
+
+            override fun onSpeechDiagnostic(message: String) {
+                observer.onDiagnostic("speech: $message")
+            }
+        })
     }
 
     private var brainJob: BrainJob? = null
@@ -39,6 +53,7 @@ class SageRuntime(
     @Synchronized
     fun stop() {
         submit(SageEvent.Stop)
+        speech.shutdown()
     }
 
     @Synchronized

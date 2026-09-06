@@ -13,13 +13,27 @@ import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageListeningMode
 import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
+import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageRuntimeTest {
+    @Test
+    fun speechInputIsAttachedDirectlyToSingleRuntimeCoordinator() {
+        val fixture = Fixture()
+        fixture.runtime.start()
+        val listener = fixture.speech.listener
+        assertNotNull(listener)
+
+        val generation = fixture.runtime.snapshot().recognizerGeneration
+        listener!!.onWakeDetected(generation)
+        assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, fixture.runtime.snapshot().state)
+    }
+
     @Test
     fun deepThoughtKeepsWakeOnlyListenerAndWakeDoesNotCancelBrain() {
         val fixture = Fixture()
@@ -30,9 +44,7 @@ class SageRuntimeTest {
 
         val turn = fixture.runtime.snapshot().activeTurnId
         val commandGeneration = fixture.runtime.snapshot().recognizerGeneration
-        fixture.runtime.submit(
-            SageEvent.TranscriptFinal(turn, commandGeneration, "explain black holes")
-        )
+        fixture.runtime.submit(SageEvent.TranscriptFinal(turn, commandGeneration, "explain black holes"))
 
         assertEquals(SageRuntimeState.THINKING_DEEP, fixture.runtime.snapshot().state)
         assertEquals(SageListeningMode.WAKE_ONLY, fixture.runtime.snapshot().listeningMode)
@@ -123,10 +135,15 @@ class SageRuntimeTest {
     }
 
     private class FakeSpeech : SpeechPort {
+        var listener: SpeechInputListener? = null
         val listening = mutableListOf<Triple<SageListeningMode, Long, Long>>()
         val spoken = mutableListOf<Pair<Long, String>>()
         val transientSpeech = mutableListOf<String>()
         private var completion: (() -> Unit)? = null
+
+        override fun attach(listener: SpeechInputListener) {
+            this.listener = listener
+        }
 
         override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long) {
             listening += Triple(mode, generation, turnId)
@@ -155,10 +172,7 @@ class SageRuntimeTest {
         private var callback: ((Result<BrainResponse>) -> Unit)? = null
         private var activeTurn = 0L
 
-        override fun start(
-            request: BrainRequest,
-            callback: (Result<BrainResponse>) -> Unit
-        ): BrainJob {
+        override fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob {
             requests += request
             this.callback = callback
             activeTurn = request.turnId
@@ -182,10 +196,7 @@ class SageRuntimeTest {
         private var callback: ((Result<FastActionResponse>) -> Unit)? = null
         private var activeTurn = 0L
 
-        override fun start(
-            request: FastActionRequest,
-            callback: (Result<FastActionResponse>) -> Unit
-        ): FastActionJob {
+        override fun start(request: FastActionRequest, callback: (Result<FastActionResponse>) -> Unit): FastActionJob {
             requests += request
             this.callback = callback
             activeTurn = request.turnId
