@@ -89,7 +89,8 @@ class SageRuntimeHost private constructor(context: Context) {
         twinMemory = memory,
         conversationHistory = history,
         ownerApps = ownerApps,
-        modes = modes
+        modes = modes,
+        capabilities = capabilities
     )
 
     fun start() {
