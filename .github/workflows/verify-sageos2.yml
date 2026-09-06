@@ -31,7 +31,7 @@ jobs:
       - name: Verify root broker trust boundary and host syntax
         run: |
           set -euo pipefail
-          g++ -std=c++20 -D_GNU_SOURCE -Wall -Wextra -Werror -fsyntax-only sageos2/system/rootd/sage_rootd.cpp
+          g++ -std=c++20 -D_GNU_SOURCE -Wall -Wextra -Werror -Wno-missing-field-initializers -fsyntax-only sageos2/system/rootd/sage_rootd.cpp
           grep -F 'SO_PEERCRED' sageos2/system/rootd/sage_rootd.cpp
           grep -F 'SO_PEERSEC' sageos2/system/rootd/sage_rootd.cpp
           grep -F 'kAllowedPeerPrefix = "u:r:sage_app:s0"' sageos2/system/rootd/sage_rootd.cpp
@@ -39,7 +39,10 @@ jobs:
           grep -F 'seinfo=platform name=com.pineapple.sagecommander.stable domain=sage_app' sageos2/system/sepolicy/private/seapp_contexts
           grep -F 'allow sage_app sage_rootd:unix_stream_socket connectto;' sageos2/system/sepolicy/private/sage_app.te
           grep -F 'class SocketRootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/SocketRootBrokerClient.kt
-          grep -F 'class AuthorityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/authority/AuthorityBroker.kt
+          grep -F 'class AndroidCapabilityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F '"root.install_package"' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F 'val capabilities = AndroidCapabilityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          test ! -e sageos2/app/src/main/java/com/pineapple/sageos2/authority/AuthorityBroker.kt
           ! grep -Rni 'permissive sage_rootd' sageos2/system
           ! grep -Rni 'sh -c' sageos2/system/rootd
       - name: Prepare pinned offline wake dependencies
