@@ -19,10 +19,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
       - name: Verify core and build debug APK
-        run: |
-          chmod +x ./gradlew
-          ./gradlew -p sageos2 testDebugUnitTest assembleDebug --stacktrace
+        run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
