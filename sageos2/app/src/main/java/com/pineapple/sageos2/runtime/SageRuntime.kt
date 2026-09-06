@@ -5,9 +5,11 @@ import com.pineapple.sageos2.action.FastActionJob
 import com.pineapple.sageos2.action.FastActionRequest
 import com.pineapple.sageos2.apps.EmptyOwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppProvider
-import com.pineapple.sageos2.brain.BrainEngine
-import com.pineapple.sageos2.brain.BrainJob
-import com.pineapple.sageos2.brain.BrainRequest
+import com.pineapple.sageos2.brain.*
+import com.pineapple.sageos2.capability.CapabilityBroker
+import com.pineapple.sageos2.capability.CapabilityResult
+import com.pineapple.sageos2.capability.DeviceAction
+import com.pineapple.sageos2.capability.EmptyCapabilityBroker
 import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.identity.EmptySageCoreProvider
 import com.pineapple.sageos2.identity.SageCoreProvider
@@ -20,6 +22,8 @@ import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.speech.WakeHit
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import java.util.UUID
+import java.util.concurrent.Executors
+import java.util.concurrent.Future
 
 class SageRuntime(
     private val coordinator: SageTurnCoordinator,
@@ -34,11 +38,14 @@ class SageRuntime(
     private val conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
     private val ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
     private val modes: SageModeController = DefaultSageModeController,
+    private val capabilities: CapabilityBroker = EmptyCapabilityBroker,
     private val twinContextRenderer: TwinContextRenderer = TwinContextRenderer(),
-    private val echoGuardMs: Long = 450L
+    private val echoGuardMs: Long = 450L,
+    private val maxToolCallsPerTurn: Int = 4
 ) {
     init {
         require(echoGuardMs >= 0L)
+        require(maxToolCallsPerTurn in 1..16)
         speech.attach(object : SpeechInputListener {
             override fun onWakeDetected(hit: WakeHit) = submit(SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement))
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
@@ -49,8 +56,13 @@ class SageRuntime(
 
     private var brainJob: BrainJob? = null
     private var fastActionJob: FastActionJob? = null
+    private var capabilityJob: Future<*>? = null
     private var echoGuardHandle: ScheduledHandle? = null
     private var followUpExpiryHandle: ScheduledHandle? = null
+    private val toolCallsByTurn = mutableMapOf<Long, Int>()
+    private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "sage-capability").apply { isDaemon = true }
+    }
 
     @Synchronized fun start() { submit(SageEvent.Start) }
     @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
@@ -100,24 +112,7 @@ class SageRuntime(
                     )
                 }
             }
-            is SageEffect.QueryDeepBrain -> {
-                brainJob?.cancel()
-                val core = sageCore.current()
-                val memory = twinMemory.snapshot()
-                val history = conversationHistory.recent(24)
-                val apps = ownerApps.snapshot()
-                val mode = modes.current()
-                val context = twinContextRenderer.render(core, memory, history, apps, mode)
-                brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt, core, memory, history, apps, mode, context)) { result ->
-                    result.fold(
-                        onSuccess = { response ->
-                            response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }
-                            submit(SageEvent.ResponseReady(response.turnId, response.text, true))
-                        },
-                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) }
-                    )
-                }
-            }
+            is SageEffect.QueryDeepBrain -> startBrain(effect.turnId, effect.prompt)
             is SageEffect.LaunchOwnerWorkflow -> workflows.launch(effect.turnId, effect.workflowId)
             is SageEffect.StartEchoGuard -> {
                 echoGuardHandle?.cancel()
@@ -134,10 +129,83 @@ class SageRuntime(
             is SageEffect.CancelTurn -> {
                 if (brainJob?.turnId == effect.turnId) { brainJob?.cancel(); brainJob = null }
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
+                capabilityJob?.cancel(true); capabilityJob = null
+                toolCallsByTurn.remove(effect.turnId)
                 echoGuardHandle?.cancel(); echoGuardHandle = null
                 followUpExpiryHandle?.cancel(); followUpExpiryHandle = null
             }
         }
+    }
+
+    private fun startBrain(turnId: Long, prompt: String) {
+        brainJob?.cancel()
+        val core = sageCore.current()
+        val memory = twinMemory.snapshot()
+        val history = conversationHistory.recent(24)
+        val apps = ownerApps.snapshot()
+        val mode = modes.current()
+        val twinContext = twinContextRenderer.render(core, memory, history, apps, mode)
+        val toolContext = BrainToolContextRenderer.render(capabilities.snapshot())
+        val context = "$twinContext\n\n$toolContext"
+        brainJob = brain.start(BrainRequest(turnId, prompt, core, memory, history, apps, mode, context)) { result ->
+            result.fold(
+                onSuccess = { response -> handleBrainResponse(response) },
+                onFailure = { submit(SageEvent.BrainFailed(turnId, it.message ?: it::class.simpleName.orEmpty())) }
+            )
+        }
+    }
+
+    @Synchronized
+    private fun handleBrainResponse(response: BrainResponse) {
+        brainJob = null
+        val snapshot = coordinator.snapshot()
+        if (snapshot.activeTurnId != response.turnId) {
+            observer.onDiagnostic("stale Brain response ignored before tool parsing: turn=${response.turnId}")
+            return
+        }
+
+        response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }
+
+        val directive = try {
+            BrainToolDirectiveParser.parse(response.text)
+        } catch (t: Throwable) {
+            toolCallsByTurn.remove(response.turnId)
+            submit(SageEvent.BrainFailed(response.turnId, "invalid structured tool response: ${t.message ?: t::class.simpleName}"))
+            return
+        }
+
+        if (directive == null) {
+            toolCallsByTurn.remove(response.turnId)
+            submit(SageEvent.ResponseReady(response.turnId, response.text, true))
+            return
+        }
+
+        val nextCount = (toolCallsByTurn[response.turnId] ?: 0) + 1
+        if (nextCount > maxToolCallsPerTurn) {
+            toolCallsByTurn.remove(response.turnId)
+            submit(SageEvent.BrainFailed(response.turnId, "structured tool call limit exceeded"))
+            return
+        }
+        toolCallsByTurn[response.turnId] = nextCount
+
+        val action = DeviceAction(directive.name, directive.arguments)
+        capabilityJob?.cancel(true)
+        capabilityJob = capabilityExecutor.submit {
+            val result = runCatching { capabilities.execute(action) }
+                .getOrElse { CapabilityResult(false, "Capability execution failed: ${it.message ?: it::class.java.simpleName}") }
+            continueAfterCapability(response.turnId, action, result)
+        }
+    }
+
+    @Synchronized
+    private fun continueAfterCapability(turnId: Long, action: DeviceAction, result: CapabilityResult) {
+        capabilityJob = null
+        if (coordinator.snapshot().activeTurnId != turnId) {
+            observer.onDiagnostic("stale capability result ignored: turn=$turnId action=${action.name}")
+            return
+        }
+        observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
+        startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
     }
 
     private fun recordSageResponse(turnId: Long, text: String, input: ConversationInput) {
