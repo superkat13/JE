@@ -10,6 +10,11 @@ sealed interface SageEvent {
         val recognizerGeneration: Long,
         val text: String
     ) : SageEvent
+    data class RecognitionFailed(
+        val turnId: Long,
+        val recognizerGeneration: Long,
+        val code: Int
+    ) : SageEvent
     data class TextSubmitted(val text: String) : SageEvent
     data class ResponseReady(
         val turnId: Long,

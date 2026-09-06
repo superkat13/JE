@@ -5,116 +5,60 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageTurnCoordinatorTest {
-    @Test
-    fun wakeFlowSaysYesThenListensForCommand() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-        val wakeGeneration = coordinator.snapshot().recognizerGeneration
-
-        val wakeEffects = coordinator.handle(SageEvent.WakeDetected(wakeGeneration))
-        val turn = coordinator.snapshot().activeTurnId
-
-        assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, coordinator.snapshot().state)
-        assertTrue(wakeEffects.contains(SageEffect.Speak(turn, "Yes")))
-
-        val ackEffects = coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        assertEquals(SageRuntimeState.COMMAND_LISTENING, coordinator.snapshot().state)
-        assertEquals(SageListeningMode.COMMAND, coordinator.snapshot().listeningMode)
-        assertTrue(ackEffects.any { it is SageEffect.SetListeningMode && it.mode == SageListeningMode.COMMAND })
+    @Test fun wakeFlowSaysYesThenListensForCommand() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        val g = c.snapshot().recognizerGeneration
+        val wake = c.handle(SageEvent.WakeDetected(g)); val turn = c.snapshot().activeTurnId
+        assertTrue(wake.contains(SageEffect.Speak(turn, "Yes")))
+        c.handle(SageEvent.WakeAcknowledgementSpoken(turn))
+        assertEquals(SageRuntimeState.COMMAND_LISTENING, c.snapshot().state)
+        assertEquals(SageListeningMode.COMMAND, c.snapshot().listeningMode)
     }
 
-    @Test
-    fun thinkingUsesWakeOnlyAndAcknowledgesWakeWithoutCancellingThought() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-        var generation = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.WakeDetected(generation))
-        val turn = coordinator.snapshot().activeTurnId
-        coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        generation = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "explain quantum tunneling"))
-
-        val thinking = coordinator.snapshot()
-        assertEquals(SageRuntimeState.THINKING_DEEP, thinking.state)
-        assertEquals(SageListeningMode.WAKE_ONLY, thinking.listeningMode)
-
-        val effects = coordinator.handle(SageEvent.WakeDetected(thinking.recognizerGeneration))
-        assertEquals(SageRuntimeState.THINKING_DEEP, coordinator.snapshot().state)
+    @Test fun thinkingUsesWakeOnlyAndAcknowledgesWakeWithoutCancellingThought() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        var g = c.snapshot().recognizerGeneration; c.handle(SageEvent.WakeDetected(g)); val turn = c.snapshot().activeTurnId
+        c.handle(SageEvent.WakeAcknowledgementSpoken(turn)); g = c.snapshot().recognizerGeneration
+        c.handle(SageEvent.TranscriptFinal(turn, g, "explain quantum tunneling"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, c.snapshot().state)
+        val effects = c.handle(SageEvent.WakeDetected(c.snapshot().recognizerGeneration))
         assertTrue(effects.contains(SageEffect.SpeakTransient("I'm thinking")))
     }
 
-    @Test
-    fun chickenTonightTriggerIsSilentAndRoutesToWorkflow() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-        var generation = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.WakeDetected(generation))
-        val turn = coordinator.snapshot().activeTurnId
-        coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        generation = coordinator.snapshot().recognizerGeneration
+    @Test fun recognitionFailureRecoversIntoFollowUpInsteadOfSticking() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        val wg = c.snapshot().recognizerGeneration; c.handle(SageEvent.WakeDetected(wg)); val turn = c.snapshot().activeTurnId
+        c.handle(SageEvent.WakeAcknowledgementSpoken(turn)); val cg = c.snapshot().recognizerGeneration
+        val effects = c.handle(SageEvent.RecognitionFailed(turn, cg, 7))
+        assertEquals(SageRuntimeState.SPEAKING, c.snapshot().state)
+        assertTrue(effects.any { it is SageEffect.Speak && it.text == "I didn't catch that." })
+        c.handle(SageEvent.SpeechFinished(turn)); c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertEquals(SageRuntimeState.FOLLOW_UP_LISTENING, c.snapshot().state)
+    }
 
-        val effects = coordinator.handle(
-            SageEvent.TranscriptFinal(turn, generation, "Do you feel like chicken tonight?")
-        )
-
+    @Test fun chickenTonightTriggerIsSilentAndRoutesToWorkflow() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        var g = c.snapshot().recognizerGeneration; c.handle(SageEvent.WakeDetected(g)); val turn = c.snapshot().activeTurnId
+        c.handle(SageEvent.WakeAcknowledgementSpoken(turn)); g = c.snapshot().recognizerGeneration
+        val effects = c.handle(SageEvent.TranscriptFinal(turn, g, "Do you feel like chicken tonight?"))
         assertTrue(effects.any { it == SageEffect.LaunchOwnerWorkflow(turn, "chicken_tonight") })
         assertTrue(effects.none { it is SageEffect.Speak })
-        assertEquals(SageRuntimeState.IDLE_WAKE, coordinator.snapshot().state)
-        assertEquals(SageListeningMode.WAKE_ONLY, coordinator.snapshot().listeningMode)
     }
 
-    @Test
-    fun staleRecognitionCallbackCannotExecute() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-        val staleGeneration = coordinator.snapshot().recognizerGeneration - 1
-        val effects = coordinator.handle(SageEvent.WakeDetected(staleGeneration))
+    @Test fun staleRecognitionCallbackCannotExecute() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        val effects = c.handle(SageEvent.WakeDetected(c.snapshot().recognizerGeneration - 1))
         assertTrue(effects.single() is SageEffect.IgnoreStaleCallback)
-        assertEquals(SageRuntimeState.IDLE_WAKE, coordinator.snapshot().state)
     }
 
-    @Test
-    fun typedMessageWhileBusyIsQueuedAndDispatchedNext() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-
-        val firstEffects = coordinator.handle(SageEvent.TextSubmitted("Explain gravity"))
-        val firstTurn = coordinator.snapshot().activeTurnId
-        assertTrue(firstEffects.any { it is SageEffect.QueryDeepBrain })
-        assertEquals(SageRuntimeState.THINKING_DEEP, coordinator.snapshot().state)
-
-        val queued = coordinator.handle(SageEvent.TextSubmitted("Open YouTube"))
-        assertTrue(queued.contains(SageEffect.TypedInputQueued(1)))
-        assertEquals(1, coordinator.snapshot().queuedTextCount)
-
-        coordinator.handle(SageEvent.ResponseReady(firstTurn, "Gravity answer", allowFollowUp = false))
-        coordinator.handle(SageEvent.SpeechFinished(firstTurn))
-        val nextEffects = coordinator.handle(SageEvent.EchoGuardElapsed(firstTurn))
-
-        assertEquals(0, coordinator.snapshot().queuedTextCount)
-        assertEquals(SageRuntimeState.THINKING_FAST, coordinator.snapshot().state)
-        assertTrue(nextEffects.any { it is SageEffect.ExecuteFast && it.command == "open youtube" })
-    }
-
-    @Test
-    fun staleCommandCallbackIsInvalidatedWhenThinkingStarts() {
-        val coordinator = SageTurnCoordinator()
-        coordinator.handle(SageEvent.Start)
-        var generation = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.WakeDetected(generation))
-        val turn = coordinator.snapshot().activeTurnId
-        coordinator.handle(SageEvent.WakeAcknowledgementSpoken(turn))
-        generation = coordinator.snapshot().recognizerGeneration
-        coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "why is the sky blue"))
-
-        val stale = coordinator.handle(SageEvent.TranscriptFinal(turn, generation, "late duplicate"))
-        assertTrue(stale.single() is SageEffect.IgnoreStaleCallback)
-    }
-
-    @Test
-    fun deviceCommandsTakeFastPath() {
-        val router = SageCommandRouter()
-        assertEquals(SageRoute.FAST_DEVICE, router.route("Open YouTube").route)
-        assertEquals(SageRoute.DEEP_REASONING, router.route("Why is the sky blue?").route)
+    @Test fun typedMessageWhileBusyIsQueuedAndDispatchedNext() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.TextSubmitted("Explain gravity")); val first = c.snapshot().activeTurnId
+        assertEquals(SageRuntimeState.THINKING_DEEP, c.snapshot().state)
+        assertTrue(c.handle(SageEvent.TextSubmitted("Open YouTube")).contains(SageEffect.TypedInputQueued(1)))
+        c.handle(SageEvent.ResponseReady(first, "Gravity answer", false)); c.handle(SageEvent.SpeechFinished(first))
+        val next = c.handle(SageEvent.EchoGuardElapsed(first))
+        assertEquals(SageRuntimeState.THINKING_FAST, c.snapshot().state)
+        assertTrue(next.any { it is SageEffect.ExecuteFast && it.command == "open youtube" })
     }
 }

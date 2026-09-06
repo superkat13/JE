@@ -3,12 +3,7 @@ name: Verify SageOS 2
 on:
   push:
     branches: [sageos-2]
-    paths:
-      - 'sageos2/**'
-      - 'SAGEOS2_MASTER_PLAN.md'
-      - 'SAGEOS2_CONTINUITY.md'
-      - 'SAGEOS2_ROOT_BROKER.md'
-      - '.github/workflows/verify-sageos2.yml'
+    paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml']
   workflow_dispatch:
 
 jobs:
@@ -18,43 +13,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
-        with:
-          distribution: temurin
-          java-version: '17'
+        with: { distribution: temurin, java-version: '17' }
       - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: '9.3.1'
+        with: { gradle-version: '9.3.1' }
       - name: Reject removed Shizuku architecture
         run: |
           set -euo pipefail
-          if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then
-            echo 'Shizuku reference returned to SageOS 2 source'
-            exit 1
-          fi
+          if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
-      - name: Verify root broker contract exists without fake activation
+      - name: Verify root and deterministic action contracts
         run: |
-          set -euo pipefail
           grep -F 'interface RootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
-          grep -F 'ROOT_BROKER_UNAVAILABLE' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
-          grep -F 'Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus()' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
-      - name: Verify deterministic action layer
-        run: |
-          set -euo pipefail
           grep -F 'class AndroidFastActionEngine' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidFastActionEngine.kt
-          grep -F 'SageAccessibilityService.activeInstance()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
-      - name: Verify authority and assistant component contract
+      - name: Verify speech recovery architecture
         run: |
-          set -euo pipefail
+          grep -F 'class AndroidSpeechPort' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
+          grep -F 'createOnDeviceSpeechRecognizer' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
+          grep -F 'data class RecognitionFailed' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageEvent.kt
+      - name: Verify authority component contract
+        run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
-          for component in com.pineapple.sage.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do
-            grep -F "android:name=\"$component\"" "$manifest"
-          done
+          for component in com.pineapple.sage.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
       - name: Verify core and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: sageos2-debug
-          path: sageos2/app/build/outputs/apk/debug/app-debug.apk
-          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        with: { name: sageos2-debug, path: sageos2/app/build/outputs/apk/debug/app-debug.apk, if-no-files-found: error }

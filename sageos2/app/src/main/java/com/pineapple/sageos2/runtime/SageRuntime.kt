@@ -27,17 +27,12 @@ class SageRuntime(
     init {
         require(echoGuardMs >= 0L) { "echoGuardMs must be non-negative" }
         speech.attach(object : SpeechInputListener {
-            override fun onWakeDetected(generation: Long) {
-                submit(SageEvent.WakeDetected(generation))
-            }
-
-            override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) {
+            override fun onWakeDetected(generation: Long) = submit(SageEvent.WakeDetected(generation))
+            override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) =
                 submit(SageEvent.TranscriptFinal(turnId, generation, text))
-            }
-
-            override fun onSpeechDiagnostic(message: String) {
-                observer.onDiagnostic("speech: $message")
-            }
+            override fun onRecognitionError(turnId: Long, generation: Long, code: Int) =
+                submit(SageEvent.RecognitionFailed(turnId, generation, code))
+            override fun onSpeechDiagnostic(message: String) = observer.onDiagnostic("speech: $message")
         })
     }
 
@@ -45,137 +40,58 @@ class SageRuntime(
     private var fastActionJob: FastActionJob? = null
     private var echoGuardHandle: ScheduledHandle? = null
 
-    @Synchronized
-    fun start() {
-        submit(SageEvent.Start)
-    }
-
-    @Synchronized
-    fun stop() {
-        submit(SageEvent.Stop)
-        speech.shutdown()
-    }
-
-    @Synchronized
-    fun submit(event: SageEvent) {
-        process(coordinator.handle(event))
-    }
-
+    @Synchronized fun start() { submit(SageEvent.Start) }
+    @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
+    @Synchronized fun submit(event: SageEvent) { process(coordinator.handle(event)) }
     fun snapshot() = coordinator.snapshot()
 
-    private fun process(effects: List<SageEffect>) {
-        effects.forEach { effect ->
-            try {
-                process(effect)
-            } catch (t: Throwable) {
-                observer.onUnhandledFailure("effect failed: ${effect::class.simpleName}", t)
-            }
+    private fun process(effects: List<SageEffect>) = effects.forEach { effect ->
+        try { process(effect) } catch (t: Throwable) {
+            observer.onUnhandledFailure("effect failed: ${effect::class.simpleName}", t)
         }
     }
 
     private fun process(effect: SageEffect) {
         when (effect) {
-            is SageEffect.SetListeningMode -> speech.setListening(
-                effect.mode,
-                effect.generation,
-                effect.turnId
-            )
-
-            is SageEffect.Speak -> {
-                speech.speak(effect.turnId, effect.text) {
-                    val snapshot = coordinator.snapshot()
-                    if (
-                        snapshot.activeTurnId == effect.turnId &&
-                        snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE
-                    ) {
-                        submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
-                    } else {
-                        submit(SageEvent.SpeechFinished(effect.turnId))
-                    }
-                }
+            is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
+            is SageEffect.Speak -> speech.speak(effect.turnId, effect.text) {
+                val snapshot = coordinator.snapshot()
+                if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) {
+                    submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
+                } else submit(SageEvent.SpeechFinished(effect.turnId))
             }
-
             is SageEffect.SpeakTransient -> speech.speakTransient(effect.text)
-
             is SageEffect.ExecuteFast -> {
                 fastActionJob?.cancel()
-                fastActionJob = fastActions.start(
-                    FastActionRequest(effect.turnId, effect.command)
-                ) { result ->
+                fastActionJob = fastActions.start(FastActionRequest(effect.turnId, effect.command)) { result ->
                     result.fold(
-                        onSuccess = { response ->
-                            submit(
-                                SageEvent.ResponseReady(
-                                    turnId = response.turnId,
-                                    text = response.text,
-                                    allowFollowUp = response.allowFollowUp
-                                )
-                            )
-                        },
-                        onFailure = { failure ->
-                            submit(
-                                SageEvent.BrainFailed(
-                                    turnId = effect.turnId,
-                                    reason = "fast action: ${failure.message ?: failure::class.simpleName}"
-                                )
-                            )
-                        }
+                        onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, it.allowFollowUp)) },
+                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, "fast action: ${it.message ?: it::class.simpleName}")) }
                     )
                 }
             }
-
             is SageEffect.QueryDeepBrain -> {
                 brainJob?.cancel()
-                brainJob = brain.start(
-                    BrainRequest(effect.turnId, effect.prompt)
-                ) { result ->
+                brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt)) { result ->
                     result.fold(
-                        onSuccess = { response ->
-                            submit(
-                                SageEvent.ResponseReady(
-                                    turnId = response.turnId,
-                                    text = response.text,
-                                    allowFollowUp = true
-                                )
-                            )
-                        },
-                        onFailure = { failure ->
-                            submit(
-                                SageEvent.BrainFailed(
-                                    turnId = effect.turnId,
-                                    reason = failure.message ?: failure::class.simpleName.orEmpty()
-                                )
-                            )
-                        }
+                        onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, true)) },
+                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) }
                     )
                 }
             }
-
             is SageEffect.LaunchOwnerWorkflow -> workflows.launch(effect.turnId, effect.workflowId)
-
             is SageEffect.StartEchoGuard -> {
                 echoGuardHandle?.cancel()
-                echoGuardHandle = scheduler.schedule(echoGuardMs) {
-                    submit(SageEvent.EchoGuardElapsed(effect.turnId))
-                }
+                echoGuardHandle = scheduler.schedule(echoGuardMs) { submit(SageEvent.EchoGuardElapsed(effect.turnId)) }
             }
-
             is SageEffect.TypedInputQueued -> observer.onTypedInputQueued(effect.depth)
             is SageEffect.TypedInputRejected -> observer.onTypedInputRejected(effect.reason)
             is SageEffect.RecordDiagnostic -> observer.onDiagnostic(effect.message)
             is SageEffect.IgnoreStaleCallback -> observer.onDiagnostic("stale callback: ${effect.reason}")
-
             is SageEffect.CancelTurn -> {
-                if (brainJob?.turnId == effect.turnId) {
-                    brainJob?.cancel()
-                    brainJob = null
-                }
-                if (fastActionJob?.turnId == effect.turnId) {
-                    fastActionJob?.cancel()
-                    fastActionJob = null
-                }
-                echoGuardHandle?.cancel()
-                echoGuardHandle = null
+                if (brainJob?.turnId == effect.turnId) { brainJob?.cancel(); brainJob = null }
+                if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
+                echoGuardHandle?.cancel(); echoGuardHandle = null
             }
         }
     }
