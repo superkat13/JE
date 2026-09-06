@@ -22,7 +22,7 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
-      - name: Verify legacy authority component contract
+      - name: Verify authority and assistant component contract
         run: |
           set -euo pipefail
           manifest=sageos2/app/src/main/AndroidManifest.xml
@@ -33,9 +33,16 @@ jobs:
             com.pineapple.sage.SageVoiceService \
             com.pineapple.sage.SageDeviceAdminReceiver \
             com.pineapple.sage.SageBootReceiver \
-            com.pineapple.sage.SageAssistActivity; do
+            com.pineapple.sage.SageAssistActivity \
+            com.pineapple.sage.SageVoiceInteractionService \
+            com.pineapple.sage.SageVoiceInteractionSessionService \
+            com.pineapple.sage.SageSherpaRecognitionService; do
             grep -F "android:name=\"$component\"" "$manifest"
           done
+          grep -F 'android:name="android.voice_interaction"' "$manifest"
+          grep -F 'android:name="android.service.voice.VoiceInteractionService"' "$manifest"
+          grep -F 'android:sessionService="com.pineapple.sage.SageVoiceInteractionSessionService"' sageos2/app/src/main/res/xml/sage_voice_interaction.xml
+          grep -F 'android:recognitionService="com.pineapple.sage.SageSherpaRecognitionService"' sageos2/app/src/main/res/xml/sage_voice_interaction.xml
       - name: Verify core and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Upload APK

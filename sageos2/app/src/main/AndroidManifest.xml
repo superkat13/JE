@@ -16,13 +16,17 @@
     <uses-feature android:name="android.hardware.microphone" android:required="true" />
     <uses-feature android:name="android.hardware.wifi" android:required="false" />
 
+    <queries>
+        <intent>
+            <action android:name="android.speech.RecognitionService" />
+        </intent>
+    </queries>
+
     <application
         android:allowBackup="false"
         android:label="Sage"
         android:supportsRtl="true">
 
-        <!-- Keep the legacy launcher component stable so an in-place signed upgrade
-             does not strand the existing launcher entry. -->
         <activity
             android:name="com.pineapple.sage.MainActivity"
             android:exported="true">
@@ -41,9 +45,43 @@
             </intent-filter>
         </activity>
 
-        <!-- These component names intentionally match Sage 1.33.3. Android stores
-             authority grants against package/component identity, so changing them
-             during the rebuild would unnecessarily discard owner setup. -->
+        <!-- The selected VoiceInteractionService is the lightweight, system-owned
+             always-running home for Sage's wake runtime. Heavy work belongs outside
+             this process. -->
+        <service
+            android:name="com.pineapple.sage.SageVoiceInteractionService"
+            android:exported="true"
+            android:label="Sage"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:process=":interactor">
+            <meta-data
+                android:name="android.voice_interaction"
+                android:resource="@xml/sage_voice_interaction" />
+            <intent-filter>
+                <action android:name="android.service.voice.VoiceInteractionService" />
+            </intent-filter>
+        </service>
+
+        <service
+            android:name="com.pineapple.sage.SageVoiceInteractionSessionService"
+            android:exported="true"
+            android:permission="android.permission.BIND_VOICE_INTERACTION"
+            android:process=":session" />
+
+        <!-- Keep the legacy recognizer component name. The service is intentionally
+             a minimal shell until the slim SageOS 2 recognizer adapter is wired. -->
+        <service
+            android:name="com.pineapple.sage.SageSherpaRecognitionService"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.speech.RecognitionService" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+            <meta-data
+                android:name="android.speech"
+                android:resource="@xml/sage_recognition_service" />
+        </service>
+
         <service
             android:name="com.pineapple.sage.SageAccessibilityService"
             android:exported="true"
@@ -66,6 +104,8 @@
             </intent-filter>
         </service>
 
+        <!-- Legacy service identity is preserved during migration. It is not the
+             new always-on voice owner. -->
         <service
             android:name="com.pineapple.sage.SageVoiceService"
             android:exported="false"

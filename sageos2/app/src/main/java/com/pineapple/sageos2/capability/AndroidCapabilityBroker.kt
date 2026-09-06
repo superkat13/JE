@@ -8,9 +8,11 @@ import android.content.Context
 import android.os.Build
 import android.os.PowerManager
 import android.provider.Settings
+import android.service.voice.VoiceInteractionService
 import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sage.SageDeviceAdminReceiver
 import com.pineapple.sage.SageNotificationListener
+import com.pineapple.sage.SageVoiceInteractionService
 
 class AndroidCapabilityBroker(
     private val context: Context
@@ -23,7 +25,7 @@ class AndroidCapabilityBroker(
             Capability.BATTERY_EXEMPTION to activeOrAvailable(batteryExemptionActive()),
             Capability.DEVICE_ADMIN to activeOrAvailable(deviceAdminActive()),
             Capability.DEVICE_OWNER to deviceOwnerStatus(),
-            Capability.ASSISTANT_ROLE to assistantRoleStatus(),
+            Capability.ASSISTANT_ROLE to assistantStatus(),
             Capability.SHIZUKU_SHELL to shizukuStatus(),
             Capability.PLATFORM_PRIVILEGED to platformPrivilegeStatus(),
             Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.UNAVAILABLE
@@ -87,8 +89,12 @@ class AndroidCapabilityBroker(
         }
     }
 
-    private fun assistantRoleStatus(): CapabilityStatus {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return CapabilityStatus.UNKNOWN
+    private fun assistantStatus(): CapabilityStatus {
+        val service = ComponentName(context, SageVoiceInteractionService::class.java)
+        if (VoiceInteractionService.isActiveService(context, service)) {
+            return CapabilityStatus.ACTIVE
+        }
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return CapabilityStatus.AVAILABLE
         val roles = context.getSystemService(RoleManager::class.java)
         if (!roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) return CapabilityStatus.UNAVAILABLE
         return if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
