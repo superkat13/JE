@@ -26,12 +26,13 @@ jobs:
           curl -fL --retry 3 -o /tmp/kws/checksum.txt https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/checksum.txt
           echo '284637b2b9fec1287aca10315dcc960710c6ec14224fb1dfa9fe427e77eb6c18  /tmp/kws/checksum.txt' | sha256sum -c -
           MODEL=sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile.tar.bz2
-          grep -F "$MODEL" /tmp/kws/checksum.txt
+          EXPECTED=2e6ac2577310bfa2f4b6b5fab0478b868c9d0b2cb2c51b3e13b50581b588864d
+          grep -F "$MODEL" /tmp/kws/checksum.txt | grep -F "$EXPECTED"
           curl -fL --retry 3 -o "/tmp/kws/$MODEL" "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$MODEL"
-          (cd /tmp/kws && grep -F "$MODEL" checksum.txt | sha256sum -c -)
+          echo "$EXPECTED  /tmp/kws/$MODEL" | sha256sum -c -
           mkdir -p /tmp/kws/model
           tar -xjf "/tmp/kws/$MODEL" -C /tmp/kws/model
-          find /tmp/kws/model -maxdepth 3 -type f -printf '%P\n' | sort
+          find /tmp/kws/model -maxdepth 4 -type f -printf '%P\n' | sort
       - name: Generate exact default wake BPE tokens
         run: |
           set -euo pipefail
