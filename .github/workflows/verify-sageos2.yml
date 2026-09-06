@@ -21,10 +21,15 @@ jobs:
           set -euo pipefail
           if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
-      - name: Verify Sage owns behavioral policy
+      - name: Verify virtual twin identity architecture
         run: |
           set -euo pipefail
-          grep -F 'data class SageCoreSnapshot' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
+          grep -F 'virtual twin' SAGEOS2_MASTER_PLAN.md
+          grep -F 'data class OwnerModel' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
+          grep -F 'data class SageSelfModel' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
+          grep -F 'data class SharedContinuity' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
+      - name: Verify Sage owns behavioral policy
+        run: |
           grep -F 'val selfRestrictions: List<String>' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
           grep -F 'sageCore.current()' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'data class ExecuteProcess' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
