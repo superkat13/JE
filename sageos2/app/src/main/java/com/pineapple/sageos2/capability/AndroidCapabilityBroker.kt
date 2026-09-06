@@ -42,7 +42,7 @@ class AndroidCapabilityBroker(
 
     private fun notificationListenerActive(): Boolean {
         val target = ComponentName(context, SageNotificationListener::class.java)
-        return enabledComponents(Settings.Secure.ENABLED_NOTIFICATION_LISTENERS).contains(target)
+        return enabledComponents(ENABLED_NOTIFICATION_LISTENERS_SETTING).contains(target)
     }
 
     private fun usageAccessActive(): Boolean {
@@ -99,9 +99,6 @@ class AndroidCapabilityBroker(
     }
 
     private fun shizukuStatus(): CapabilityStatus = if (packageInstalled(SHIZUKU_PACKAGE)) {
-        // Presence means Sage can ask for a Shizuku session. ACTIVE requires the
-        // Shizuku API adapter and runtime authorization, which is intentionally
-        // reported only after that adapter exists.
         CapabilityStatus.AVAILABLE
     } else {
         CapabilityStatus.UNAVAILABLE
@@ -136,5 +133,6 @@ class AndroidCapabilityBroker(
 
     companion object {
         const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
+        private const val ENABLED_NOTIFICATION_LISTENERS_SETTING = "enabled_notification_listeners"
     }
 }
