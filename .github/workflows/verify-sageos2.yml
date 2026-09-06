@@ -1,0 +1,31 @@
+name: Verify SageOS 2
+
+on:
+  push:
+    branches: [sageos-2]
+    paths:
+      - 'sageos2/**'
+      - 'SAGEOS2_MASTER_PLAN.md'
+      - '.github/workflows/verify-sageos2.yml'
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Verify core and build debug APK
+        run: |
+          chmod +x ./gradlew
+          ./gradlew -p sageos2 testDebugUnitTest assembleDebug --stacktrace
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageos2-debug
+          path: sageos2/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
