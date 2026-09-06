@@ -13,8 +13,13 @@ import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sage.SageDeviceAdminReceiver
 import com.pineapple.sage.SageNotificationListener
 import com.pineapple.sage.SageVoiceInteractionService
+import com.pineapple.sageos2.root.PowerAction
 import com.pineapple.sageos2.root.RootBrokerClient
+import com.pineapple.sageos2.root.RootBrokerRequest
+import com.pineapple.sageos2.root.RootOperation
+import com.pineapple.sageos2.root.SettingNamespace
 import com.pineapple.sageos2.root.UnavailableRootBrokerClient
+import java.util.UUID
 
 class AndroidCapabilityBroker(
     private val context: Context,
@@ -34,10 +39,82 @@ class AndroidCapabilityBroker(
         )
     )
 
-    override fun execute(action: DeviceAction): CapabilityResult = CapabilityResult(
-        success = false,
-        detail = "Android device-action execution is not wired yet: ${action.name}"
-    )
+    override fun execute(action: DeviceAction): CapabilityResult = try {
+        val operation = rootOperation(action)
+            ?: return CapabilityResult(false, "Unsupported capability action: ${action.name}")
+        val result = rootBroker.execute(RootBrokerRequest(UUID.randomUUID().toString(), operation))
+        CapabilityResult(
+            success = result.success,
+            detail = buildString {
+                append(result.detail)
+                result.stdout?.takeIf { it.isNotBlank() }?.let { append("\n").append(it.trimEnd()) }
+                result.stderr?.takeIf { it.isNotBlank() }?.let { append("\n[stderr] ").append(it.trimEnd()) }
+                result.auditId?.let { append("\n[audit ").append(it).append(']') }
+            }
+        )
+    } catch (t: Throwable) {
+        CapabilityResult(false, "Capability action failed: ${t.message ?: t::class.java.simpleName}")
+    }
+
+    private fun rootOperation(action: DeviceAction): RootOperation? = when (action.name) {
+        "root.health" -> RootOperation.Health
+        "root.install_package" -> RootOperation.InstallPackage(
+            apkPath = action.required("path"),
+            replaceExisting = action.boolean("replace", true)
+        )
+        "root.uninstall_package" -> RootOperation.UninstallPackage(
+            packageName = action.required("package"),
+            keepData = action.boolean("keep_data", false)
+        )
+        "root.set_package_enabled" -> RootOperation.SetPackageEnabled(
+            packageName = action.required("package"),
+            enabled = action.boolean("enabled", true)
+        )
+        "root.write_setting" -> RootOperation.WriteSecureSetting(
+            namespace = SettingNamespace.valueOf(action.required("namespace").uppercase()),
+            key = action.required("key"),
+            value = action.arguments["value"]
+        )
+        "root.chown" -> RootOperation.SetFileOwnership(
+            path = action.required("path"),
+            uid = action.required("uid").toInt(),
+            gid = action.required("gid").toInt()
+        )
+        "root.chmod" -> RootOperation.SetFileMode(
+            path = action.required("path"),
+            mode = action.required("mode").toInt()
+        )
+        "root.restart_service" -> RootOperation.RestartSystemService(action.required("service"))
+        "root.power" -> RootOperation.Power(PowerAction.valueOf(action.required("action").uppercase()))
+        "root.exec" -> RootOperation.ExecuteProcess(
+            executable = action.required("executable"),
+            args = action.numbered("arg."),
+            environment = action.arguments
+                .filterKeys { it.startsWith("env.") }
+                .mapKeys { it.key.removePrefix("env.") },
+            workingDirectory = action.arguments["cwd"],
+            timeoutMs = action.arguments["timeout_ms"]?.toLongOrNull() ?: 30_000L
+        )
+        else -> null
+    }
+
+    private fun DeviceAction.required(name: String): String =
+        arguments[name]?.takeIf { it.isNotBlank() }
+            ?: throw IllegalArgumentException("Missing argument '$name' for ${this.name}")
+
+    private fun DeviceAction.boolean(name: String, default: Boolean): Boolean = when (arguments[name]?.lowercase()) {
+        null -> default
+        "1", "true", "yes", "on" -> true
+        "0", "false", "no", "off" -> false
+        else -> throw IllegalArgumentException("Invalid boolean '$name' for ${this.name}")
+    }
+
+    private fun DeviceAction.numbered(prefix: String): List<String> = arguments.entries
+        .mapNotNull { (key, value) ->
+            key.removePrefix(prefix).takeIf { key.startsWith(prefix) }?.toIntOrNull()?.let { it to value }
+        }
+        .sortedBy { it.first }
+        .map { it.second }
 
     private fun accessibilityActive(): Boolean {
         val target = ComponentName(context, SageAccessibilityService::class.java)
