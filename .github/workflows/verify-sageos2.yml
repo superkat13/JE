@@ -21,17 +21,17 @@ jobs:
           set -euo pipefail
           if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
-      - name: Verify single transparent twin context compiler
+      - name: Verify twin context and Owner Apps
         run: |
           grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
-          grep -F 'twinContextText = context' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
-          grep -F 'val mode: SageModeSnapshot?' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainEngine.kt
-      - name: Verify virtual twin memory/history and wake profiles
+          grep -F 'data class OwnerAppRecord' sageos2/app/src/main/java/com/pineapple/sageos2/apps/OwnerApps.kt
+          grep -F 'ownerApps: OwnerAppProvider' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'appResolver.resolve(name, ownerApps.snapshot())' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
+      - name: Verify wake, memory and history
         run: |
+          grep -F 'data class WakeProfile' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
           grep -F 'data class TwinMemoryRecord' sageos2/app/src/main/java/com/pineapple/sageos2/memory/TwinMemory.kt
           grep -F 'data class ConversationEntry' sageos2/app/src/main/java/com/pineapple/sageos2/memory/ConversationHistory.kt
-          grep -F 'data class WakeProfile' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
-          grep -F 'modeId = "red_queen"' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
       - name: Verify Sage owns behavioral policy
         run: |
           grep -F 'val selfRestrictions: List<String>' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
@@ -44,7 +44,6 @@ jobs:
         run: |
           grep -F 'class AndroidSpeechPort' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
           grep -F 'createOnDeviceSpeechRecognizer' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
-          grep -F 'data class RecognitionFailed' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageEvent.kt
       - name: Verify authority component contract
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml

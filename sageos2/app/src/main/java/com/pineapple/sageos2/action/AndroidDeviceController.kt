@@ -8,8 +8,15 @@ import android.graphics.Path
 import android.media.AudioManager
 import android.view.accessibility.AccessibilityNodeInfo
 import com.pineapple.sage.SageAccessibilityService
+import com.pineapple.sageos2.apps.EmptyOwnerAppProvider
+import com.pineapple.sageos2.apps.OwnerAppProvider
+import com.pineapple.sageos2.apps.OwnerAppResolver
 
-class AndroidDeviceController(private val context: Context) : DeviceController {
+class AndroidDeviceController(
+    private val context: Context,
+    private val ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
+    private val appResolver: OwnerAppResolver = OwnerAppResolver()
+) : DeviceController {
     override fun execute(command: FastCommand): DeviceControlResult = when (command) {
         is FastCommand.OpenApp -> openApp(command.appName)
         FastCommand.Back -> global(AccessibilityService.GLOBAL_ACTION_BACK, "Back")
@@ -25,6 +32,16 @@ class AndroidDeviceController(private val context: Context) : DeviceController {
 
     private fun openApp(name: String): DeviceControlResult {
         val pm = context.packageManager
+        val remembered = appResolver.resolve(name, ownerApps.snapshot())
+        if (remembered != null) {
+            val launch = pm.getLaunchIntentForPackage(remembered.packageName)
+            if (launch != null) {
+                launch.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                context.startActivity(launch)
+                return DeviceControlResult(true, "Opened ${remembered.displayName}")
+            }
+        }
+
         val launcherQuery = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
         @Suppress("DEPRECATION")
         val matches = pm.queryIntentActivities(launcherQuery, 0)
@@ -39,9 +56,7 @@ class AndroidDeviceController(private val context: Context) : DeviceController {
                     else -> 3
                 }
             }.thenBy { it.second.length })
-            .firstOrNull { (_, label) ->
-                label.equals(name, ignoreCase = true) || label.lowercase().contains(normalized)
-            }
+            .firstOrNull { (_, label) -> label.equals(name, ignoreCase = true) || label.lowercase().contains(normalized) }
             ?: return DeviceControlResult(false, "I couldn't find an app named $name")
 
         val packageName = best.first.activityInfo.packageName
@@ -53,20 +68,14 @@ class AndroidDeviceController(private val context: Context) : DeviceController {
     }
 
     private fun global(action: Int, label: String): DeviceControlResult {
-        val service = SageAccessibilityService.activeInstance()
-            ?: return DeviceControlResult(false, "Accessibility control is not active")
-        return if (service.performGlobalAction(action)) {
-            DeviceControlResult(true, label)
-        } else {
-            DeviceControlResult(false, "$label action was rejected by Android")
-        }
+        val service = SageAccessibilityService.activeInstance() ?: return DeviceControlResult(false, "Accessibility control is not active")
+        return if (service.performGlobalAction(action)) DeviceControlResult(true, label)
+        else DeviceControlResult(false, "$label action was rejected by Android")
     }
 
     private fun scroll(direction: Direction): DeviceControlResult {
-        val service = SageAccessibilityService.activeInstance()
-            ?: return DeviceControlResult(false, "Accessibility control is not active")
-        val root = service.rootInActiveWindow
-            ?: return DeviceControlResult(false, "No active window is available")
+        val service = SageAccessibilityService.activeInstance() ?: return DeviceControlResult(false, "Accessibility control is not active")
+        val root = service.rootInActiveWindow ?: return DeviceControlResult(false, "No active window is available")
         val action = when (direction) {
             Direction.DOWN, Direction.RIGHT -> AccessibilityNodeInfo.ACTION_SCROLL_FORWARD
             Direction.UP, Direction.LEFT -> AccessibilityNodeInfo.ACTION_SCROLL_BACKWARD
@@ -79,37 +88,24 @@ class AndroidDeviceController(private val context: Context) : DeviceController {
         if (node.isScrollable && node.performAction(action)) return true
         for (index in 0 until node.childCount) {
             val child = node.getChild(index) ?: continue
-            try {
-                if (performScroll(child, action)) return true
-            } finally {
-                child.recycle()
-            }
+            try { if (performScroll(child, action)) return true } finally { child.recycle() }
         }
         return false
     }
 
     private fun tap(x: Float, y: Float): DeviceControlResult {
-        val service = SageAccessibilityService.activeInstance()
-            ?: return DeviceControlResult(false, "Accessibility control is not active")
+        val service = SageAccessibilityService.activeInstance() ?: return DeviceControlResult(false, "Accessibility control is not active")
         val path = Path().apply { moveTo(x, y) }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 70))
-            .build()
-        return if (service.dispatchGesture(gesture, null, null)) {
-            DeviceControlResult(true, "Tapped $x, $y")
-        } else DeviceControlResult(false, "Android rejected the tap gesture")
+        val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 70)).build()
+        return if (service.dispatchGesture(gesture, null, null)) DeviceControlResult(true, "Tapped $x, $y")
+        else DeviceControlResult(false, "Android rejected the tap gesture")
     }
 
     private fun swipe(direction: Direction): DeviceControlResult {
-        val service = SageAccessibilityService.activeInstance()
-            ?: return DeviceControlResult(false, "Accessibility control is not active")
+        val service = SageAccessibilityService.activeInstance() ?: return DeviceControlResult(false, "Accessibility control is not active")
         val dm = context.resources.displayMetrics
-        val width = dm.widthPixels.toFloat()
-        val height = dm.heightPixels.toFloat()
-        val cx = width / 2f
-        val cy = height / 2f
-        val marginX = width * 0.2f
-        val marginY = height * 0.2f
+        val width = dm.widthPixels.toFloat(); val height = dm.heightPixels.toFloat(); val cx = width / 2f; val cy = height / 2f
+        val marginX = width * 0.2f; val marginY = height * 0.2f
         val path = Path()
         when (direction) {
             Direction.UP -> { path.moveTo(cx, height - marginY); path.lineTo(cx, marginY) }
@@ -117,12 +113,9 @@ class AndroidDeviceController(private val context: Context) : DeviceController {
             Direction.LEFT -> { path.moveTo(width - marginX, cy); path.lineTo(marginX, cy) }
             Direction.RIGHT -> { path.moveTo(marginX, cy); path.lineTo(width - marginX, cy) }
         }
-        val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(path, 0, 350))
-            .build()
-        return if (service.dispatchGesture(gesture, null, null)) {
-            DeviceControlResult(true, "Swiped ${direction.name.lowercase()}")
-        } else DeviceControlResult(false, "Android rejected the swipe gesture")
+        val gesture = GestureDescription.Builder().addStroke(GestureDescription.StrokeDescription(path, 0, 350)).build()
+        return if (service.dispatchGesture(gesture, null, null)) DeviceControlResult(true, "Swiped ${direction.name.lowercase()}")
+        else DeviceControlResult(false, "Android rejected the swipe gesture")
     }
 
     private fun volume(direction: VolumeDirection): DeviceControlResult {

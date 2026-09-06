@@ -1,5 +1,6 @@
 package com.pineapple.sageos2.brain
 
+import com.pineapple.sageos2.apps.OwnerAppSnapshot
 import com.pineapple.sageos2.identity.SageCoreSnapshot
 import com.pineapple.sageos2.memory.ConversationHistorySnapshot
 import com.pineapple.sageos2.memory.TwinMemorySnapshot
@@ -11,6 +12,7 @@ data class BrainRequest(
     val sageCore: SageCoreSnapshot? = null,
     val twinMemory: TwinMemorySnapshot? = null,
     val conversationHistory: ConversationHistorySnapshot? = null,
+    val ownerApps: OwnerAppSnapshot? = null,
     val mode: SageModeSnapshot? = null,
     val twinContextText: String? = null
 )
@@ -29,19 +31,11 @@ data class BrainProvenance(
     val limitation: String? = null
 )
 
-interface BrainJob {
-    val turnId: Long
-    fun cancel()
-}
-
+interface BrainJob { val turnId: Long; fun cancel() }
 interface BrainEngine {
     val name: String
     fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob
     fun health(): BrainHealth
 }
 
-data class BrainHealth(
-    val ready: Boolean,
-    val detail: String,
-    val lastLatencyMs: Long? = null
-)
+data class BrainHealth(val ready: Boolean, val detail: String, val lastLatencyMs: Long? = null)
