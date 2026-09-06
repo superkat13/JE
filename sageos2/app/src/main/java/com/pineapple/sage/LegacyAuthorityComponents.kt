@@ -9,41 +9,46 @@ import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.os.IBinder
-import android.view.accessibility.AccessibilityEvent
 import android.service.notification.NotificationListenerService
+import android.view.accessibility.AccessibilityEvent
 import com.pineapple.sageos2.MainActivity as SageOsMainActivity
+import java.lang.ref.WeakReference
 
-/**
- * Compatibility components whose fully-qualified names existed in Sage 1.33.3.
- * Keep these names stable across the in-place SageOS 2 migration so Android can
- * preserve package/component-scoped owner grants. Behavior is intentionally thin
- * until each new SageOS 2 adapter is wired and tested.
- */
 class MainActivity : SageOsMainActivity()
-
 class SageDeviceAdminReceiver : DeviceAdminReceiver()
 
 class SageAccessibilityService : AccessibilityService() {
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        current = WeakReference(this)
+    }
+
     override fun onAccessibilityEvent(event: AccessibilityEvent?) = Unit
     override fun onInterrupt() = Unit
+
+    override fun onDestroy() {
+        if (current?.get() === this) current = null
+        super.onDestroy()
+    }
+
+    companion object {
+        @Volatile private var current: WeakReference<SageAccessibilityService>? = null
+        fun activeInstance(): SageAccessibilityService? = current?.get()
+    }
 }
 
 class SageNotificationListener : NotificationListenerService()
 
 class SageBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        // Boot continuity is connected only after the new runtime service passes
-        // its lifecycle tests. Keeping the receiver identity now preserves the path.
+        // Runtime boot continuation is connected after the service lifecycle gate.
     }
 }
 
 class SageAssistActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        startActivity(
-            Intent(this, SageOsMainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
-        )
+        startActivity(Intent(this, SageOsMainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP))
         finish()
     }
 }

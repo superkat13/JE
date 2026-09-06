@@ -38,21 +38,16 @@ jobs:
           grep -F 'interface RootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
           grep -F 'ROOT_BROKER_UNAVAILABLE' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
           grep -F 'Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus()' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+      - name: Verify deterministic action layer
+        run: |
+          set -euo pipefail
+          grep -F 'class AndroidFastActionEngine' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidFastActionEngine.kt
+          grep -F 'SageAccessibilityService.activeInstance()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
       - name: Verify authority and assistant component contract
         run: |
           set -euo pipefail
           manifest=sageos2/app/src/main/AndroidManifest.xml
-          for component in \
-            com.pineapple.sage.MainActivity \
-            com.pineapple.sage.SageAccessibilityService \
-            com.pineapple.sage.SageNotificationListener \
-            com.pineapple.sage.SageVoiceService \
-            com.pineapple.sage.SageDeviceAdminReceiver \
-            com.pineapple.sage.SageBootReceiver \
-            com.pineapple.sage.SageAssistActivity \
-            com.pineapple.sage.SageVoiceInteractionService \
-            com.pineapple.sage.SageVoiceInteractionSessionService \
-            com.pineapple.sage.SageSherpaRecognitionService; do
+          for component in com.pineapple.sage.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do
             grep -F "android:name=\"$component\"" "$manifest"
           done
       - name: Verify core and build debug APK
