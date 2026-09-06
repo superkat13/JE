@@ -8,3 +8,6 @@ __pycache__/
 app/build/
 Sage-Commander-*.zip
 Sage-Commander-*/
+sageos2/app/libs/sherpa-onnx-*.aar
+sageos2/app/src/main/assets/sherpa-kws/
+sageos2/.deps/

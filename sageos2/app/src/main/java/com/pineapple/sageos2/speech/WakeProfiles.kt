@@ -8,6 +8,7 @@ data class WakeProfile(
     val id: String,
     val displayName: String,
     val phrases: List<String>,
+    val compiledPhrases: Map<String, String> = emptyMap(),
     val modeId: String? = null,
     val acknowledgement: String = "Yes",
     val enabled: Boolean = true
@@ -17,6 +18,23 @@ data class WakeProfile(
         require(displayName.isNotBlank())
         require(phrases.any { it.isNotBlank() })
     }
+
+    fun compiledTokensFor(phrase: String): String? =
+        compiledPhrases[normalizePhrase(phrase)]?.trim()?.takeIf { it.isNotEmpty() }
+            ?: BuiltInWakeTokens.forPhrase(phrase)
+
+    companion object {
+        fun normalizePhrase(value: String) = value.lowercase().trim().replace(Regex("\\s+"), " ")
+    }
+}
+
+object BuiltInWakeTokens {
+    private val tokens = mapOf(
+        "sage" to "▁S AGE",
+        "sage glitch" to "▁S AGE ▁G LI T CH"
+    )
+
+    fun forPhrase(phrase: String): String? = tokens[WakeProfile.normalizePhrase(phrase)]
 }
 
 data class WakeHit(
@@ -62,6 +80,7 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                 put("id", profile.id)
                 put("displayName", profile.displayName)
                 put("phrases", JSONArray(profile.phrases))
+                put("compiledPhrases", JSONObject(profile.compiledPhrases))
                 put("modeId", profile.modeId)
                 put("acknowledgement", profile.acknowledgement)
                 put("enabled", profile.enabled)
@@ -81,11 +100,21 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                     }
                 }
                 if (phrases.isEmpty()) continue
+                val compiled = buildMap {
+                    val obj = item.optJSONObject("compiledPhrases") ?: JSONObject()
+                    val keys = obj.keys()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        val value = obj.optString(key).trim()
+                        if (value.isNotEmpty()) put(WakeProfile.normalizePhrase(key), value)
+                    }
+                }
                 add(
                     WakeProfile(
                         id = item.optString("id").trim().ifEmpty { "profile_$i" },
                         displayName = item.optString("displayName").trim().ifEmpty { "Wake profile" },
                         phrases = phrases,
+                        compiledPhrases = compiled,
                         modeId = item.optString("modeId").trim().ifEmpty { null },
                         acknowledgement = item.optString("acknowledgement", "Yes").ifBlank { "Yes" },
                         enabled = item.optBoolean("enabled", true)
@@ -104,12 +133,14 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                 id = "sage",
                 displayName = "Sage",
                 phrases = listOf("sage"),
+                compiledPhrases = mapOf("sage" to "▁S AGE"),
                 acknowledgement = "Yes"
             ),
             WakeProfile(
                 id = "sage_glitch",
                 displayName = "Sage Glitch",
                 phrases = listOf("sage glitch"),
+                compiledPhrases = mapOf("sage glitch" to "▁S AGE ▁G LI T CH"),
                 modeId = "red_queen",
                 acknowledgement = "Yes"
             )

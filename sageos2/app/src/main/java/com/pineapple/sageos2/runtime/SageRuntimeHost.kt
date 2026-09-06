@@ -20,7 +20,7 @@ import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.speech.AndroidSpeechPort
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
-import com.pineapple.sageos2.speech.UnavailableWakeWordEngine
+import com.pineapple.sageos2.speech.SherpaWakeWordEngine
 import com.pineapple.sageos2.workflow.WorkflowRegistryEngine
 import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
@@ -65,7 +65,7 @@ class SageRuntimeHost private constructor(context: Context) {
     private val localModel = File(File(appContext.filesDir, "brain"), "sage-brain.gguf")
     private val localBrain = LocalNativeBrainEngine(localModel.absolutePath)
     private val brain = BrainRouterEngine(listOf(localBrain))
-    private val wakeEngine = UnavailableWakeWordEngine()
+    private val wakeEngine = SherpaWakeWordEngine(appContext)
     private val speech = AndroidSpeechPort(appContext, wakeEngine, SharedPreferencesWakeProfileStore(appContext))
     private val controller = AndroidDeviceController(appContext, ownerApps)
     private val fastActions = AndroidFastActionEngine(controller)
