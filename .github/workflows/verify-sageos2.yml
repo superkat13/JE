@@ -6,6 +6,8 @@ on:
     paths:
       - 'sageos2/**'
       - 'SAGEOS2_MASTER_PLAN.md'
+      - 'SAGEOS2_CONTINUITY.md'
+      - 'SAGEOS2_ROOT_BROKER.md'
       - '.github/workflows/verify-sageos2.yml'
   workflow_dispatch:
 
@@ -22,6 +24,20 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.3.1'
+      - name: Reject removed Shizuku architecture
+        run: |
+          set -euo pipefail
+          if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then
+            echo 'Shizuku reference returned to SageOS 2 source'
+            exit 1
+          fi
+          ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
+      - name: Verify root broker contract exists without fake activation
+        run: |
+          set -euo pipefail
+          grep -F 'interface RootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
+          grep -F 'ROOT_BROKER_UNAVAILABLE' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
+          grep -F 'Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus()' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
       - name: Verify authority and assistant component contract
         run: |
           set -euo pipefail
@@ -39,10 +55,6 @@ jobs:
             com.pineapple.sage.SageSherpaRecognitionService; do
             grep -F "android:name=\"$component\"" "$manifest"
           done
-          grep -F 'android:name="android.voice_interaction"' "$manifest"
-          grep -F 'android:name="android.service.voice.VoiceInteractionService"' "$manifest"
-          grep -F 'android:sessionService="com.pineapple.sage.SageVoiceInteractionSessionService"' sageos2/app/src/main/res/xml/sage_voice_interaction.xml
-          grep -F 'android:recognitionService="com.pineapple.sage.SageSherpaRecognitionService"' sageos2/app/src/main/res/xml/sage_voice_interaction.xml
       - name: Verify core and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Upload APK

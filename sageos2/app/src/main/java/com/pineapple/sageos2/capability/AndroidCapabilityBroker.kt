@@ -13,9 +13,12 @@ import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sage.SageDeviceAdminReceiver
 import com.pineapple.sage.SageNotificationListener
 import com.pineapple.sage.SageVoiceInteractionService
+import com.pineapple.sageos2.root.RootBrokerClient
+import com.pineapple.sageos2.root.UnavailableRootBrokerClient
 
 class AndroidCapabilityBroker(
-    private val context: Context
+    private val context: Context,
+    private val rootBroker: RootBrokerClient = UnavailableRootBrokerClient()
 ) : CapabilityBroker {
     override fun snapshot(): CapabilitySnapshot = CapabilitySnapshot(
         mapOf(
@@ -26,9 +29,8 @@ class AndroidCapabilityBroker(
             Capability.DEVICE_ADMIN to activeOrAvailable(deviceAdminActive()),
             Capability.DEVICE_OWNER to deviceOwnerStatus(),
             Capability.ASSISTANT_ROLE to assistantStatus(),
-            Capability.SHIZUKU_SHELL to shizukuStatus(),
             Capability.PLATFORM_PRIVILEGED to platformPrivilegeStatus(),
-            Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.UNAVAILABLE
+            Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus()
         )
     )
 
@@ -97,48 +99,29 @@ class AndroidCapabilityBroker(
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) return CapabilityStatus.AVAILABLE
         val roles = context.getSystemService(RoleManager::class.java)
         if (!roles.isRoleAvailable(RoleManager.ROLE_ASSISTANT)) return CapabilityStatus.UNAVAILABLE
-        return if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) {
-            CapabilityStatus.ACTIVE
-        } else {
-            CapabilityStatus.AVAILABLE
-        }
+        return if (roles.isRoleHeld(RoleManager.ROLE_ASSISTANT)) CapabilityStatus.ACTIVE else CapabilityStatus.AVAILABLE
     }
 
-    private fun shizukuStatus(): CapabilityStatus = if (packageInstalled(SHIZUKU_PACKAGE)) {
-        CapabilityStatus.AVAILABLE
-    } else {
-        CapabilityStatus.UNAVAILABLE
+    private fun rootBrokerStatus(): CapabilityStatus = try {
+        if (rootBroker.health().available) CapabilityStatus.ACTIVE else CapabilityStatus.UNAVAILABLE
+    } catch (_: RuntimeException) {
+        CapabilityStatus.UNKNOWN
     }
 
     private fun platformPrivilegeStatus(): CapabilityStatus = if (
         context.checkSelfPermission("android.permission.WRITE_SECURE_SETTINGS") ==
         android.content.pm.PackageManager.PERMISSION_GRANTED
-    ) {
-        CapabilityStatus.ACTIVE
-    } else {
-        CapabilityStatus.UNAVAILABLE
-    }
+    ) CapabilityStatus.ACTIVE else CapabilityStatus.UNAVAILABLE
 
     private fun enabledComponents(setting: String): Set<ComponentName> {
         val flattened = Settings.Secure.getString(context.contentResolver, setting).orEmpty()
-        return flattened.split(':')
-            .mapNotNull(ComponentName::unflattenFromString)
-            .toSet()
-    }
-
-    private fun packageInstalled(packageName: String): Boolean = try {
-        @Suppress("DEPRECATION")
-        context.packageManager.getPackageInfo(packageName, 0)
-        true
-    } catch (_: android.content.pm.PackageManager.NameNotFoundException) {
-        false
+        return flattened.split(':').mapNotNull(ComponentName::unflattenFromString).toSet()
     }
 
     private fun activeOrAvailable(active: Boolean): CapabilityStatus =
         if (active) CapabilityStatus.ACTIVE else CapabilityStatus.AVAILABLE
 
     companion object {
-        const val SHIZUKU_PACKAGE = "moe.shizuku.privileged.api"
         private const val ENABLED_NOTIFICATION_LISTENERS_SETTING = "enabled_notification_listeners"
     }
 }

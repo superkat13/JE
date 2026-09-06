@@ -8,7 +8,6 @@ enum class Capability {
     DEVICE_ADMIN,
     DEVICE_OWNER,
     ASSISTANT_ROLE,
-    SHIZUKU_SHELL,
     PLATFORM_PRIVILEGED,
     SAGEOS_ROOT_BROKER
 }

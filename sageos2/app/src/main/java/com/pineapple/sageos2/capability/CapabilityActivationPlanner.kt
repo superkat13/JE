@@ -26,25 +26,18 @@ class CapabilityActivationPlanner(private val context: Context) {
         Capability.BATTERY_EXEMPTION -> launch(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)
         Capability.DEVICE_ADMIN -> CapabilityActivationPlan.Launch(
             Intent(DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN)
-                .putExtra(
-                    DevicePolicyManager.EXTRA_DEVICE_ADMIN,
-                    ComponentName(context, SageDeviceAdminReceiver::class.java)
-                )
-                .putExtra(
-                    DevicePolicyManager.EXTRA_ADD_EXPLANATION,
-                    "Sage uses device-admin authority only for owner-approved tablet controls."
-                )
+                .putExtra(DevicePolicyManager.EXTRA_DEVICE_ADMIN, ComponentName(context, SageDeviceAdminReceiver::class.java))
+                .putExtra(DevicePolicyManager.EXTRA_ADD_EXPLANATION, "Sage uses device-admin authority only for owner-approved tablet controls.")
         )
         Capability.DEVICE_OWNER -> CapabilityActivationPlan.ProvisioningRequired(
             "Device Owner is a provisioning-time Android role and cannot be silently enabled inside the app."
         )
         Capability.ASSISTANT_ROLE -> assistantPlan()
-        Capability.SHIZUKU_SHELL -> shizukuPlan()
         Capability.PLATFORM_PRIVILEGED -> CapabilityActivationPlan.ProvisioningRequired(
             "Platform privilege requires the SageOS platform-signing/system-image path."
         )
-        Capability.SAGEOS_ROOT_BROKER -> CapabilityActivationPlan.NotUserActivatable(
-            "The SageOS root broker does not exist in the app-level build yet."
+        Capability.SAGEOS_ROOT_BROKER -> CapabilityActivationPlan.ProvisioningRequired(
+            "Root-backed Sage capability requires the SageOS root broker/system-image integration."
         )
     }
 
@@ -57,17 +50,6 @@ class CapabilityActivationPlanner(private val context: Context) {
             return CapabilityActivationPlan.NotUserActivatable("Assistant role unavailable on this device.")
         }
         return CapabilityActivationPlan.Launch(roles.createRequestRoleIntent(RoleManager.ROLE_ASSISTANT))
-    }
-
-    private fun shizukuPlan(): CapabilityActivationPlan {
-        val launchIntent = context.packageManager.getLaunchIntentForPackage(AndroidCapabilityBroker.SHIZUKU_PACKAGE)
-        return if (launchIntent != null) {
-            CapabilityActivationPlan.Launch(launchIntent)
-        } else {
-            CapabilityActivationPlan.ProvisioningRequired(
-                "Shizuku must be installed and started before Sage can request its shell session."
-            )
-        }
     }
 
     private fun launch(action: String) = CapabilityActivationPlan.Launch(Intent(action))
