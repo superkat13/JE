@@ -1,0 +1,54 @@
+name: Inspect SageOS 2 KWS dependencies
+run-name: Inspect pinned sherpa-onnx KWS assets
+
+on:
+  push:
+    branches: [sageos-2]
+    paths: ['.github/workflows/inspect-sageos2-kws.yml']
+  workflow_dispatch:
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download and verify pinned sherpa-onnx Android AAR
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/kws
+          curl -fL --retry 3 -o /tmp/kws/sherpa.aar https://github.com/k2-fsa/sherpa-onnx/releases/download/v1.13.7/sherpa-onnx-1.13.7.aar
+          echo 'c4ef49e309f24fcee5c106b8a279481aaecaabb078cd37b2cd6e9a62cc8a73c8  /tmp/kws/sherpa.aar' | sha256sum -c -
+          unzip -l /tmp/kws/sherpa.aar | sed -n '1,160p'
+      - name: Download and verify KWS checksum manifest and English mobile model
+        run: |
+          set -euo pipefail
+          curl -fL --retry 3 -o /tmp/kws/checksum.txt https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/checksum.txt
+          echo '284637b2b9fec1287aca10315dcc960710c6ec14224fb1dfa9fe427e77eb6c18  /tmp/kws/checksum.txt' | sha256sum -c -
+          MODEL=sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile.tar.bz2
+          grep -F "$MODEL" /tmp/kws/checksum.txt
+          curl -fL --retry 3 -o "/tmp/kws/$MODEL" "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$MODEL"
+          (cd /tmp/kws && grep -F "$MODEL" checksum.txt | sha256sum -c -)
+          mkdir -p /tmp/kws/model
+          tar -xjf "/tmp/kws/$MODEL" -C /tmp/kws/model
+          find /tmp/kws/model -maxdepth 3 -type f -printf '%P\n' | sort
+      - name: Generate exact default wake BPE tokens
+        run: |
+          set -euo pipefail
+          BPE=$(find /tmp/kws/model -type f -name bpe.model -print -quit)
+          TOKENS=$(find /tmp/kws/model -type f -name tokens.txt -print -quit)
+          test -n "$BPE"
+          test -n "$TOKENS"
+          python3 -m pip install --disable-pip-version-check --quiet sentencepiece
+          python3 - "$BPE" "$TOKENS" <<'PY'
+          import sentencepiece as spm, sys
+          bpe,tokens=sys.argv[1:]
+          valid={line.split()[0] for line in open(tokens,encoding='utf-8') if line.strip()}
+          sp=spm.SentencePieceProcessor(model_file=bpe)
+          for phrase in ['SAGE','SAGE GLITCH']:
+              pieces=sp.encode(phrase, out_type=str)
+              missing=[p for p in pieces if p not in valid]
+              print(f'WAKE_TOKEN {phrase} => {" ".join(pieces)}')
+              if missing:
+                  raise SystemExit(f'missing pieces for {phrase}: {missing}')
+          PY
