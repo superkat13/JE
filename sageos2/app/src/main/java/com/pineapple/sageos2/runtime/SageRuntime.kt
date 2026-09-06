@@ -50,10 +50,15 @@ class SageRuntime(
     private var brainJob: BrainJob? = null
     private var fastActionJob: FastActionJob? = null
     private var echoGuardHandle: ScheduledHandle? = null
+    private var followUpExpiryHandle: ScheduledHandle? = null
 
     @Synchronized fun start() { submit(SageEvent.Start) }
     @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
-    @Synchronized fun submit(event: SageEvent) { recordUserEvent(event); process(coordinator.handle(event)) }
+    @Synchronized fun submit(event: SageEvent) {
+        recordUserEvent(event)
+        process(coordinator.handle(event))
+        observer.onStateChanged(coordinator.snapshot())
+    }
     fun snapshot() = coordinator.snapshot()
 
     private fun recordUserEvent(event: SageEvent) {
@@ -73,32 +78,55 @@ class SageRuntime(
         when (effect) {
             is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
             is SageEffect.ActivateMode -> modes.activate(effect.profileId, effect.modeId)
+            is SageEffect.EmitTextResponse -> {
+                recordSageResponse(effect.turnId, effect.text, ConversationInput.TEXT)
+                observer.onTextResponse(effect.turnId, effect.text)
+            }
             is SageEffect.Speak -> {
-                if (coordinator.snapshot().state == SageRuntimeState.SPEAKING) {
-                    (conversationHistory as? ConversationHistoryStore)?.record(ConversationEntry(UUID.randomUUID().toString(), effect.turnId, ConversationSpeaker.SAGE, ConversationInput.SYSTEM, effect.text, System.currentTimeMillis()))
-                }
+                if (coordinator.snapshot().state == SageRuntimeState.SPEAKING) recordSageResponse(effect.turnId, effect.text, ConversationInput.VOICE)
                 speech.speak(effect.turnId, effect.text) {
                     val snapshot = coordinator.snapshot()
-                    if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId)) else submit(SageEvent.SpeechFinished(effect.turnId))
+                    if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
+                    else submit(SageEvent.SpeechFinished(effect.turnId))
                 }
             }
             is SageEffect.SpeakTransient -> speech.speakTransient(effect.text)
             is SageEffect.ExecuteFast -> {
                 fastActionJob?.cancel()
                 fastActionJob = fastActions.start(FastActionRequest(effect.turnId, effect.command)) { result ->
-                    result.fold(onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, it.allowFollowUp)) }, onFailure = { submit(SageEvent.BrainFailed(effect.turnId, "fast action: ${it.message ?: it::class.simpleName}")) })
+                    result.fold(
+                        onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, it.allowFollowUp)) },
+                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, "fast action: ${it.message ?: it::class.simpleName}")) }
+                    )
                 }
             }
             is SageEffect.QueryDeepBrain -> {
                 brainJob?.cancel()
-                val core = sageCore.current(); val memory = twinMemory.snapshot(); val history = conversationHistory.recent(24); val apps = ownerApps.snapshot(); val mode = modes.current()
+                val core = sageCore.current()
+                val memory = twinMemory.snapshot()
+                val history = conversationHistory.recent(24)
+                val apps = ownerApps.snapshot()
+                val mode = modes.current()
                 val context = twinContextRenderer.render(core, memory, history, apps, mode)
                 brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt, core, memory, history, apps, mode, context)) { result ->
-                    result.fold(onSuccess = { response -> response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }; submit(SageEvent.ResponseReady(response.turnId, response.text, true)) }, onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) })
+                    result.fold(
+                        onSuccess = { response ->
+                            response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }
+                            submit(SageEvent.ResponseReady(response.turnId, response.text, true))
+                        },
+                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) }
+                    )
                 }
             }
             is SageEffect.LaunchOwnerWorkflow -> workflows.launch(effect.turnId, effect.workflowId)
-            is SageEffect.StartEchoGuard -> { echoGuardHandle?.cancel(); echoGuardHandle = scheduler.schedule(echoGuardMs) { submit(SageEvent.EchoGuardElapsed(effect.turnId)) } }
+            is SageEffect.StartEchoGuard -> {
+                echoGuardHandle?.cancel()
+                echoGuardHandle = scheduler.schedule(echoGuardMs) { submit(SageEvent.EchoGuardElapsed(effect.turnId)) }
+            }
+            is SageEffect.ScheduleFollowUpExpiry -> {
+                followUpExpiryHandle?.cancel()
+                followUpExpiryHandle = scheduler.schedule(effect.delayMs) { submit(SageEvent.FollowUpExpired(effect.turnId)) }
+            }
             is SageEffect.TypedInputQueued -> observer.onTypedInputQueued(effect.depth)
             is SageEffect.TypedInputRejected -> observer.onTypedInputRejected(effect.reason)
             is SageEffect.RecordDiagnostic -> observer.onDiagnostic(effect.message)
@@ -107,7 +135,14 @@ class SageRuntime(
                 if (brainJob?.turnId == effect.turnId) { brainJob?.cancel(); brainJob = null }
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
                 echoGuardHandle?.cancel(); echoGuardHandle = null
+                followUpExpiryHandle?.cancel(); followUpExpiryHandle = null
             }
         }
+    }
+
+    private fun recordSageResponse(turnId: Long, text: String, input: ConversationInput) {
+        (conversationHistory as? ConversationHistoryStore)?.record(
+            ConversationEntry(UUID.randomUUID().toString(), turnId, ConversationSpeaker.SAGE, input, text, System.currentTimeMillis())
+        )
     }
 }
