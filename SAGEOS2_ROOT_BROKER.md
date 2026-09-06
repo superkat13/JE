@@ -2,37 +2,38 @@
 
 ## Goal
 
-Give Sage real root-backed system capability without running the large AI application, speech engines, browser/tooling, or network-facing code as uid 0.
+Give Sage real root-backed system capability while keeping the privileged process small and mechanically reliable. Separation is for crash containment and OS integrity, **not behavioral governance**.
+
+## Ownership boundary
+
+Sage Core is where Sage's identity, judgment, principles, preferences, and self-restrictions live. The root broker does not contain a behavioral denylist, does not interpret natural-language intent, and does not decide whether Sage ought to perform an action.
+
+The broker's job is technical: authenticate the Sage caller, decode a request, validate data shape/ranges, execute the requested privileged operation, and return the real result.
 
 ## Process split
 
-`Sage app/runtime` -> typed `RootBrokerRequest` -> `Sage root broker` -> Android/Linux privileged operation -> typed result + audit ID.
+`Sage app/runtime` -> `RootBrokerRequest` -> `Sage root broker` -> Android/Linux privileged operation -> result + audit ID.
 
-The broker is intentionally small. It should have no LLM, no speech recognition, no web client, no arbitrary plugin loader, and no UI.
+The broker has no LLM, speech recognition, web client, hidden prompt, or personality policy.
 
-## Initial privileged operations
+## Privileged capability surface
 
-- package install/uninstall/enable/disable for owner-selected packages
-- protected Android settings writes that legitimately require privileged authority
-- reboot/shutdown/recovery requests
-- file owner/group/mode operations for Sage-owned system integration
-- controlled system-service restart where needed for SageOS maintenance
-- root broker health/version query
+Convenience operations include package management, protected settings, reboot/power operations, file ownership/mode changes, system-service operations, and health/version queries.
 
-Operations should be represented as typed requests rather than string-concatenated shell commands. If a future operation truly requires shell execution, add a dedicated reviewed operation rather than creating a universal `run anything` RPC.
+The contract also includes a general root process operation represented as executable + argv + environment + working directory + timeout. This prevents Sage from being blocked merely because a future system operation was not predicted when the broker was first written. It intentionally avoids concatenated shell command strings because argv is more reliable and less error-prone.
 
-## Authorization and audit
+## Authentication and audit
 
 - Accept requests only from the Sage package/signing identity or platform-assigned UID.
-- Validate operation type and arguments before execution.
-- Return an audit ID for every request.
+- Reject malformed transport data, invalid ranges, impossible paths/arguments, and unauthenticated callers as infrastructure errors.
+- Return an audit ID for every accepted request.
 - Keep a bounded local audit log with timestamp, caller UID, operation, result code, and duration. Do not log secrets or large content payloads.
-- Deny unknown operations by default.
+- Unknown protocol versions/operation encodings fail explicitly. This is protocol integrity, not behavioral policy.
 
 ## Android integration destination
 
-The final SageOS image should start the broker from init and place it in its own SELinux domain. The client transport can be Binder/AIDL or a protected local socket; choose after the tablet image/build route is proven. The client contract in `sageos2/.../root/RootBroker.kt` stays transport-independent.
+The final SageOS image starts the broker from init and places it in its own SELinux domain. Client transport can be Binder/AIDL or a protected local socket; choose after the tablet image/build route is proven. The Kotlin client contract stays transport-independent.
 
 ## Development builds
 
-Normal APK builds contain only the client contract and an unavailable implementation. They must report root as unavailable until a real broker handshake succeeds. No Shizuku fallback.
+Normal APK builds contain only the client contract and an unavailable implementation. They report root unavailable until a real broker handshake succeeds. No Shizuku fallback and no fake root status.

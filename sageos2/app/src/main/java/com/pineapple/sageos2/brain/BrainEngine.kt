@@ -1,6 +1,13 @@
 package com.pineapple.sageos2.brain
 
-data class BrainRequest(val turnId: Long, val prompt: String)
+import com.pineapple.sageos2.identity.SageCoreSnapshot
+
+data class BrainRequest(
+    val turnId: Long,
+    val prompt: String,
+    val sageCore: SageCoreSnapshot? = null
+)
+
 data class BrainResponse(val turnId: Long, val text: String, val engine: String)
 
 interface BrainJob {

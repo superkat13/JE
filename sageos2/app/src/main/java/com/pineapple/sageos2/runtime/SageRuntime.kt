@@ -10,6 +10,8 @@ import com.pineapple.sageos2.core.SageEffect
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
+import com.pineapple.sageos2.identity.EmptySageCoreProvider
+import com.pineapple.sageos2.identity.SageCoreProvider
 import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.workflow.WorkflowEngine
@@ -22,16 +24,15 @@ class SageRuntime(
     private val workflows: WorkflowEngine,
     private val scheduler: RuntimeScheduler,
     private val observer: RuntimeObserver = NoOpRuntimeObserver,
+    private val sageCore: SageCoreProvider = EmptySageCoreProvider,
     private val echoGuardMs: Long = 450L
 ) {
     init {
         require(echoGuardMs >= 0L) { "echoGuardMs must be non-negative" }
         speech.attach(object : SpeechInputListener {
             override fun onWakeDetected(generation: Long) = submit(SageEvent.WakeDetected(generation))
-            override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) =
-                submit(SageEvent.TranscriptFinal(turnId, generation, text))
-            override fun onRecognitionError(turnId: Long, generation: Long, code: Int) =
-                submit(SageEvent.RecognitionFailed(turnId, generation, code))
+            override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
+            override fun onRecognitionError(turnId: Long, generation: Long, code: Int) = submit(SageEvent.RecognitionFailed(turnId, generation, code))
             override fun onSpeechDiagnostic(message: String) = observer.onDiagnostic("speech: $message")
         })
     }
@@ -56,9 +57,8 @@ class SageRuntime(
             is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
             is SageEffect.Speak -> speech.speak(effect.turnId, effect.text) {
                 val snapshot = coordinator.snapshot()
-                if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) {
-                    submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
-                } else submit(SageEvent.SpeechFinished(effect.turnId))
+                if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
+                else submit(SageEvent.SpeechFinished(effect.turnId))
             }
             is SageEffect.SpeakTransient -> speech.speakTransient(effect.text)
             is SageEffect.ExecuteFast -> {
@@ -72,7 +72,7 @@ class SageRuntime(
             }
             is SageEffect.QueryDeepBrain -> {
                 brainJob?.cancel()
-                brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt)) { result ->
+                brainJob = brain.start(BrainRequest(effect.turnId, effect.prompt, sageCore.current())) { result ->
                     result.fold(
                         onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, true)) },
                         onFailure = { submit(SageEvent.BrainFailed(effect.turnId, it.message ?: it::class.simpleName.orEmpty())) }

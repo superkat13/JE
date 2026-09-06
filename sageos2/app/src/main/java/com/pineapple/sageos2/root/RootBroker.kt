@@ -9,30 +9,33 @@ sealed interface RootOperation {
     data class SetFileMode(val path: String, val mode: Int) : RootOperation
     data class RestartSystemService(val serviceName: String) : RootOperation
     data class Power(val action: PowerAction) : RootOperation
+    data class ExecuteProcess(
+        val executable: String,
+        val args: List<String> = emptyList(),
+        val environment: Map<String, String> = emptyMap(),
+        val workingDirectory: String? = null,
+        val timeoutMs: Long = 30_000L
+    ) : RootOperation
     data object Health : RootOperation
 }
 
 enum class SettingNamespace { SYSTEM, SECURE, GLOBAL }
 enum class PowerAction { REBOOT, SHUTDOWN, REBOOT_RECOVERY }
 
-data class RootBrokerRequest(
-    val requestId: String,
-    val operation: RootOperation
-)
+data class RootBrokerRequest(val requestId: String, val operation: RootOperation)
 
 data class RootBrokerResult(
     val requestId: String,
     val success: Boolean,
     val code: String,
     val detail: String,
-    val auditId: String? = null
+    val auditId: String? = null,
+    val exitCode: Int? = null,
+    val stdout: String? = null,
+    val stderr: String? = null
 )
 
-data class RootBrokerHealth(
-    val available: Boolean,
-    val version: String? = null,
-    val detail: String
-)
+data class RootBrokerHealth(val available: Boolean, val version: String? = null, val detail: String)
 
 interface RootBrokerClient {
     fun health(): RootBrokerHealth
@@ -40,11 +43,7 @@ interface RootBrokerClient {
 }
 
 class UnavailableRootBrokerClient : RootBrokerClient {
-    override fun health() = RootBrokerHealth(
-        available = false,
-        detail = "SageOS root broker is not installed in this app-level build"
-    )
-
+    override fun health() = RootBrokerHealth(false, detail = "SageOS root broker is not installed in this app-level build")
     override fun execute(request: RootBrokerRequest) = RootBrokerResult(
         requestId = request.requestId,
         success = false,
