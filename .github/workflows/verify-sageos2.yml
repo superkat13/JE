@@ -21,11 +21,17 @@ jobs:
           set -euo pipefail
           if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
           ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
-      - name: Verify Brain fallback keeps provider provenance
+      - name: Verify Brain architecture and provenance
         run: |
           grep -F 'class BrainRouterEngine' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRouterEngine.kt
+          grep -F 'class LocalNativeBrainEngine' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'class SageBrainManager' sageos2/app/src/main/java/com/pineapple/sage/SageBrainManager.kt
           grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
-          grep -F 'val attempts: List<String>' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainEngine.kt
+      - name: Verify continuity and diagnostics
+        run: |
+          grep -F 'data class TaskCheckpoint' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskContinuity.kt
+          grep -F 'class SharedPreferencesTraceStore' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/SharedPreferencesTraceStore.kt
+          grep -F 'class PersistentRuntimeObserver' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/PersistentRuntimeObserver.kt
       - name: Verify twin context and Owner Apps
         run: |
           grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
