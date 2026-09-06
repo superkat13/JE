@@ -12,11 +12,18 @@ import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
 import com.pineapple.sageos2.identity.EmptySageCoreProvider
 import com.pineapple.sageos2.identity.SageCoreProvider
+import com.pineapple.sageos2.memory.ConversationEntry
+import com.pineapple.sageos2.memory.ConversationHistoryProvider
+import com.pineapple.sageos2.memory.ConversationHistoryStore
+import com.pineapple.sageos2.memory.ConversationInput
+import com.pineapple.sageos2.memory.ConversationSpeaker
+import com.pineapple.sageos2.memory.EmptyConversationHistoryProvider
 import com.pineapple.sageos2.memory.EmptyTwinMemoryProvider
 import com.pineapple.sageos2.memory.TwinMemoryProvider
 import com.pineapple.sageos2.speech.SpeechInputListener
 import com.pineapple.sageos2.speech.SpeechPort
 import com.pineapple.sageos2.workflow.WorkflowEngine
+import java.util.UUID
 
 class SageRuntime(
     private val coordinator: SageTurnCoordinator,
@@ -28,6 +35,7 @@ class SageRuntime(
     private val observer: RuntimeObserver = NoOpRuntimeObserver,
     private val sageCore: SageCoreProvider = EmptySageCoreProvider,
     private val twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
+    private val conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
     private val echoGuardMs: Long = 450L
 ) {
     init {
@@ -46,8 +54,27 @@ class SageRuntime(
 
     @Synchronized fun start() { submit(SageEvent.Start) }
     @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
-    @Synchronized fun submit(event: SageEvent) { process(coordinator.handle(event)) }
+
+    @Synchronized
+    fun submit(event: SageEvent) {
+        recordUserEvent(event)
+        process(coordinator.handle(event))
+    }
+
     fun snapshot() = coordinator.snapshot()
+
+    private fun recordUserEvent(event: SageEvent) {
+        val store = conversationHistory as? ConversationHistoryStore ?: return
+        when (event) {
+            is SageEvent.TextSubmitted -> if (event.text.isNotBlank()) store.record(
+                ConversationEntry(UUID.randomUUID().toString(), coordinator.snapshot().activeTurnId, ConversationSpeaker.OWNER, ConversationInput.TEXT, event.text.trim(), System.currentTimeMillis())
+            )
+            is SageEvent.TranscriptFinal -> if (event.text.isNotBlank()) store.record(
+                ConversationEntry(UUID.randomUUID().toString(), event.turnId, ConversationSpeaker.OWNER, ConversationInput.VOICE, event.text.trim(), System.currentTimeMillis())
+            )
+            else -> Unit
+        }
+    }
 
     private fun process(effects: List<SageEffect>) = effects.forEach { effect ->
         try { process(effect) } catch (t: Throwable) {
@@ -58,10 +85,18 @@ class SageRuntime(
     private fun process(effect: SageEffect) {
         when (effect) {
             is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
-            is SageEffect.Speak -> speech.speak(effect.turnId, effect.text) {
-                val snapshot = coordinator.snapshot()
-                if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
-                else submit(SageEvent.SpeechFinished(effect.turnId))
+            is SageEffect.Speak -> {
+                val beforeSpeak = coordinator.snapshot()
+                if (beforeSpeak.state == SageRuntimeState.SPEAKING) {
+                    (conversationHistory as? ConversationHistoryStore)?.record(
+                        ConversationEntry(UUID.randomUUID().toString(), effect.turnId, ConversationSpeaker.SAGE, ConversationInput.SYSTEM, effect.text, System.currentTimeMillis())
+                    )
+                }
+                speech.speak(effect.turnId, effect.text) {
+                    val snapshot = coordinator.snapshot()
+                    if (snapshot.activeTurnId == effect.turnId && snapshot.state == SageRuntimeState.ACKNOWLEDGING_WAKE) submit(SageEvent.WakeAcknowledgementSpoken(effect.turnId))
+                    else submit(SageEvent.SpeechFinished(effect.turnId))
+                }
             }
             is SageEffect.SpeakTransient -> speech.speakTransient(effect.text)
             is SageEffect.ExecuteFast -> {
@@ -80,7 +115,8 @@ class SageRuntime(
                         turnId = effect.turnId,
                         prompt = effect.prompt,
                         sageCore = sageCore.current(),
-                        twinMemory = twinMemory.snapshot()
+                        twinMemory = twinMemory.snapshot(),
+                        conversationHistory = conversationHistory.recent(24)
                     )
                 ) { result ->
                     result.fold(

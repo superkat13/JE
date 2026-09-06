@@ -1,13 +1,15 @@
 package com.pineapple.sageos2.brain
 
 import com.pineapple.sageos2.identity.SageCoreSnapshot
+import com.pineapple.sageos2.memory.ConversationHistorySnapshot
 import com.pineapple.sageos2.memory.TwinMemorySnapshot
 
 data class BrainRequest(
     val turnId: Long,
     val prompt: String,
     val sageCore: SageCoreSnapshot? = null,
-    val twinMemory: TwinMemorySnapshot? = null
+    val twinMemory: TwinMemorySnapshot? = null,
+    val conversationHistory: ConversationHistorySnapshot? = null
 )
 
 data class BrainResponse(
