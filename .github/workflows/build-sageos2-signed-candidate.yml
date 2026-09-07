@@ -11,6 +11,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: sageos2-signed-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   signed-candidate:
     runs-on: ubuntu-latest
@@ -82,8 +86,16 @@ jobs:
       - name: Full release build A with tests and lint
         shell: bash
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          set +e
           gradle -p sageos2 --no-daemon clean testDebugUnitTest lintRelease assembleRelease --stacktrace
+          status=$?
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo '===== FULL RELEASE LINT REPORT ====='
+            cat sageos2/app/build/intermediates/lint_intermediate_text_report/release/lintReportRelease/lint-results-release.txt 2>/dev/null || true
+            exit "$status"
+          fi
           cp sageos2/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sageos2-a-unsigned.apk
           test -s /tmp/sageos2-a-unsigned.apk
 
@@ -194,7 +206,6 @@ jobs:
             ! unzip -l "$apk" | grep -E 'lib/(x86|x86_64|armeabi-v7a)/'
           done
 
-          # Signed bytes can contain signing-block nondeterminism, so compare extracted file payloads.
           rm -rf /tmp/signed-a /tmp/signed-b
           mkdir -p /tmp/signed-a /tmp/signed-b
           unzip -q "$A" -d /tmp/signed-a
