@@ -24,5 +24,10 @@ class FastCommandParserTest {
         assertEquals(FastCommand.Volume(VolumeDirection.UP), parser.parse("volume up"))
         assertEquals(FastCommand.Volume(VolumeDirection.MUTE), parser.parse("mute"))
     }
+    @Test fun parsesDiagnosticShareWithoutBrain() {
+        assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share diagnostic report"))
+        assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share Sage diagnostic report"))
+        assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("send diagnostic report"))
+    }
     @Test fun rejectsUnknownCommand() = assertNull(parser.parse("explain gravity"))
 }
