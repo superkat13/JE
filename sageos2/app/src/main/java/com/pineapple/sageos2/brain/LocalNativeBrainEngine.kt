@@ -28,21 +28,24 @@ class LocalNativeBrainEngine(
             .onFailure { lastError = "native library unavailable: ${it.message ?: it::class.simpleName}" }
     }
 
+    /**
+     * Health is deliberately observational. It must never load a multi-gigabyte GGUF model or
+     * enter native inference merely because the owner opened the cockpit/status screen.
+     */
     override fun health(): BrainHealth {
         if (!libraryReady.get()) return BrainHealth(false, lastError ?: "native library unavailable")
         if (modelPath.isBlank()) return BrainHealth(false, "local model path is not configured")
         if (!File(modelPath).isFile) return BrainHealth(false, "local model file is missing: $modelPath")
-        val ready = ensureLoaded()
         return BrainHealth(
-            ready = ready,
-            detail = if (ready) "native Brain ready" else lastError ?: "native Brain model failed to load",
+            ready = true,
+            detail = if (loaded.get()) "native Brain ready" else "native Brain available; model load deferred until first deep turn",
             lastLatencyMs = lastLatency.get().takeIf { it >= 0L }
         )
     }
 
     override fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob {
         val cancelled = AtomicBoolean(false)
-        if (!libraryReady.get() || !ensureLoaded()) {
+        if (!libraryReady.get()) {
             callback(Result.failure(BrainFailureException(
                 kind = BrainFailureKind.UNAVAILABLE,
                 engineName = name,
@@ -63,6 +66,18 @@ class LocalNativeBrainEngine(
         }
 
         future = executor.submit {
+            if (cancelled.get()) return@submit
+            if (!ensureLoaded()) {
+                if (!cancelled.get()) {
+                    callback(Result.failure(BrainFailureException(
+                        kind = BrainFailureKind.UNAVAILABLE,
+                        engineName = name,
+                        message = lastError ?: "local native Brain model failed to load"
+                    )))
+                }
+                return@submit
+            }
+
             val started = System.nanoTime()
             try {
                 val systemPrompt = request.twinContextText.orEmpty()
