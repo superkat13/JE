@@ -5,7 +5,8 @@ data class OwnerAppRecord(
     val displayName: String,
     val aliases: List<String> = emptyList(),
     val purpose: String = "",
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val startupProcedure: String = ""
 ) {
     init {
         require(packageName.isNotBlank())
