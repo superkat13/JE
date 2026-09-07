@@ -13,6 +13,7 @@ import android.os.Bundle
 import android.text.InputType
 import android.view.View
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
@@ -29,12 +30,15 @@ import com.pineapple.sageos2.memory.ConversationSpeaker
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
+import com.pineapple.sageos2.workflow.ChickenTonightModule
+import com.pineapple.sageos2.workflow.ChickenTonightScope
+import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 
 open class MainActivity : Activity() {
-    private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES }
+    private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }
 
     private lateinit var host: SageRuntimeHost
     private lateinit var wakeProfiles: SharedPreferencesWakeProfileStore
@@ -88,7 +92,8 @@ open class MainActivity : Activity() {
             Panel.TASKS to "Tasks",
             Panel.DIAGNOSTICS to "Diagnostics",
             Panel.APPS to "Owner Apps",
-            Panel.MODES to "Modes"
+            Panel.MODES to "Modes",
+            Panel.WORKFLOWS to "Workflows"
         ).forEach { (panel, label) ->
             navRow.addView(Button(this).apply {
                 text = label
@@ -121,6 +126,7 @@ open class MainActivity : Activity() {
             Panel.DIAGNOSTICS -> showDiagnostics()
             Panel.APPS -> showOwnerApps()
             Panel.MODES -> showModes()
+            Panel.WORKFLOWS -> showWorkflows()
         }
         renderStatus()
     }
@@ -187,7 +193,7 @@ open class MainActivity : Activity() {
                 )
                 host.traces.record("owner_core", "Sage Core saved revision=${saved.revision}")
                 Toast.makeText(this@MainActivity, "Saved Sage Core revision ${saved.revision}", Toast.LENGTH_SHORT).show()
-                showCorePanelRefresh()
+                showPanel(Panel.CORE)
             }
         })
         form.addView(Button(this).apply {
@@ -204,7 +210,7 @@ open class MainActivity : Activity() {
                     val restored = host.core.restore(previous.revision)
                     host.traces.record("owner_core", "Sage Core restored from revision=${previous.revision} as revision=${restored?.revision}")
                     Toast.makeText(this@MainActivity, "Restored revision ${previous.revision}", Toast.LENGTH_SHORT).show()
-                    showCorePanelRefresh()
+                    showPanel(Panel.CORE)
                 }
             }
         })
@@ -216,12 +222,6 @@ open class MainActivity : Activity() {
             }
         })
         body.addView(scroll(form))
-    }
-
-    private fun showCorePanelRefresh() {
-        body.removeAllViews()
-        showCore()
-        renderStatus()
     }
 
     private fun showHealth() {
@@ -391,20 +391,20 @@ open class MainActivity : Activity() {
                         val name = displayName.text.toString().trim()
                         if (pkg.isEmpty() || name.isEmpty()) {
                             Toast.makeText(this, "Package name and display name are required", Toast.LENGTH_SHORT).show()
-                            return@setOnClickListener
-                        }
-                        host.ownerApps.upsert(
-                            OwnerAppRecord(
-                                packageName = pkg,
-                                displayName = name,
-                                aliases = aliases(aliases.text.toString()),
-                                purpose = purpose.text.toString().trim(),
-                                enabled = existing?.enabled ?: true
+                        } else {
+                            host.ownerApps.upsert(
+                                OwnerAppRecord(
+                                    packageName = pkg,
+                                    displayName = name,
+                                    aliases = aliases(aliases.text.toString()),
+                                    purpose = purpose.text.toString().trim(),
+                                    enabled = existing?.enabled ?: true
+                                )
                             )
-                        )
-                        host.traces.record("owner_apps", "Owner app saved package=$pkg")
-                        dialog.dismiss()
-                        showPanel(Panel.APPS)
+                            host.traces.record("owner_apps", "Owner app saved package=$pkg")
+                            dialog.dismiss()
+                            showPanel(Panel.APPS)
+                        }
                     }
                 }
                 dialog.show()
@@ -436,6 +436,108 @@ open class MainActivity : Activity() {
                     showPanel(Panel.MODES)
                 }
             })
+        }
+        body.addView(scroll(content))
+    }
+
+    private fun showWorkflows() {
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        val current = host.chickenTonightScope.current()
+        content.addView(sectionTitle("Chicken Tonight"))
+        content.addView(TextView(this).apply {
+            text = "The phrase trigger stays silent. A configured, unexpired scope is required before the workflow can become ACTIVE. This screen defines scope only; it does not perform an assessment by itself."
+            textSize = 14f
+        })
+        content.addView(info("Scope status", when {
+            current == null -> "NOT CONFIGURED"
+            current.isExpired() -> "EXPIRED"
+            current.isUsable() -> "READY"
+            else -> "INCOMPLETE"
+        }))
+
+        val scopeId = editor("Scope ID", current?.scopeId.orEmpty(), 1)
+        val auth = editor("Authorization reference", current?.authorizationReference.orEmpty(), 2)
+        val target = editor("Target / environment summary", current?.targetSummary.orEmpty(), 3)
+        val hoursRemaining = current?.expiresAtMs?.let { expiry ->
+            ((expiry - System.currentTimeMillis()).coerceAtLeast(0L) / 3_600_000L).toString()
+        }.orEmpty()
+        val expiryHours = editor("Expiry in hours from save • blank = no expiry", hoursRemaining, 1).apply {
+            inputType = InputType.TYPE_CLASS_NUMBER
+        }
+        val notes = editor("Scope notes", current?.notes.orEmpty(), 4)
+        listOf(scopeId, auth, target, expiryHours, notes).forEach(content::addView)
+
+        content.addView(TextView(this).apply { text = "Allowed read-only evidence modules"; textSize = 17f; setPadding(0, dp(10), 0, dp(4)) })
+        val moduleChecks = ChickenTonightModule.entries.associateWith { module ->
+            CheckBox(this).apply {
+                text = module.displayName()
+                isChecked = current?.allowedModules?.contains(module) == true || (current == null && module == ChickenTonightModule.EVIDENCE_REPORT)
+                content.addView(this)
+            }
+        }
+
+        content.addView(Button(this).apply {
+            text = "Save Chicken Tonight scope"
+            setOnClickListener {
+                val id = scopeId.text.toString().trim()
+                val authorization = auth.text.toString().trim()
+                val targetSummary = target.text.toString().trim()
+                val modules = moduleChecks.filterValues { it.isChecked }.keys
+                if (id.isEmpty() || authorization.isEmpty() || targetSummary.isEmpty() || modules.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Scope ID, authorization, target, and at least one module are required", Toast.LENGTH_LONG).show()
+                } else {
+                    val hours = expiryHours.text.toString().trim().toLongOrNull()
+                    val expiresAt = hours?.takeIf { it > 0 }?.let { System.currentTimeMillis() + it * 3_600_000L }
+                    val scope = ChickenTonightScope(
+                        scopeId = id,
+                        authorizationReference = authorization,
+                        targetSummary = targetSummary,
+                        expiresAtMs = expiresAt,
+                        allowedModules = modules,
+                        notes = notes.text.toString().trim()
+                    )
+                    host.chickenTonightScope.save(scope)
+                    host.traces.record("workflow_scope", "Chicken Tonight scope saved id=$id modules=${modules.joinToString { it.name }}")
+                    Toast.makeText(this@MainActivity, "Chicken Tonight scope saved", Toast.LENGTH_SHORT).show()
+                    showPanel(Panel.WORKFLOWS)
+                }
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Start scoped Chicken Tonight workflow"
+            isEnabled = current?.isUsable() == true
+            setOnClickListener {
+                host.submitText("Do you feel like chicken tonight?")
+                showPanel(Panel.TASKS)
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Clear Chicken Tonight scope"
+            isEnabled = current != null
+            setOnClickListener {
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Clear Chicken Tonight scope?")
+                    .setMessage("This removes the stored scope. It does not delete prior diagnostic or task history.")
+                    .setNegativeButton("Keep", null)
+                    .setPositiveButton("Clear") { _, _ ->
+                        host.chickenTonightScope.clear()
+                        host.traces.record("workflow_scope", "Chicken Tonight scope cleared")
+                        showPanel(Panel.WORKFLOWS)
+                    }
+                    .show()
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Copy scope JSON"
+            isEnabled = current != null
+            setOnClickListener {
+                host.chickenTonightScope.exportJson()?.let { copyToClipboard("Chicken Tonight scope", it) }
+            }
+        })
+
+        content.addView(sectionTitle("Always excluded"))
+        SharedPreferencesChickenTonightScopeStore.NON_NEGOTIABLE_EXCLUSIONS.forEach { exclusion ->
+            content.addView(TextView(this).apply { text = "• $exclusion"; textSize = 14f })
         }
         body.addView(scroll(content))
     }
@@ -498,6 +600,7 @@ open class MainActivity : Activity() {
         .distinct()
 
     private fun Capability.displayName(): String = name.lowercase().split('_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
+    private fun ChickenTonightModule.displayName(): String = name.lowercase().split('_').joinToString(" ") { it.replaceFirstChar(Char::uppercase) }
 
     private fun copyToClipboard(label: String, value: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
