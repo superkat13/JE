@@ -83,7 +83,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gradle -p sageos2 --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+          gradle -p sageos2 --no-daemon clean testDebugUnitTest lintRelease assembleRelease --stacktrace
           cp sageos2/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sageos2-a-unsigned.apk
           test -s /tmp/sageos2-a-unsigned.apk
 
@@ -92,7 +92,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf sageos2/app/build sageos2/.gradle sageos2/app/.cxx sageos2/.cxx
-          gradle -p sageos2 --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+          gradle -p sageos2 --no-daemon clean testDebugUnitTest lintRelease assembleRelease --stacktrace
           cp sageos2/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sageos2-b-unsigned.apk
           test -s /tmp/sageos2-b-unsigned.apk
 
