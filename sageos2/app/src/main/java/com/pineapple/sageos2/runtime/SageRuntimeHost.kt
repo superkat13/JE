@@ -30,8 +30,8 @@ import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
+import com.pineapple.sageos2.speech.RemoteWakeWordEngine
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
-import com.pineapple.sageos2.speech.SherpaWakeWordEngine
 import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
 import com.pineapple.sageos2.workflow.WorkflowRegistryEngine
 import java.io.File
@@ -96,7 +96,7 @@ class SageRuntimeHost private constructor(context: Context) {
     private val localModel = File(File(appContext.filesDir, "brain"), "sage-brain.gguf")
     private val localBrain = LocalNativeBrainEngine(localModel.absolutePath)
     private val brain = BrainRouterEngine(listOf(localBrain))
-    private val wakeEngine = SherpaWakeWordEngine(appContext)
+    private val wakeEngine = RemoteWakeWordEngine(appContext)
     private val speech = AndroidSpeechPort(appContext, wakeEngine, wakeProfiles)
     private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
     private val fastActions = AndroidFastActionEngine(controller)
