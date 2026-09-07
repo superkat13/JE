@@ -7,6 +7,7 @@ sealed interface FastCommand {
     data object Recents : FastCommand
     data object Notifications : FastCommand
     data object QuickSettings : FastCommand
+    data object ShareDiagnosticReport : FastCommand
     data class Scroll(val direction: Direction) : FastCommand
     data class Tap(val x: Float, val y: Float) : FastCommand
     data class Swipe(val direction: Direction) : FastCommand
@@ -26,6 +27,9 @@ class FastCommandParser {
         if (value == "recents" || value == "recent apps" || value == "show recents") return FastCommand.Recents
         if (value == "show notifications" || value == "notifications") return FastCommand.Notifications
         if (value == "quick settings" || value == "show quick settings") return FastCommand.QuickSettings
+        if (value == "share diagnostic report" || value == "share sage diagnostic report" || value == "send diagnostic report") {
+            return FastCommand.ShareDiagnosticReport
+        }
 
         Regex("scroll (up|down|left|right)").matchEntire(value)?.let {
             return FastCommand.Scroll(Direction.valueOf(it.groupValues[1].uppercase()))
