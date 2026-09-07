@@ -5,6 +5,7 @@ import java.util.concurrent.Executors
 import java.util.concurrent.Future
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 class LocalNativeBrainEngine(
     private val modelPath: String,
@@ -22,6 +23,7 @@ class LocalNativeBrainEngine(
     private val loadAttempted = AtomicBoolean(false)
     private val loaded = AtomicBoolean(false)
     private val lastLatency = AtomicLong(-1L)
+    private val inFlightStage = AtomicReference<BrainProgressStage?>(null)
     @Volatile private var lastError: String? = null
 
     /**
@@ -31,17 +33,25 @@ class LocalNativeBrainEngine(
     override fun health(): BrainHealth {
         if (modelPath.isBlank()) return BrainHealth(false, "local model path is not configured")
         if (!File(modelPath).isFile) return BrainHealth(false, "local model file is missing: $modelPath")
-        if (libraryLoadAttempted.get() && !libraryReady.get()) {
+        val progress = inFlightStage.get()
+        if (libraryLoadAttempted.get() && !libraryReady.get() && progress == null) {
             return BrainHealth(false, lastError ?: "native library unavailable")
+        }
+        if (loadAttempted.get() && !loaded.get() && progress == null) {
+            return BrainHealth(false, lastError ?: "local model did not finish loading")
         }
         return BrainHealth(
             ready = true,
             detail = when {
+                progress == BrainProgressStage.LOADING_MODEL -> "local model is loading"
+                progress == BrainProgressStage.GENERATING -> "local Brain is writing a response"
+                progress == BrainProgressStage.PREPARING -> "local Brain is preparing"
                 loaded.get() -> "native Brain ready"
                 libraryReady.get() -> "native Brain library ready; model load deferred until first deep turn"
                 else -> "native Brain available; native load deferred until first deep turn"
             },
-            lastLatencyMs = lastLatency.get().takeIf { it >= 0L }
+            lastLatencyMs = lastLatency.get().takeIf { it >= 0L },
+            progressStage = progress
         )
     }
 
@@ -58,32 +68,36 @@ class LocalNativeBrainEngine(
             }
         }
 
+        reportProgress(request, BrainProgressStage.PREPARING)
         future = executor.submit {
-            if (cancelled.get()) return@submit
-            if (!ensureLibraryReady()) {
-                if (!cancelled.get()) {
-                    callback(Result.failure(BrainFailureException(
-                        kind = BrainFailureKind.UNAVAILABLE,
-                        engineName = name,
-                        message = lastError ?: "local native Brain library is unavailable"
-                    )))
-                }
-                return@submit
-            }
-            if (cancelled.get()) return@submit
-            if (!ensureLoaded()) {
-                if (!cancelled.get()) {
-                    callback(Result.failure(BrainFailureException(
-                        kind = BrainFailureKind.UNAVAILABLE,
-                        engineName = name,
-                        message = lastError ?: "local native Brain model failed to load"
-                    )))
-                }
-                return@submit
-            }
-
-            val started = System.nanoTime()
             try {
+                if (cancelled.get()) return@submit
+                if (!loaded.get()) reportProgress(request, BrainProgressStage.LOADING_MODEL)
+                if (!ensureLibraryReady()) {
+                    if (!cancelled.get()) {
+                        callback(Result.failure(BrainFailureException(
+                            kind = BrainFailureKind.UNAVAILABLE,
+                            engineName = name,
+                            message = lastError ?: "local native Brain library is unavailable"
+                        )))
+                    }
+                    return@submit
+                }
+                if (cancelled.get()) return@submit
+                if (!ensureLoaded()) {
+                    if (!cancelled.get()) {
+                        callback(Result.failure(BrainFailureException(
+                            kind = BrainFailureKind.UNAVAILABLE,
+                            engineName = name,
+                            message = lastError ?: "local native Brain model failed to load"
+                        )))
+                    }
+                    return@submit
+                }
+
+                if (cancelled.get()) return@submit
+                reportProgress(request, BrainProgressStage.GENERATING)
+                val started = System.nanoTime()
                 val systemPrompt = request.twinContextText.orEmpty()
                 val userPrompt = request.prompt
                 val text = bridge.generate(
@@ -130,6 +144,8 @@ class LocalNativeBrainEngine(
                         message = "native Brain failed: ${lastError.orEmpty()} [stage=${safeStage()}]"
                     )))
                 }
+            } finally {
+                inFlightStage.set(null)
             }
         }
         return job
@@ -167,6 +183,11 @@ class LocalNativeBrainEngine(
     private fun safeStage() = if (libraryReady.get()) runCatching { bridge.stage().trim() }.getOrDefault("") else "not_loaded"
     private inline fun safeLong(block: () -> Long) = if (libraryReady.get()) runCatching(block).getOrDefault(-1L) else -1L
     private inline fun safeInt(block: () -> Int) = if (libraryReady.get()) runCatching(block).getOrDefault(-1) else -1
+
+    private fun reportProgress(request: BrainRequest, stage: BrainProgressStage) {
+        inFlightStage.set(stage)
+        runCatching { request.onProgress(BrainProgress(request.turnId, stage)) }
+    }
 
     private fun completedJob(turnId: Long) = object : BrainJob {
         override val turnId: Long = turnId

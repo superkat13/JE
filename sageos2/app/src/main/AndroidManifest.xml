@@ -26,14 +26,21 @@
         </intent>
     </queries>
 
-    <application android:allowBackup="false" android:label="Sage" android:supportsRtl="true">
+    <application
+        android:allowBackup="false"
+        android:label="Sage"
+        android:supportsRtl="true"
+        android:theme="@style/Theme.Sage">
         <activity android:name="com.pineapple.sageos2.SageLaunchActivity" android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name="com.pineapple.sageos2.MainActivity" android:exported="false" />
+        <activity
+            android:name="com.pineapple.sageos2.MainActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustResize" />
         <activity android:name="com.pineapple.sageos2.brain.BrainModelImportActivity" android:exported="false" />
         <activity android:name="com.pineapple.sage.SageAssistActivity" android:exported="true">
             <intent-filter>

@@ -45,7 +45,7 @@ This file exists so the project can survive a lost conversation, model change, o
 
 - Clean Kotlin Android project under `sageos2/`.
 - Application ID remains `com.pineapple.sagecommander.stable` for in-place migration.
-- Current SageOS 2 versionCode is `200`, versionName `2.0.0`, targetSdk 35, arm64 only.
+- Current SageOS 2 versionCode is `203`, versionName `2.0.0`, targetSdk 35, arm64 only. This remains the same SageOS 2 lineage; versionCode is only Android's in-place update counter.
 - Single `SageTurnCoordinator` owns turn/listening state.
 - Listening modes are OFF, WAKE_ONLY, COMMAND, FOLLOW_UP.
 - Typed messages queue while a turn is busy.
@@ -70,7 +70,7 @@ This file exists so the project can survive a lost conversation, model change, o
 - Root transport source exists as a small authenticated `sage_rootd` service with init/SELinux policy and an app-side socket client.
 - Root capability is **not active on a normal APK install**; it requires the SageOS platform/system-image path.
 - Persistent task checkpoints and safe reboot/crash recovery exist; recovery never blindly replays the last side effect.
-- The owner cockpit now includes Chat, Sage Core, Health, Tasks, Diagnostics, Owner Apps, Modes, and Workflows.
+- Chat is the Sage home experience. Sage Core, Local Brain/capability health, Tasks, Diagnostics, Owner Apps, Modes, and Workflows are retained under Settings/Advanced rather than exposed as a developer console across the home screen.
 - Chicken Tonight uses an exact silent trigger and requires a stored usable scope before becoming active.
 - Privacy-conscious diagnostic report generation exists and omits conversation contents, Sage Core contents, owner-app details, and Chicken Tonight authorization details by default.
 - Legacy Android authority component names are preserved where needed for signed in-place migration from Sage 1.x.

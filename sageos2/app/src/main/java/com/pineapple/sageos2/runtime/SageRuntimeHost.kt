@@ -6,6 +6,7 @@ import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
 import com.pineapple.sageos2.brain.BrainRouterEngine
+import com.pineapple.sageos2.brain.BrainProgress
 import com.pineapple.sageos2.brain.LocalNativeBrainEngine
 import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.capability.Capability
@@ -40,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 
 interface SageRuntimeListener {
     fun onStateChanged(snapshot: SageRuntimeSnapshot) = Unit
+    fun onBrainProgress(progress: BrainProgress) = Unit
     fun onTextResponse(turnId: Long, text: String) = Unit
 }
 
@@ -86,6 +88,10 @@ class SageRuntimeHost private constructor(context: Context) {
         override fun onStateChanged(snapshot: SageRuntimeSnapshot) {
             persistentObserver.onStateChanged(snapshot)
             listeners.forEach { it.onStateChanged(snapshot) }
+        }
+        override fun onBrainProgress(progress: BrainProgress) {
+            persistentObserver.onBrainProgress(progress)
+            listeners.forEach { it.onBrainProgress(progress) }
         }
         override fun onTextResponse(turnId: Long, text: String) {
             persistentObserver.onTextResponse(turnId, text)

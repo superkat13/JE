@@ -29,6 +29,7 @@ The twin model is not blind imitation. Sage can reason, notice conflicts, ask wh
 17. Diagnostics are part of the architecture, not an afterthought.
 18. A feature is not complete merely because it compiles. It needs automated coverage and physical-tablet acceptance where hardware/runtime behavior is involved.
 19. The repository is the continuity source of truth. A lost chat must not strand the project.
+20. Chat is Sage's home. Owner-facing screens use human language and present Sage before runtime machinery; Core, diagnostics, capabilities, workflows, scopes, and engineering controls live under Settings/Advanced.
 
 ## Virtual-twin model
 

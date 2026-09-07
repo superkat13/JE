@@ -8,20 +8,27 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.text.InputType
+import android.view.Gravity
 import android.view.View
+import android.view.inputmethod.EditorInfo
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
-import android.widget.HorizontalScrollView
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.pineapple.sage.SageVoiceService
 import com.pineapple.sageos2.apps.OwnerAppRecord
+import com.pineapple.sageos2.brain.BrainProgress
 import com.pineapple.sageos2.capability.Capability
 import com.pineapple.sageos2.capability.CapabilityStatus
 import com.pineapple.sageos2.continuity.TaskState
@@ -38,29 +45,56 @@ import java.util.Date
 import java.util.Locale
 
 open class MainActivity : Activity() {
-    private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }
+    private enum class Panel { CHAT, SETTINGS, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }
 
     private lateinit var host: SageRuntimeHost
     private lateinit var wakeProfiles: SharedPreferencesWakeProfileStore
+    private lateinit var title: TextView
     private lateinit var status: TextView
+    private lateinit var headerAction: Button
     private lateinit var body: LinearLayout
-    private var conversation: TextView? = null
+    private var conversation: LinearLayout? = null
+    private var chatScroll: ScrollView? = null
+    private var chatActivity: TextView? = null
     private var input: EditText? = null
+    private var activeBrainProgress: BrainProgress? = null
     private var currentPanel = Panel.CHAT
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private var pulseFrame = 0
+    private val pulse = object : Runnable {
+        override fun run() {
+            if (currentPanel != Panel.CHAT || chatActivity?.visibility != View.VISIBLE) return
+            pulseFrame = (pulseFrame + 1) % 4
+            renderChatActivity(schedulePulse = false)
+            if (chatActivity?.visibility == View.VISIBLE) uiHandler.postDelayed(this, 550L)
+        }
+    }
 
     private val listener = object : SageRuntimeListener {
-        override fun onStateChanged(snapshot: SageRuntimeSnapshot) = runOnUiThread { renderLiveState() }
-        override fun onTextResponse(turnId: Long, text: String) = runOnUiThread { renderLiveState() }
+        override fun onStateChanged(snapshot: SageRuntimeSnapshot) = runOnUiThread {
+            if (snapshot.state != com.pineapple.sageos2.core.SageRuntimeState.THINKING_DEEP) activeBrainProgress = null
+            renderLiveState()
+        }
+        override fun onBrainProgress(progress: BrainProgress) = runOnUiThread {
+            if (progress.turnId == host.snapshot().activeTurnId) activeBrainProgress = progress
+            renderLiveState()
+        }
+        override fun onTextResponse(turnId: Long, text: String) = runOnUiThread {
+            activeBrainProgress = null
+            renderLiveState()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.statusBarColor = COLOR_BACKGROUND
+        window.navigationBarColor = COLOR_BACKGROUND
         host = SageRuntimeHost.get(this)
         wakeProfiles = SharedPreferencesWakeProfileStore(this)
         buildUi()
+        showPanel(Panel.CHAT)
         requestRuntimePermissionsIfNeeded()
         host.start()
-        showPanel(Panel.CHAT)
     }
 
     override fun onStart() {
@@ -70,6 +104,7 @@ open class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        uiHandler.removeCallbacks(pulse)
         host.removeListener(listener)
         super.onStop()
     }
@@ -77,37 +112,65 @@ open class MainActivity : Activity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(14), dp(18), dp(14))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(COLOR_BACKGROUND)
         }
-        root.addView(TextView(this).apply { text = "SageOS 2.0"; textSize = 28f })
-        root.addView(TextView(this).apply { text = "One Sage. One runtime. Owner control."; textSize = 16f })
-        status = TextView(this).apply { textSize = 14f; setPadding(0, dp(8), 0, dp(8)) }
-        root.addView(status)
 
-        val navRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
-        listOf(
-            Panel.CHAT to "Chat",
-            Panel.CORE to "Sage Core",
-            Panel.HEALTH to "Health",
-            Panel.TASKS to "Tasks",
-            Panel.DIAGNOSTICS to "Diagnostics",
-            Panel.APPS to "Owner Apps",
-            Panel.MODES to "Modes",
-            Panel.WORKFLOWS to "Workflows"
-        ).forEach { (panel, label) ->
-            navRow.addView(Button(this).apply {
-                text = label
-                setOnClickListener { showPanel(panel) }
-            })
+        val header = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            setPadding(dp(2), dp(2), dp(2), dp(12))
         }
-        root.addView(HorizontalScrollView(this).apply {
-            isHorizontalScrollBarEnabled = false
-            addView(navRow)
-        })
+        header.addView(TextView(this).apply {
+            text = "S"
+            textSize = 23f
+            setTextColor(COLOR_BACKGROUND)
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            background = rounded(COLOR_SAGE, 28)
+        }, LinearLayout.LayoutParams(dp(52), dp(52)))
+
+        val identity = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(12), 0, dp(8), 0)
+        }
+        title = TextView(this).apply {
+            text = "Sage"
+            textSize = 25f
+            setTextColor(COLOR_TEXT)
+            typeface = Typeface.DEFAULT_BOLD
+        }
+        status = TextView(this).apply {
+            text = "Here with you"
+            textSize = 14f
+            setTextColor(COLOR_MUTED)
+        }
+        identity.addView(title)
+        identity.addView(status)
+        header.addView(identity, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+
+        headerAction = Button(this).apply {
+            text = "Settings"
+            contentDescription = "Open Sage settings"
+            isAllCaps = false
+            textSize = 14f
+            setTextColor(COLOR_TEXT)
+            background = rounded(COLOR_SURFACE, 18, COLOR_BORDER)
+            setPadding(dp(14), 0, dp(14), 0)
+        }
+        header.addView(headerAction, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.WRAP_CONTENT,
+            dp(44)
+        ))
+        root.addView(header)
+        root.addView(View(this).apply { setBackgroundColor(COLOR_BORDER) }, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(1)
+        ))
 
         body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(8), 0, 0)
+            setPadding(0, dp(10), 0, 0)
         }
         root.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
@@ -116,10 +179,14 @@ open class MainActivity : Activity() {
     private fun showPanel(panel: Panel) {
         currentPanel = panel
         conversation = null
+        chatScroll = null
+        chatActivity = null
         input = null
+        uiHandler.removeCallbacks(pulse)
         body.removeAllViews()
         when (panel) {
             Panel.CHAT -> showChat()
+            Panel.SETTINGS -> showSettings()
             Panel.CORE -> showCore()
             Panel.HEALTH -> showHealth()
             Panel.TASKS -> showTasks()
@@ -128,39 +195,104 @@ open class MainActivity : Activity() {
             Panel.MODES -> showModes()
             Panel.WORKFLOWS -> showWorkflows()
         }
+        renderChrome()
         renderStatus()
     }
 
     private fun showChat() {
-        conversation = TextView(this).apply { textSize = 18f; setPadding(dp(8), dp(8), dp(8), dp(8)) }
-        val scroll = ScrollView(this).apply { addView(conversation) }
-        body.addView(scroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+        conversation = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), dp(8), dp(2), dp(8))
+        }
+        chatScroll = ScrollView(this).apply {
+            isFillViewport = true
+            addView(conversation)
+        }
+        body.addView(chatScroll, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
+
+        chatActivity = TextView(this).apply {
+            textSize = 14f
+            setTextColor(COLOR_SAGE)
+            setPadding(dp(14), dp(10), dp(14), dp(10))
+            background = rounded(COLOR_SURFACE, 18, COLOR_BORDER)
+            visibility = View.GONE
+        }
+        body.addView(chatActivity, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(0, dp(4), 0, dp(8)) })
 
         input = EditText(this).apply {
             hint = "Message Sage"
-            textSize = 18f
-            maxLines = 5
+            setHintTextColor(COLOR_MUTED)
+            setTextColor(COLOR_TEXT)
+            textSize = 17f
+            minLines = 1
+            maxLines = 4
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            imeOptions = EditorInfo.IME_ACTION_SEND
+            background = rounded(COLOR_SURFACE, 20, COLOR_BORDER)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setOnEditorActionListener { _, actionId, _ ->
+                if (actionId == EditorInfo.IME_ACTION_SEND) {
+                    submitChatInput()
+                    true
+                } else false
+            }
         }
-        body.addView(input)
+        body.addView(input, LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ))
 
-        val controls = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        val controls = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.END
+            setPadding(0, dp(8), 0, 0)
+        }
+        controls.addView(Button(this).apply {
+            text = "Talk"
+            contentDescription = "Talk to Sage"
+            styleChatButton(primary = false)
+            setOnClickListener {
+                host.pushToTalk()
+                renderLiveState()
+            }
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
         controls.addView(Button(this).apply {
             text = "Send"
-            setOnClickListener {
-                val text = input?.text?.toString()?.trim().orEmpty()
-                if (text.isNotEmpty()) {
-                    input?.setText("")
-                    host.submitText(text)
-                    renderLiveState()
-                }
-            }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-        controls.addView(Button(this).apply {
-            text = "Push to talk"
-            setOnClickListener { host.pushToTalk(); renderLiveState() }
-        }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            contentDescription = "Send message to Sage"
+            styleChatButton(primary = true)
+            setOnClickListener { submitChatInput() }
+        }, LinearLayout.LayoutParams(0, dp(48), 1f))
         body.addView(controls)
         renderConversation()
+        renderChatActivity()
+    }
+
+    private fun showSettings() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), 0, dp(2), dp(18))
+        }
+        content.addView(sectionTitle("Sage settings"))
+        content.addView(TextView(this).apply {
+            text = "Chat stays home. Identity, tools, continuity, and engineering details live here when you need them."
+            textSize = 15f
+            setTextColor(COLOR_MUTED)
+            setPadding(0, 0, 0, dp(12))
+        })
+        content.addView(settingsGroup("Sage"))
+        content.addView(settingsCard("Sage Core", "Her identity, preferences, principles, and revision history", Panel.CORE))
+        content.addView(settingsCard("My apps", "Apps Sage knows, including your names and purposes for them", Panel.APPS))
+        content.addView(settingsCard("Voice & modes", "Wake profiles and facets of the same Sage", Panel.MODES))
+        content.addView(settingsGroup("Continuity"))
+        content.addView(settingsCard("Tasks", "Active and safely recoverable work", Panel.TASKS))
+        content.addView(settingsCard("Workflows & scopes", "Owner-defined workflows, including Chicken Tonight", Panel.WORKFLOWS))
+        content.addView(settingsGroup("Advanced"))
+        content.addView(settingsCard("Local Brain & capabilities", "Model status, device authority, and capability truth", Panel.HEALTH))
+        content.addView(settingsCard("Diagnostics", "Technical evidence for troubleshooting", Panel.DIAGNOSTICS))
+        body.addView(scroll(content))
     }
 
     private fun showCore() {
@@ -226,12 +358,19 @@ open class MainActivity : Activity() {
 
     private fun showHealth() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(sectionTitle("Runtime health"))
+        content.addView(sectionTitle("Local Brain & capabilities"))
         val brain = host.brainStatus()
         val wake = host.wakeStatus()
         content.addView(info("Brain", if (brain.ready) "READY" else brain.detail))
         content.addView(info("Offline wake", if (wake.ready) "READY" else wake.detail))
         content.addView(info("Runtime state", host.snapshot().state.toString()))
+        content.addView(Button(this).apply {
+            text = "Open local Brain model"
+            isAllCaps = false
+            setOnClickListener {
+                startActivity(Intent(this@MainActivity, com.pineapple.sageos2.brain.BrainModelImportActivity::class.java))
+            }
+        })
         content.addView(sectionTitle("Authority / capability truth"))
         val states = host.capabilityStatus().states
         Capability.entries.forEach { capability ->
@@ -544,39 +683,200 @@ open class MainActivity : Activity() {
 
     private fun renderLiveState() {
         renderStatus()
-        if (currentPanel == Panel.CHAT) renderConversation()
+        if (currentPanel == Panel.CHAT) {
+            renderConversation()
+            renderChatActivity()
+        }
     }
 
     private fun renderStatus() {
         val snapshot = host.snapshot()
-        val brain = host.brainStatus()
-        val wake = host.wakeStatus()
-        val capabilities = host.capabilityStatus().states
-        status.text = buildString {
-            append("${snapshot.state} • ${snapshot.listeningMode}")
-            append("   Brain:${if (brain.ready) "OK" else "!"}")
-            append(" Wake:${if (wake.ready) "OK" else "!"}")
-            append(" Root:${if (capabilities[Capability.SAGEOS_ROOT_BROKER] == CapabilityStatus.ACTIVE) "ON" else "OFF"}")
-            append(" Forge:${if (capabilities[Capability.FORGE] == CapabilityStatus.ACTIVE) "ON" else "OFF"}")
-        }
+        status.text = if (currentPanel == Panel.CHAT) {
+            val progress = activeBrainProgress?.stage ?: host.brainStatus().progressStage
+            SageChatPresentation.present(snapshot, progress).presence
+        } else panelSubtitle(currentPanel)
     }
 
     private fun renderConversation() {
-        conversation?.text = host.recentConversation(60).joinToString("\n\n") { entry ->
-            val who = if (entry.speaker == ConversationSpeaker.OWNER) "You" else "Sage"
-            "$who: ${entry.text}"
-        }.ifBlank { "Sage is ready for text chat." }
+        val container = conversation ?: return
+        container.removeAllViews()
+        val entries = host.recentConversation(60)
+        if (entries.isEmpty()) {
+            container.addView(TextView(this).apply {
+                text = "I'm here. What are we doing?"
+                textSize = 18f
+                setTextColor(COLOR_TEXT)
+                setPadding(dp(16), dp(16), dp(16), dp(16))
+                background = rounded(COLOR_SAGE_BUBBLE, 20)
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, dp(12), dp(44), dp(8)) })
+        } else {
+            entries.forEach { entry -> container.addView(messageBubble(entry)) }
+        }
+        chatScroll?.post { chatScroll?.fullScroll(View.FOCUS_DOWN) }
     }
+
+    private fun renderChatActivity(schedulePulse: Boolean = true) {
+        val activity = chatActivity ?: return
+        val snapshot = host.snapshot()
+        val progress = activeBrainProgress?.stage ?: host.brainStatus().progressStage
+        val ui = SageChatPresentation.present(snapshot, progress)
+        val parts = buildList {
+            ui.activity?.let { add(it + ".".repeat(pulseFrame)) }
+            ui.waitingMessage?.let(::add)
+        }
+        if (parts.isEmpty()) {
+            activity.visibility = View.GONE
+            uiHandler.removeCallbacks(pulse)
+        } else {
+            activity.text = parts.joinToString("\n")
+            activity.visibility = View.VISIBLE
+            if (schedulePulse) {
+                uiHandler.removeCallbacks(pulse)
+                uiHandler.postDelayed(pulse, 550L)
+            }
+        }
+    }
+
+    private fun submitChatInput() {
+        val message = input?.text?.toString()?.trim().orEmpty()
+        if (message.isEmpty()) return
+        input?.setText("")
+        host.submitText(message)
+        renderLiveState()
+    }
+
+    private fun renderChrome() {
+        title.text = if (currentPanel == Panel.CHAT) "Sage" else panelTitle(currentPanel)
+        headerAction.text = if (currentPanel == Panel.CHAT) "Settings" else "Back"
+        headerAction.contentDescription = if (currentPanel == Panel.CHAT) "Open Sage settings" else "Go back"
+        headerAction.setOnClickListener {
+            when (currentPanel) {
+                Panel.CHAT -> showPanel(Panel.SETTINGS)
+                Panel.SETTINGS -> showPanel(Panel.CHAT)
+                else -> showPanel(Panel.SETTINGS)
+            }
+        }
+    }
+
+    private fun panelTitle(panel: Panel): String = when (panel) {
+        Panel.CHAT -> "Sage"
+        Panel.SETTINGS -> "Settings"
+        Panel.CORE -> "Sage Core"
+        Panel.HEALTH -> "Advanced"
+        Panel.TASKS -> "Tasks"
+        Panel.DIAGNOSTICS -> "Diagnostics"
+        Panel.APPS -> "My apps"
+        Panel.MODES -> "Voice & modes"
+        Panel.WORKFLOWS -> "Workflows"
+    }
+
+    private fun panelSubtitle(panel: Panel): String = when (panel) {
+        Panel.CHAT -> "Here with you"
+        Panel.SETTINGS -> "Everything underneath Sage"
+        Panel.CORE -> "Identity and continuity"
+        Panel.HEALTH -> "Local Brain and device truth"
+        Panel.TASKS -> "Active and recoverable work"
+        Panel.DIAGNOSTICS -> "Technical details"
+        Panel.APPS -> "Apps Sage knows"
+        Panel.MODES -> "One Sage, every mode"
+        Panel.WORKFLOWS -> "Owner-defined work"
+    }
+
+    private fun messageBubble(entry: com.pineapple.sageos2.memory.ConversationEntry): View {
+        val owner = entry.speaker == ConversationSpeaker.OWNER
+        val bubble = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(10), dp(14), dp(11))
+            background = rounded(if (owner) COLOR_OWNER_BUBBLE else COLOR_SAGE_BUBBLE, 20)
+            addView(TextView(this@MainActivity).apply {
+                text = if (owner) "You" else "Sage"
+                textSize = 12f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(if (owner) COLOR_OWNER_LABEL else COLOR_SAGE)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = entry.text
+                textSize = 17f
+                setTextColor(COLOR_TEXT)
+                setPadding(0, dp(3), 0, 0)
+                maxWidth = (resources.displayMetrics.widthPixels * 0.78f).toInt()
+                setTextIsSelectable(true)
+            })
+        }
+        return LinearLayout(this).apply {
+            gravity = if (owner) Gravity.END else Gravity.START
+            addView(bubble, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.WRAP_CONTENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ))
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(if (owner) dp(42) else 0, dp(4), if (owner) 0 else dp(42), dp(4)) }
+        }
+    }
+
+    private fun settingsGroup(label: String) = TextView(this).apply {
+        text = label.uppercase(Locale.US)
+        textSize = 12f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(COLOR_SAGE)
+        setPadding(dp(4), dp(16), dp(4), dp(7))
+    }
+
+    private fun settingsCard(label: String, description: String, destination: Panel): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            isFocusable = true
+            contentDescription = "$label. $description"
+            setPadding(dp(16), dp(13), dp(14), dp(13))
+            background = rounded(COLOR_SURFACE, 18, COLOR_BORDER)
+            val words = LinearLayout(this@MainActivity).apply {
+                orientation = LinearLayout.VERTICAL
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 17f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(COLOR_TEXT)
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = description
+                    textSize = 14f
+                    setTextColor(COLOR_MUTED)
+                    setPadding(0, dp(3), 0, 0)
+                })
+            }
+            addView(words, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
+            addView(TextView(this@MainActivity).apply {
+                text = "›"
+                textSize = 28f
+                setTextColor(COLOR_SAGE)
+                gravity = Gravity.CENTER
+            }, LinearLayout.LayoutParams(dp(34), LinearLayout.LayoutParams.MATCH_PARENT))
+            setOnClickListener { showPanel(destination) }
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, dp(9)) }
+        }
 
     private fun sectionTitle(text: String) = TextView(this).apply {
         this.text = text
         textSize = 22f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(COLOR_TEXT)
         setPadding(0, dp(10), 0, dp(8))
     }
 
     private fun info(label: String, value: String) = TextView(this).apply {
         text = "$label: $value"
         textSize = 15f
+        setTextColor(COLOR_MUTED)
         setPadding(0, dp(5), 0, dp(5))
     }
 
@@ -586,7 +886,29 @@ open class MainActivity : Activity() {
         minLines = rows
         maxLines = maxOf(rows, 12)
         inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
-        setPadding(dp(8), dp(8), dp(8), dp(8))
+        setTextColor(COLOR_TEXT)
+        setHintTextColor(COLOR_MUTED)
+        background = rounded(COLOR_SURFACE, 14, COLOR_BORDER)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(0, dp(5), 0, dp(5)) }
+    }
+
+    private fun Button.styleChatButton(primary: Boolean) {
+        isAllCaps = false
+        textSize = 16f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(if (primary) COLOR_BACKGROUND else COLOR_TEXT)
+        background = rounded(if (primary) COLOR_SAGE else COLOR_SURFACE, 20, if (primary) null else COLOR_BORDER)
+    }
+
+    private fun rounded(fill: Int, radiusDp: Int, stroke: Int? = null): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(radiusDp).toFloat()
+        setColor(fill)
+        stroke?.let { setStroke(dp(1), it) }
     }
 
     private fun scroll(content: View): ScrollView = ScrollView(this).apply { addView(content) }
@@ -626,5 +948,16 @@ open class MainActivity : Activity() {
         runCatching { startForegroundService(Intent(this, SageVoiceService::class.java)) }
     }
 
-    companion object { private const val REQUEST_RUNTIME = 220 }
+    companion object {
+        private const val REQUEST_RUNTIME = 220
+        private val COLOR_BACKGROUND = Color.rgb(14, 17, 22)
+        private val COLOR_SURFACE = Color.rgb(27, 32, 39)
+        private val COLOR_BORDER = Color.rgb(53, 62, 70)
+        private val COLOR_TEXT = Color.rgb(244, 247, 244)
+        private val COLOR_MUTED = Color.rgb(168, 180, 174)
+        private val COLOR_SAGE = Color.rgb(169, 213, 178)
+        private val COLOR_SAGE_BUBBLE = Color.rgb(31, 50, 42)
+        private val COLOR_OWNER_BUBBLE = Color.rgb(65, 53, 83)
+        private val COLOR_OWNER_LABEL = Color.rgb(218, 190, 244)
+    }
 }

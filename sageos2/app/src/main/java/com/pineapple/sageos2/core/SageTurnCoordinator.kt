@@ -140,10 +140,14 @@ class SageTurnCoordinator(
     private fun dispatch(turnId: Long, text: String): List<SageEffect> {
         followUpAfterSpeech = false
         val decision = router.route(text)
+        val ownerInput = SageEffect.RecordOwnerInput(turnId, text, activeTurnOrigin)
         return when (decision.route) {
             SageRoute.OWNER_WORKFLOW -> {
                 val origin = activeTurnOrigin
-                val effects = mutableListOf<SageEffect>(SageEffect.LaunchOwnerWorkflow(turnId, requireNotNull(decision.workflowId)))
+                val effects = mutableListOf<SageEffect>(
+                    ownerInput,
+                    SageEffect.LaunchOwnerWorkflow(turnId, requireNotNull(decision.workflowId))
+                )
                 if (origin == TurnOrigin.TEXT) effects += finishTextTurn() else {
                     state = SageRuntimeState.IDLE_WAKE
                     activeTurnId = 0L
@@ -154,11 +158,11 @@ class SageTurnCoordinator(
             }
             SageRoute.FAST_DEVICE -> {
                 state = SageRuntimeState.THINKING_FAST
-                listOf(changeListening(SageListeningMode.WAKE_ONLY, turnId), SageEffect.ExecuteFast(turnId, decision.normalizedText))
+                listOf(ownerInput, changeListening(SageListeningMode.WAKE_ONLY, turnId), SageEffect.ExecuteFast(turnId, decision.normalizedText))
             }
             SageRoute.DEEP_REASONING -> {
                 state = SageRuntimeState.THINKING_DEEP
-                listOf(changeListening(SageListeningMode.WAKE_ONLY, turnId), SageEffect.QueryDeepBrain(turnId, decision.normalizedText))
+                listOf(ownerInput, changeListening(SageListeningMode.WAKE_ONLY, turnId), SageEffect.QueryDeepBrain(turnId, decision.normalizedText))
             }
         }
     }
@@ -180,7 +184,7 @@ class SageTurnCoordinator(
         if (activeTurnOrigin == TurnOrigin.TEXT) {
             val effects = mutableListOf<SageEffect>(
                 SageEffect.RecordDiagnostic("brain failed: ${event.reason}"),
-                SageEffect.EmitTextResponse(activeTurnId, "Brain error: ${event.reason}")
+                SageEffect.EmitTextResponse(activeTurnId, SageResponseCopy.forBrainFailure(event.reason))
             )
             effects += finishTextTurn()
             return effects

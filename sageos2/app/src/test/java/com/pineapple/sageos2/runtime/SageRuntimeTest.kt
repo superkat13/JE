@@ -93,6 +93,20 @@ class SageRuntimeTest {
         assertTrue(capability.actions.isEmpty())
     }
 
+    @Test fun brainWatchdogReleasesTextChatWithHumanReadableReply() {
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler, brainResponseTimeoutMs = 50L)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("don't leave chat hanging"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+
+        scheduler.runNext()
+
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.observer.textResponses.single().second.contains("taking too long"))
+        assertTrue(f.observer.textResponses.single().second.contains("message is saved"))
+    }
+
     @Test fun fifthToolCallIsBlockedByPerTurnLimit() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)
@@ -108,9 +122,23 @@ class SageRuntimeTest {
         assertEquals(5, f.brain.requests.size)
     }
 
-    private class Fixture(capability: CapabilityBroker = EmptyCapabilityBroker) {
-        val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val scheduler = FakeScheduler(); val observer = FakeObserver()
-        val runtime = SageRuntime(SageTurnCoordinator(), speech, brain, fast, workflows, scheduler, observer = observer, capabilities = capability)
+    private class Fixture(
+        capability: CapabilityBroker = EmptyCapabilityBroker,
+        scheduler: RuntimeScheduler = FakeScheduler(),
+        brainResponseTimeoutMs: Long = 180_000L
+    ) {
+        val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
+        val runtime = SageRuntime(
+            SageTurnCoordinator(),
+            speech,
+            brain,
+            fast,
+            workflows,
+            scheduler,
+            observer = observer,
+            capabilities = capability,
+            brainResponseTimeoutMs = brainResponseTimeoutMs
+        )
     }
 
     private class FakeSpeech : SpeechPort {
@@ -140,6 +168,20 @@ class SageRuntimeTest {
     private class FakeFastActions:FastActionEngine{val requests=mutableListOf<FastActionRequest>();override fun start(request:FastActionRequest,callback:(Result<FastActionResponse>)->Unit):FastActionJob{requests+=request;return object:FastActionJob{override val turnId=request.turnId;override fun cancel()=Unit}}}
     private class FakeWorkflows:WorkflowEngine{val launched=mutableListOf<String>();override fun launch(turnId:Long,workflowId:String){launched+=workflowId}}
     private class FakeScheduler:RuntimeScheduler{override fun schedule(delayMs:Long,task:()->Unit)=object:ScheduledHandle{override fun cancel()=Unit}}
+    private class ManualScheduler : RuntimeScheduler {
+        private data class Pending(val task: () -> Unit, var cancelled: Boolean = false)
+        private val pending = mutableListOf<Pending>()
+        override fun schedule(delayMs: Long, task: () -> Unit): ScheduledHandle {
+            val item = Pending(task)
+            pending += item
+            return object : ScheduledHandle { override fun cancel() { item.cancelled = true } }
+        }
+        fun runNext() {
+            val item = pending.firstOrNull { !it.cancelled } ?: error("no pending task")
+            item.cancelled = true
+            item.task()
+        }
+    }
     private class FakeObserver:RuntimeObserver {
         val textResponses=mutableListOf<Pair<Long,String>>()
         override fun onTextResponse(turnId:Long,text:String){textResponses += turnId to text}

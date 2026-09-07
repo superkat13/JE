@@ -44,7 +44,7 @@ curl -fL --retry 3 -o "$TMP/$MODEL_NAME" \
   "https://github.com/k2-fsa/sherpa-onnx/releases/download/kws-models/$MODEL_NAME"
 echo "$MODEL_SHA  $TMP/$MODEL_NAME" | sha256sum -c -
 
-tar -xjf "$TMP/$MODEL_NAME" -C "$TMP"
+tar --no-same-owner -xjf "$TMP/$MODEL_NAME" -C "$TMP"
 MODEL_DIR="$TMP/${MODEL_NAME%.tar.bz2}"
 test -d "$MODEL_DIR"
 

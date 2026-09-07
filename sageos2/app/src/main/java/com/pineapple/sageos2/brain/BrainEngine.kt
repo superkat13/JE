@@ -14,7 +14,19 @@ data class BrainRequest(
     val conversationHistory: ConversationHistorySnapshot? = null,
     val ownerApps: OwnerAppSnapshot? = null,
     val mode: SageModeSnapshot? = null,
-    val twinContextText: String? = null
+    val twinContextText: String? = null,
+    val onProgress: (BrainProgress) -> Unit = {}
+)
+
+enum class BrainProgressStage {
+    PREPARING,
+    LOADING_MODEL,
+    GENERATING
+}
+
+data class BrainProgress(
+    val turnId: Long,
+    val stage: BrainProgressStage
 )
 
 data class BrainResponse(
@@ -39,4 +51,9 @@ interface BrainEngine {
     fun health(): BrainHealth
 }
 
-data class BrainHealth(val ready: Boolean, val detail: String, val lastLatencyMs: Long? = null)
+data class BrainHealth(
+    val ready: Boolean,
+    val detail: String,
+    val lastLatencyMs: Long? = null,
+    val progressStage: BrainProgressStage? = null
+)

@@ -31,6 +31,8 @@ std::atomic<long long> g_active_request_id{0};
 std::atomic<int> g_last_stage{0};
 std::string g_last_error = "Model not loaded";
 bool g_backend_initialized = false;
+constexpr int kContextTokens = 4096;
+constexpr int kMaximumResponseTokens = 192;
 
 const char * stage_name(int stage) {
     switch (stage) {
@@ -178,9 +180,20 @@ std::string format_chat_prompt(
     if (chat_template == nullptr) {
         return system_prompt + "\n\nUser: " + user_prompt + "\nAssistant:";
     }
+    std::string effective_user_prompt = user_prompt;
+    const std::string template_text(chat_template);
+    const bool thinking_template = template_text.find("enable_thinking") != std::string::npos
+            || template_text.find("<think>") != std::string::npos;
+    const bool owner_selected_thinking = user_prompt.find("/think") != std::string::npos
+            || user_prompt.find("/no_think") != std::string::npos;
+    if (thinking_template && !owner_selected_thinking) {
+        // The inherited Qwen3 model otherwise spends a short mobile response budget entirely on
+        // hidden reasoning. Direct mode produces a complete owner-visible answer by default.
+        effective_user_prompt += "\n/no_think";
+    }
     llama_chat_message messages[] = {
             {"system", system_prompt.c_str()},
-            {"user", user_prompt.c_str()}
+            {"user", effective_user_prompt.c_str()}
     };
     int32_t required = llama_chat_apply_template(
             chat_template,
@@ -248,7 +261,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
     }
 
     llama_context_params context_params = llama_context_default_params();
-    context_params.n_ctx = 2048;
+    context_params.n_ctx = kContextTokens;
     context_params.n_batch = 512;
     context_params.n_ubatch = 256;
     unsigned int hardware_threads = std::thread::hardware_concurrency();
@@ -265,7 +278,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
     g_context = llama_init_from_model(g_model, context_params);
     if (g_context == nullptr) {
         release_model_locked();
-        set_error("llama.cpp could not create a 2048-token context");
+        set_error("llama.cpp could not create Sage's local context");
         return JNI_FALSE;
     }
 
@@ -323,7 +336,10 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     }
     g_last_prompt_token_count.store(static_cast<int>(prompt_tokens.size()), std::memory_order_release);
 
-    int max_tokens = std::max(1, std::min(24, static_cast<int>(requested_tokens)));
+    int max_tokens = std::max(
+            1,
+            std::min(kMaximumResponseTokens, static_cast<int>(requested_tokens))
+    );
     if (prompt_tokens.size() + static_cast<size_t>(max_tokens) + 8U
             > static_cast<size_t>(llama_n_ctx(g_context))) {
         set_error("Brain prompt exceeded Sage's local context window");
@@ -419,7 +435,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         g_last_stage.store(8, std::memory_order_release);
         batch = llama_batch_get_one(&token, 1);
 
-        if (output.size() > 1024U) {
+        if (output.size() > 4096U) {
             break;
         }
     }

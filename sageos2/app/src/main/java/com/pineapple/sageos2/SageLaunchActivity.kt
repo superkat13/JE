@@ -5,9 +5,13 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.view.Gravity
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -30,6 +34,9 @@ import java.util.Locale
 class SageLaunchActivity : Activity() {
     private lateinit var status: TextView
     private lateinit var actions: LinearLayout
+    private var currentMessage: String = ""
+    private var technicalDetails: String? = null
+    private var detailsVisible = false
     private val main = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -45,18 +52,39 @@ class SageLaunchActivity : Activity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(22), dp(20), dp(22), dp(20))
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(24), dp(44), dp(24), dp(24))
+            setBackgroundColor(COLOR_BACKGROUND)
         }
         root.addView(TextView(this).apply {
-            text = "SageOS 2.0"
-            textSize = 28f
+            text = "S"
+            textSize = 32f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_BACKGROUND)
+            gravity = Gravity.CENTER
+            background = rounded(COLOR_SAGE, 40)
+        }, LinearLayout.LayoutParams(dp(78), dp(78)))
+        root.addView(TextView(this).apply {
+            text = "Sage"
+            textSize = 30f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT)
+            gravity = Gravity.CENTER
+            setPadding(0, dp(16), 0, dp(4))
         })
         root.addView(TextView(this).apply {
-            text = "Starting Sage safely…"
+            text = "Right here with you"
             textSize = 16f
-            setPadding(0, dp(6), 0, dp(14))
+            setTextColor(COLOR_MUTED)
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, dp(22))
         })
-        status = TextView(this).apply { textSize = 15f }
+        status = TextView(this).apply {
+            textSize = 15f
+            setTextColor(COLOR_TEXT)
+            gravity = Gravity.CENTER_HORIZONTAL
+            setTextIsSelectable(true)
+        }
         root.addView(ScrollView(this).apply { addView(status) }, LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
             0,
@@ -72,7 +100,9 @@ class SageLaunchActivity : Activity() {
 
     private fun initializeRuntime() {
         actions.removeAllViews()
-        status.text = "Opening the Sage runtime…"
+        technicalDetails = null
+        detailsVisible = false
+        showMessage("I'm getting ready…")
         runCatching { SageRuntimeHost.get(this) }
             .onSuccess {
                 StartupCrashRecorder.clear(applicationContext)
@@ -83,17 +113,30 @@ class SageLaunchActivity : Activity() {
     }
 
     private fun showPreviousCrash(report: String) {
-        status.text = "SageOS caught the previous crash instead of hiding it.\n\n$report"
+        technicalDetails = report
+        detailsVisible = false
+        showMessage("I couldn't stay open last time, but your data is still here. Try me again, or open the technical details if we need them.")
         actions.removeAllViews()
         actions.addView(Button(this).apply {
-            text = "Retry Sage"
+            text = "Try again"
+            styleButton(primary = true)
             setOnClickListener {
                 StartupCrashRecorder.clear(applicationContext)
                 initializeRuntime()
             }
         })
         actions.addView(Button(this).apply {
-            text = "Copy crash report"
+            text = "Show technical details"
+            styleButton(primary = false)
+            setOnClickListener {
+                detailsVisible = !detailsVisible
+                text = if (detailsVisible) "Hide technical details" else "Show technical details"
+                renderMessage()
+            }
+        })
+        actions.addView(Button(this).apply {
+            text = "Copy technical details"
+            styleButton(primary = false)
             setOnClickListener { copy("SageOS startup crash", report) }
         })
     }
@@ -101,16 +144,60 @@ class SageLaunchActivity : Activity() {
     private fun showStartupFailure(label: String, error: Throwable) {
         val report = StartupCrashRecorder.format(label, error)
         StartupCrashRecorder.save(applicationContext, report)
-        status.text = report
+        technicalDetails = report
+        detailsVisible = false
+        showMessage("I couldn't finish opening, but I kept the details and your Sage data is untouched.")
         actions.removeAllViews()
         actions.addView(Button(this).apply {
-            text = "Retry Sage"
+            text = "Try again"
+            styleButton(primary = true)
             setOnClickListener { initializeRuntime() }
         })
         actions.addView(Button(this).apply {
-            text = "Copy startup report"
+            text = "Show technical details"
+            styleButton(primary = false)
+            setOnClickListener {
+                detailsVisible = !detailsVisible
+                text = if (detailsVisible) "Hide technical details" else "Show technical details"
+                renderMessage()
+            }
+        })
+        actions.addView(Button(this).apply {
+            text = "Copy technical details"
+            styleButton(primary = false)
             setOnClickListener { copy("SageOS startup report", report) }
         })
+    }
+
+    private fun showMessage(message: String) {
+        currentMessage = message
+        renderMessage()
+    }
+
+    private fun renderMessage() {
+        status.text = buildString {
+            append(currentMessage)
+            if (detailsVisible) technicalDetails?.let { append("\n\nTechnical details\n\n").append(it) }
+        }
+    }
+
+    private fun Button.styleButton(primary: Boolean) {
+        isAllCaps = false
+        textSize = 16f
+        typeface = Typeface.DEFAULT_BOLD
+        setTextColor(if (primary) COLOR_BACKGROUND else COLOR_TEXT)
+        background = rounded(if (primary) COLOR_SAGE else COLOR_SURFACE, 18, if (primary) null else COLOR_BORDER)
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(50)
+        ).apply { setMargins(0, dp(7), 0, 0) }
+    }
+
+    private fun rounded(fill: Int, radiusDp: Int, stroke: Int? = null): GradientDrawable = GradientDrawable().apply {
+        shape = GradientDrawable.RECTANGLE
+        cornerRadius = dp(radiusDp).toFloat()
+        setColor(fill)
+        stroke?.let { setStroke(dp(1), it) }
     }
 
     private fun copy(label: String, text: String) {
@@ -119,6 +206,15 @@ class SageLaunchActivity : Activity() {
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
+    companion object {
+        private val COLOR_BACKGROUND = Color.rgb(14, 17, 22)
+        private val COLOR_SURFACE = Color.rgb(27, 32, 39)
+        private val COLOR_BORDER = Color.rgb(53, 62, 70)
+        private val COLOR_TEXT = Color.rgb(244, 247, 244)
+        private val COLOR_MUTED = Color.rgb(168, 180, 174)
+        private val COLOR_SAGE = Color.rgb(169, 213, 178)
+    }
 }
 
 private object StartupCrashRecorder {

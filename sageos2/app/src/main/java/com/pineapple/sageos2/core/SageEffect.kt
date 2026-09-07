@@ -3,6 +3,7 @@ package com.pineapple.sageos2.core
 sealed interface SageEffect {
     data class SetListeningMode(val mode: SageListeningMode, val generation: Long, val turnId: Long = 0L) : SageEffect
     data class ActivateMode(val profileId: String, val modeId: String?) : SageEffect
+    data class RecordOwnerInput(val turnId: Long, val text: String, val origin: TurnOrigin) : SageEffect
     data class Speak(val turnId: Long, val text: String) : SageEffect
     data class SpeakTransient(val text: String) : SageEffect
     data class EmitTextResponse(val turnId: Long, val text: String) : SageEffect

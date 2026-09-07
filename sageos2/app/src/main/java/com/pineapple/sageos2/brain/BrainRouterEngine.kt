@@ -19,7 +19,8 @@ class BrainRouterEngine(
         return BrainHealth(
             ready = ready.isNotEmpty(),
             detail = healthy.joinToString("; ") { (engine, health) -> "${engine.name}=${if (health.ready) "ready" else "down"}:${health.detail}" },
-            lastLatencyMs = ready.mapNotNull { it.second.lastLatencyMs }.minOrNull()
+            lastLatencyMs = ready.mapNotNull { it.second.lastLatencyMs }.minOrNull(),
+            progressStage = ready.firstNotNullOfOrNull { it.second.progressStage }
         )
     }
 

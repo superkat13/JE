@@ -1,5 +1,6 @@
 package com.pineapple.sageos2.runtime
 
+import com.pineapple.sageos2.brain.BrainProgress
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import com.pineapple.sageos2.diagnostics.TraceLevel
@@ -18,6 +19,11 @@ class PersistentRuntimeObserver(private val traces: SharedPreferencesTraceStore)
         "${snapshot.state}/${snapshot.listeningMode}",
         turnId = snapshot.activeTurnId.takeIf { it != 0L },
         metadata = mapOf("origin" to snapshot.activeTurnOrigin.name, "queue" to snapshot.queuedTextCount.toString())
+    )
+    override fun onBrainProgress(progress: BrainProgress) = traces.record(
+        "brain_progress",
+        progress.stage.name,
+        turnId = progress.turnId
     )
     override fun onTextResponse(turnId: Long, text: String) = traces.record("text_response", "response emitted", turnId, metadata = mapOf("chars" to text.length.toString()))
 }
