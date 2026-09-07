@@ -29,4 +29,12 @@ class SageCommandRouterTest {
         assertNull(decision.workflowId)
         assertEquals("share diagnostic report", decision.normalizedText)
     }
+
+    @Test
+    fun brainModelImportRoutesAroundMissingBrain() {
+        val decision = router.route("Import brain model")
+        assertEquals(SageRoute.FAST_DEVICE, decision.route)
+        assertNull(decision.workflowId)
+        assertEquals("import brain model", decision.normalizedText)
+    }
 }
