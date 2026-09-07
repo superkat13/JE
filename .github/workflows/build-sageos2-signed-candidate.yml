@@ -54,10 +54,12 @@ jobs:
           gradle_file=sageos2/app/build.gradle.kts
           manifest=sageos2/app/src/main/AndroidManifest.xml
           grep -F 'applicationId = "com.pineapple.sagecommander.stable"' "$gradle_file"
-          grep -F 'versionCode = 201' "$gradle_file"
+          grep -F 'versionCode = 202' "$gradle_file"
           grep -F 'versionName = "2.0.0"' "$gradle_file"
           grep -F 'targetSdk = 35' "$gradle_file"
           grep -F 'abiFilters += listOf("arm64-v8a")' "$gradle_file"
+          grep -F 'android:process=":wake"' "$manifest"
+          grep -F 'com.pineapple.sageos2.speech.SageWakeRemoteService' "$manifest"
           for component in \
             com.pineapple.sage.SageAccessibilityService \
             com.pineapple.sage.SageNotificationListener \
@@ -199,7 +201,7 @@ jobs:
             "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" | tee /tmp/apksigner.txt
             grep -Fi 'e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e' /tmp/apksigner.txt
             "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | tee /tmp/badging.txt
-            grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='201' versionName='2.0.0'" /tmp/badging.txt
+            grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='202' versionName='2.0.0'" /tmp/badging.txt
             unzip -l "$apk" | grep -F 'lib/arm64-v8a/libsage-brain.so'
             unzip -l "$apk" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so'
             unzip -l "$apk" | grep -F 'lib/arm64-v8a/libonnxruntime.so'
@@ -217,7 +219,7 @@ jobs:
           printf 'CANDIDATE_BYTES=%s\n' "$BYTES"
           printf 'CANDIDATE_SHA256=%s\n' "$SHA"
           printf 'SOURCE_COMMIT=%s\n' '${{ github.sha }}'
-          printf 'PACKAGE=com.pineapple.sagecommander.stable\nVERSION_CODE=201\nVERSION_NAME=2.0.0\n'
+          printf 'PACKAGE=com.pineapple.sagecommander.stable\nVERSION_CODE=202\nVERSION_NAME=2.0.0\n'
           printf 'SIGNING_CERT_SHA256=e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e\n'
           printf 'ROTATION_MIN_SDK=33\n'
           cp "$A" /tmp/SageOS-2.0-signed.apk
