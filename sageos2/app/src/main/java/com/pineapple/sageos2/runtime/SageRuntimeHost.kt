@@ -18,14 +18,15 @@ import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import com.pineapple.sageos2.forge.ForgeClient
 import com.pineapple.sageos2.forge.ForgeStore
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
+import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
-import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.speech.SherpaWakeWordEngine
+import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
 import com.pineapple.sageos2.workflow.WorkflowRegistryEngine
 import java.io.File
 import java.util.concurrent.CopyOnWriteArraySet
@@ -53,6 +54,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val forge = ForgeClient(appContext, forgeStore)
     val rootBroker = SocketRootBrokerClient()
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
+    val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
 
     private val persistentObserver = PersistentRuntimeObserver(traces)
     private val observer = object : RuntimeObserver {
@@ -77,7 +79,7 @@ class SageRuntimeHost private constructor(context: Context) {
     private val speech = AndroidSpeechPort(appContext, wakeEngine, SharedPreferencesWakeProfileStore(appContext))
     private val controller = AndroidDeviceController(appContext, ownerApps)
     private val fastActions = AndroidFastActionEngine(controller)
-    private val workflows = WorkflowRegistryEngine(tasks, traces)
+    private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
 
     val runtime = SageRuntime(
         coordinator = SageTurnCoordinator(),
@@ -106,7 +108,8 @@ class SageRuntimeHost private constructor(context: Context) {
                     "root=${states[Capability.SAGEOS_ROOT_BROKER] == CapabilityStatus.ACTIVE}; " +
                     "forge=${states[Capability.FORGE] == CapabilityStatus.ACTIVE}; " +
                     "deviceOwner=${states[Capability.DEVICE_OWNER] == CapabilityStatus.ACTIVE}; " +
-                    "accessibility=${states[Capability.ACCESSIBILITY] == CapabilityStatus.ACTIVE}"
+                    "accessibility=${states[Capability.ACCESSIBILITY] == CapabilityStatus.ACTIVE}; " +
+                    "chickenScope=${chickenTonightScope.current()?.isUsable() == true}"
             )
             recovered.forEach { task ->
                 traces.record("recovery", "recoverable task=${task.taskId} next=${task.nextStep}")
