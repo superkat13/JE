@@ -74,9 +74,18 @@ jobs:
           grep -F 'systemPrompt = systemPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
           grep -F 'userPrompt = userPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
           grep -F 'BrainProgressStage.LOADING_MODEL' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'BrainProgressStage.READING_CONTEXT' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
           grep -F 'BrainPromptBudget.fitSystemContext' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'BrainRequestPolicy.forPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'BrainOutputCleaner.clean' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'private val brainResponseTimeoutMs: Long = 120_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainLoadTimeoutMs: Long = 30_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainFirstTokenTimeoutMs: Long = 60_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainStallTimeoutMs: Long = 30_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'effective_user_prompt += "\n/no_think";' sageos2/app/src/main/cpp/sage_brain.cpp
-          grep -F 'constexpr int kMaximumResponseTokens = 192;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'constexpr int kContextTokens = 2048;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'constexpr int kMaximumResponseTokens = 24;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'const val DEFAULT_COMBINED_CHARACTER_BUDGET = 4_800' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainPromptBudget.kt
           grep -F 'SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"' sageos2/app/src/main/cpp/CMakeLists.txt
           grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
       - name: Verify private Brain model provisioning
@@ -135,6 +144,8 @@ jobs:
           grep -F 'data object ShareDiagnosticReport' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
           grep -F '"share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'text = "Copy diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'text = "Share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
       - name: Verify twin context and Owner Apps
         run: |
           grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
@@ -162,6 +173,7 @@ jobs:
           grep -F 'settingsCard("Local Brain & capabilities"' "$cockpit"
           grep -F 'SageChatPresentation.present' "$cockpit"
           grep -F 'What are we doing?' "$cockpit"
+          grep -F 'text = "Run local Brain self-check"' "$cockpit"
           ! grep -F 'One Sage. One runtime. Owner control.' "$cockpit"
           ! grep -F 'append(" Root:' "$cockpit"
           grep -F 'host.core.replace' "$cockpit"

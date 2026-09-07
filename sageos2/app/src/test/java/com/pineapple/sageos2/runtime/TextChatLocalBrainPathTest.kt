@@ -30,7 +30,7 @@ import org.junit.Test
 class TextChatLocalBrainPathTest {
     @Test fun typedMessageShowsLoadingThenTraversesLocalGgufBoundaryAndReturnsToChat() {
         val model = File.createTempFile("inherited-sage-brain", ".gguf").apply { deleteOnExit() }
-        val bridge = BlockingBridge("I'm here. Let's do it.")
+        val bridge = BlockingBridge("<think>private chain</think>\nI'm here. Let's do it.")
         val local = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
         val history = MemoryHistory()
         val observer = RecordingObserver()
@@ -58,7 +58,32 @@ class TextChatLocalBrainPathTest {
         assertTrue(bridge.systemPrompt.contains("virtual twin"))
         assertTrue(bridge.systemPrompt.contains("SAGE TOOL CONTRACT"))
         assertFalse(bridge.systemPrompt.contains("OWNER: Can you hear me?"))
-        assertTrue(observer.progress.any { it.stage == BrainProgressStage.GENERATING })
+        assertTrue(bridge.systemPrompt.length + bridge.userPrompt.length <= 3_600)
+        assertEquals(16, bridge.maxTokens)
+        assertTrue(bridge.deterministic)
+        assertTrue(observer.progress.any { it.stage == BrainProgressStage.READING_CONTEXT })
+    }
+
+    @Test fun exactSelfCheckTraversesTheWholeTextPathWithMinimalDeterministicPrompt() {
+        val model = File.createTempFile("inherited-sage-brain", ".gguf").apply { deleteOnExit() }
+        val bridge = BlockingBridge("Brain online.").apply { allowLoad.countDown() }
+        val history = MemoryHistory()
+        val observer = RecordingObserver()
+        val runtime = runtime(
+            BrainRouterEngine(listOf(LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {}))),
+            history,
+            observer
+        )
+
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted(com.pineapple.sageos2.brain.BrainRequestPolicy.SELF_CHECK_PROMPT))
+        waitUntil { observer.responses.isNotEmpty() }
+
+        assertEquals("Brain online.", observer.responses.single().second)
+        assertEquals("Output only the requested literal. No explanation. /no_think", bridge.systemPrompt)
+        assertTrue(bridge.maxTokens in 4..12)
+        assertTrue(bridge.deterministic)
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
     }
 
     @Test fun localModelLoadFailureReturnsHumanReadableChatStateAndKeepsRawEvidenceBelow() {
@@ -74,7 +99,7 @@ class TextChatLocalBrainPathTest {
         waitUntil { observer.responses.isNotEmpty() }
 
         val visible = observer.responses.single().second
-        assertTrue(visible.contains("couldn't finish loading"))
+        assertTrue(visible.contains("couldn't finish getting ready"))
         assertFalse(visible.contains("llama.cpp"))
         assertTrue(observer.diagnostics.any { it.contains("llama.cpp could not load that GGUF model") })
         assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
@@ -103,6 +128,8 @@ class TextChatLocalBrainPathTest {
         val allowLoad = CountDownLatch(1)
         var systemPrompt = ""
         var userPrompt = ""
+        var maxTokens = -1
+        var deterministic = false
 
         override fun loadModel(path: String): Boolean {
             loadStarted.countDown()
@@ -119,10 +146,13 @@ class TextChatLocalBrainPathTest {
         ): String {
             this.systemPrompt = systemPrompt
             this.userPrompt = userPrompt
+            this.maxTokens = maxTokens
+            this.deterministic = deterministic
             return answer
         }
 
         override fun cancel(requestId: Long) = Unit
+        override fun generatedTokenCount() = if (answer.isBlank()) 0 else 3
         override fun lastError() = if (loadSucceeds) "" else "llama.cpp could not load that GGUF model"
     }
 

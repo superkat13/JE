@@ -30,7 +30,9 @@ object SageChatPresentation {
             SageRuntimeState.THINKING_FAST -> "On it" to "I'm taking care of that"
             SageRuntimeState.THINKING_DEEP -> when (brainProgress) {
                 BrainProgressStage.LOADING_MODEL ->
-                    "Waking up my local Brain" to "The first reply can take a few minutes while I load my local Brain"
+                    "Waking up" to "I'm getting ready for our first reply"
+                BrainProgressStage.READING_CONTEXT ->
+                    "Thinking" to "I'm gathering what matters for this reply"
                 BrainProgressStage.GENERATING -> "Thinking" to "I'm putting my answer together"
                 BrainProgressStage.PREPARING, null -> "Thinking" to "I'm thinking"
             }

@@ -15,18 +15,23 @@ data class BrainRequest(
     val ownerApps: OwnerAppSnapshot? = null,
     val mode: SageModeSnapshot? = null,
     val twinContextText: String? = null,
+    val maxOutputTokens: Int? = null,
+    val deterministic: Boolean = false,
+    val expectedLiteral: String? = null,
     val onProgress: (BrainProgress) -> Unit = {}
 )
 
 enum class BrainProgressStage {
     PREPARING,
     LOADING_MODEL,
+    READING_CONTEXT,
     GENERATING
 }
 
 data class BrainProgress(
     val turnId: Long,
-    val stage: BrainProgressStage
+    val stage: BrainProgressStage,
+    val telemetry: BrainTelemetry? = null
 )
 
 data class BrainResponse(
@@ -55,5 +60,16 @@ data class BrainHealth(
     val ready: Boolean,
     val detail: String,
     val lastLatencyMs: Long? = null,
-    val progressStage: BrainProgressStage? = null
+    val progressStage: BrainProgressStage? = null,
+    val telemetry: BrainTelemetry? = null
+)
+
+data class BrainTelemetry(
+    val nativeStage: String? = null,
+    val promptTokens: Int? = null,
+    val generatedTokens: Int? = null,
+    val promptPrefillMs: Long? = null,
+    val firstTokenMs: Long? = null,
+    val generationMs: Long? = null,
+    val promptTokensPerSecond: Float? = null
 )

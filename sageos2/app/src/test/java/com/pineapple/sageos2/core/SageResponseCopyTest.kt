@@ -5,11 +5,19 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageResponseCopyTest {
+    @Test fun exactSelfCheckFailureStaysHumanReadable() {
+        val message = SageResponseCopy.forBrainFailure(
+            "local Brain self-check did not return the requested words [stage=complete]"
+        )
+        assertTrue(message.contains("reply check didn't pass"))
+        assertFalse(message.contains("stage="))
+    }
+
     @Test fun missingModelGivesTheOwnerARealNextStep() {
         val text = SageResponseCopy.forBrainFailure(
             "No configured Brain completed the request: local model file is missing"
         )
-        assertTrue(text.contains("Settings → Local Brain"))
+        assertTrue(text.contains("Settings → Local Brain & capabilities"))
         assertFalse(text.contains("No configured Brain"))
     }
 

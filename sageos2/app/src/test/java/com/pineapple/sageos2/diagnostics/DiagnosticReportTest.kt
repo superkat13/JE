@@ -30,7 +30,12 @@ class DiagnosticReportTest {
                 ownerAppsCount = 4,
                 recoverableTasks = listOf(DiagnosticTaskSummary("task-1", "Recovered turn", "WAITING", "Continue safely")),
                 chickenTonightScopeStatus = "READY",
-                traces = listOf(TraceEvent("trace-1", 1200L, 9L, "brain", "generation completed", TraceLevel.INFO))
+                traces = listOf(TraceEvent("trace-1", 1200L, 9L, "brain", "generation completed", TraceLevel.INFO)),
+                brainEvidence = mapOf(
+                    "native stage" to "complete",
+                    "prompt tokens" to "812",
+                    "first token" to "7100 ms"
+                )
             )
         )
 
@@ -39,6 +44,9 @@ class DiagnosticReportTest {
         assertTrue(report.contains("SAGEOS_ROOT_BROKER: UNAVAILABLE"))
         assertTrue(report.contains("Chicken Tonight scope: READY"))
         assertTrue(report.contains("generation completed"))
+        assertTrue(report.contains("Brain native stage: complete"))
+        assertTrue(report.contains("Brain prompt tokens: 812"))
+        assertTrue(report.contains("Brain first token: 7100 ms"))
         assertTrue(report.contains("conversation text"))
         assertFalse(report.contains("authorizationReference"))
         assertFalse(report.contains("ownerPrompt"))

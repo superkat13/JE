@@ -33,6 +33,23 @@ class BrainRouterEngineTest {
         assertEquals("ok", result!!.getOrThrow().text)
     }
 
+    @Test fun successfulEngineEvidenceIsPreservedAlongsideRouterAttempts() {
+        val local = FakeEngine("local") { request, callback ->
+            callback(Result.success(BrainResponse(
+                request.turnId,
+                "ok",
+                "local",
+                BrainProvenance("local", attempts = listOf("generated_tokens=8", "first_token_ms=2400"))
+            )))
+        }
+        var result: Result<BrainResponse>? = null
+        BrainRouterEngine(listOf(local)).start(BrainRequest(4, "hello")) { result = it }
+        val attempts = result!!.getOrThrow().provenance.attempts
+        assertTrue(attempts.contains("local: attempted"))
+        assertTrue(attempts.contains("generated_tokens=8"))
+        assertTrue(attempts.contains("first_token_ms=2400"))
+    }
+
     private class FakeEngine(
         override val name: String,
         private val ready: Boolean = true,

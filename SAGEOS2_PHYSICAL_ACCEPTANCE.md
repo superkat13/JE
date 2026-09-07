@@ -1,6 +1,6 @@
 # SageOS 2 physical tablet acceptance
 
-This runbook is for the **first meaningful signed SageOS 2 candidate** on the VASOUN L10_T05. It is not a version carousel. If a hardware-specific defect is found, repair the same `sageos-2` codebase, rerun CI, and produce another candidate only after the defect is understood.
+This runbook is for the **next meaningful signed SageOS 2 candidate** on the VASOUN L10_T05. Candidate 203 already proved in-place signing and native wake isolation, but failed the Chat/product gate. This is not a version carousel. Repair the same `sageos-2` codebase and rerun every gate after any hardware-specific defect.
 
 ## Before touching the tablet
 
@@ -15,11 +15,11 @@ The candidate is eligible only when all of these are true:
 - verification report and SHA-256 are preserved with the APK;
 - the APK is a signed release candidate, **not a debug APK**.
 
-## Important first-install rule
+## Important in-place update rule
 
-**Do not uninstall the currently installed Sage first.**
+**Do not uninstall the currently installed Sage.**
 
-The first test is whether Android accepts SageOS 2 as an in-place update under the existing signing lineage. Uninstalling first would erase exactly the app-private identity/data/model continuity this test is meant to preserve.
+Android already accepted SageOS 2 under the existing signing lineage. Every repair must continue updating that same package in place. Uninstalling would erase exactly the app-private identity/data/model continuity this test is meant to preserve.
 
 If Android refuses the update, stop at the refusal screen and record the exact message. Do not uninstall, clear data, factory reset, unlock the bootloader, or improvise around the error.
 
@@ -35,8 +35,8 @@ Any later step involving reboot-to-bootloader, recovery, unlock confirmation, co
 2. Install the verified SageOS 2 signed APK as an update.
 3. Confirm Android does not ask to uninstall the existing package.
 4. Launch Sage.
-5. Confirm the SageOS 2 cockpit opens.
-6. Open **Health**.
+5. Confirm Sage opens directly into **Chat**, not an engineering dashboard.
+6. Open **Settings → Local Brain & capabilities**.
 7. Confirm every capability is reported truthfully as ACTIVE / AVAILABLE / UNAVAILABLE rather than assumed.
 8. Root should remain unavailable on this normal APK unless the SageOS system daemon has actually been installed later.
 9. Check whether the existing private Brain model was preserved.
@@ -46,15 +46,18 @@ Any later step involving reboot-to-bootloader, recovery, unlock confirmation, co
 
 Use text first because it removes microphone/TTS variables.
 
-1. Send a simple factual message.
-2. Confirm a local Brain response appears in Chat.
-3. Send at least five varied text turns.
-4. Confirm typed replies remain silent rather than unexpectedly speaking.
-5. Confirm conversation history remains visible.
-6. Open Sage Core and verify the expected twin identity / owner content survived or is editable.
-7. Close Sage normally, reopen it, and confirm history/Core continuity.
+1. Open **Settings → Local Brain & capabilities** and tap **Run local Brain self-check**.
+2. Confirm Chat opens immediately, shows the owner message, and visibly moves through **Waking up** / **Thinking** rather than appearing dead.
+3. Confirm the exact visible reply is `Brain online.`.
+4. Open **Settings → Diagnostics**, tap **Copy diagnostic report**, and confirm native stage, prompt tokens, generated tokens, prefill, and first-token evidence are present.
+5. Send a simple factual message from Chat and confirm a complete Sage response appears.
+6. Send at least three varied text turns, including one that refers to earlier conversation.
+7. Confirm typed replies remain silent, hidden `<think>` text never appears, and Chat returns to a sendable idle state after every reply.
+8. Confirm conversation history remains visible.
+9. Open Sage Core and verify the expected twin identity / owner content survived or is editable.
+10. Close Sage normally, reopen it, and confirm history/Core continuity.
 
-If the Brain hangs, errors, or disappears, run **Share diagnostic report** before changing anything.
+If a reply hangs, errors, or disappears, wait for the human-readable timeout, then use **Settings → Diagnostics → Copy diagnostic report** before changing anything. This button bypasses Chat and the Brain. Try Share only after the report is safely copied.
 
 ## Pass 3 — push-to-talk
 
@@ -120,13 +123,15 @@ Then perform one ordinary tablet reboot and repeat the continuity check.
 
 Test this while the Brain is healthy first:
 
-- type or say **share diagnostic report**;
-- confirm Android's share sheet opens;
+- open **Settings → Diagnostics** and tap **Copy diagnostic report**;
+- paste it into a harmless local text field to prove the clipboard contains the report;
+- tap **Share diagnostic report** and confirm Android's share sheet opens, or confirm Sage reports that it copied the report when Android sharing cannot open;
+- then type or say **share diagnostic report** to verify the deterministic command path too;
 - inspect the report;
 - confirm it includes runtime/Brain/wake/capability/task/trace health;
 - confirm it does not dump conversation contents, Sage Core contents, Owner App details, or Chicken Tonight authorization details by default.
 
-This command must remain deterministic so it can still work when the Brain is unhealthy.
+The direct buttons and command must remain deterministic so diagnostics still work when the Brain is unhealthy or Chat is occupied.
 
 ## Pass 9 — Chicken Tonight trigger contract
 
@@ -180,7 +185,7 @@ For any failure:
 
 1. Stop changing unrelated settings.
 2. Record the exact visible symptom and clock time.
-3. Use **Share diagnostic report** if available.
+3. Use **Settings → Diagnostics → Copy diagnostic report** first; use Share second.
 4. Preserve the report.
 5. Identify the failed layer: installation / model / wake / recognizer / Brain / TTS / capability / continuity / Android lifecycle.
 6. Repair that layer in the same `sageos-2` branch.

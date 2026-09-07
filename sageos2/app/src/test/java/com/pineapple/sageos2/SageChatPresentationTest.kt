@@ -16,9 +16,9 @@ class SageChatPresentationTest {
             snapshot(SageRuntimeState.THINKING_DEEP),
             BrainProgressStage.LOADING_MODEL
         )
-        assertEquals("Waking up my local Brain", ui.presence)
-        assertTrue(ui.activity.orEmpty().contains("first reply"))
-        assertTrue(ui.activity.orEmpty().contains("few minutes"))
+        assertEquals("Waking up", ui.presence)
+        assertEquals("I'm getting ready for our first reply", ui.activity)
+        assertTrue(ui.toString().contains("model").not())
     }
 
     @Test fun ordinaryDeepGenerationFeelsLikeSageNotAnEngineConsole() {
@@ -29,6 +29,15 @@ class SageChatPresentationTest {
         assertEquals("Thinking", ui.presence)
         assertEquals("I'm putting my answer together", ui.activity)
         assertTrue(ui.toString().contains("THINKING_DEEP").not())
+    }
+
+    @Test fun promptReadingHasImmediateHumanVisibleActivity() {
+        val ui = SageChatPresentation.present(
+            snapshot(SageRuntimeState.THINKING_DEEP),
+            BrainProgressStage.READING_CONTEXT
+        )
+        assertEquals("Thinking", ui.presence)
+        assertEquals("I'm gathering what matters for this reply", ui.activity)
     }
 
     @Test fun idleHomeHasNoDebugActivityBanner() {

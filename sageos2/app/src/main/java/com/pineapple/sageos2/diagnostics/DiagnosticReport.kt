@@ -29,7 +29,8 @@ data class DiagnosticReportSnapshot(
     val ownerAppsCount: Int,
     val recoverableTasks: List<DiagnosticTaskSummary>,
     val chickenTonightScopeStatus: String,
-    val traces: List<TraceEvent>
+    val traces: List<TraceEvent>,
+    val brainEvidence: Map<String, String> = emptyMap()
 )
 
 object DiagnosticReportRenderer {
@@ -46,6 +47,9 @@ object DiagnosticReportRenderer {
         appendLine("Input: ${oneLine(snapshot.listeningMode)}")
         appendLine("Brain: ${if (snapshot.brainReady) "ready" else "not ready"} • ${oneLine(snapshot.brainDetail)}")
         snapshot.brainLastLatencyMs?.let { appendLine("Brain last latency: ${it} ms") }
+        snapshot.brainEvidence.toSortedMap().forEach { (name, value) ->
+            appendLine("Brain $name: ${oneLine(value)}")
+        }
         appendLine("Wake: ${if (snapshot.wakeReady) "ready" else "not ready"} • ${oneLine(snapshot.wakeEngine)} • ${oneLine(snapshot.wakeDetail)}")
         appendLine()
         appendLine("Capabilities")

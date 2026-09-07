@@ -48,12 +48,18 @@ class SageRuntime(
     private val twinContextRenderer: TwinContextRenderer = TwinContextRenderer(),
     private val echoGuardMs: Long = 450L,
     private val maxToolCallsPerTurn: Int = 4,
-    private val brainResponseTimeoutMs: Long = 180_000L
+    private val brainResponseTimeoutMs: Long = 120_000L,
+    private val brainLoadTimeoutMs: Long = 30_000L,
+    private val brainFirstTokenTimeoutMs: Long = 60_000L,
+    private val brainStallTimeoutMs: Long = 30_000L
 ) {
     init {
         require(echoGuardMs >= 0L)
         require(maxToolCallsPerTurn in 1..16)
         require(brainResponseTimeoutMs > 0L)
+        require(brainLoadTimeoutMs > 0L)
+        require(brainFirstTokenTimeoutMs > 0L)
+        require(brainStallTimeoutMs > 0L)
         speech.attach(object : SpeechInputListener {
             override fun onWakeDetected(hit: WakeHit) = submit(SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement))
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
@@ -68,6 +74,7 @@ class SageRuntime(
     private var echoGuardHandle: ScheduledHandle? = null
     private var followUpExpiryHandle: ScheduledHandle? = null
     private var brainTimeoutHandle: ScheduledHandle? = null
+    private var brainStageTimeoutHandle: ScheduledHandle? = null
     private val toolCallsByTurn = mutableMapOf<Long, Int>()
     private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sage-capability").apply { isDaemon = true }
@@ -133,7 +140,7 @@ class SageRuntime(
                 if (brainJob?.turnId == effect.turnId) { brainJob?.cancel(); brainJob = null }
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
                 capabilityJob?.cancel(true); capabilityJob = null
-                brainTimeoutHandle?.cancel(); brainTimeoutHandle = null
+                clearBrainTimeouts()
                 toolCallsByTurn.remove(effect.turnId)
                 checkpointTurn(effect.turnId, TaskState.CANCELLED, "Turn cancelled before completion.", "")
                 echoGuardHandle?.cancel(); echoGuardHandle = null
@@ -152,22 +159,36 @@ class SageRuntime(
         val twinContext = twinContextRenderer.render(core, memory, history, apps, mode)
         val taskContext = TaskContinuityContextRenderer.render(taskContinuity?.active().orEmpty())
         val toolContext = BrainToolContextRenderer.render(capabilities.snapshot())
-        val context = BrainPromptBudget.fitSystemContext(
-            "$twinContext\n\n$taskContext\n\n$toolContext",
-            ownerPrompt = prompt
-        )
-        brainTimeoutHandle?.cancel()
+        val requestProfile = BrainRequestPolicy.forPrompt(prompt)
+        val fullContext = if (requestProfile.includeTwinContext) {
+            "${requestProfile.systemGuide}\n\n$twinContext\n\n$taskContext\n\n$toolContext"
+        } else {
+            requestProfile.systemGuide
+        }
+        val context = if (requestProfile.includeTwinContext) {
+            BrainPromptBudget.fitSystemContext(
+                fullContext,
+                ownerPrompt = prompt,
+                combinedCharacterBudget = requestProfile.combinedCharacterBudget
+            )
+        } else {
+            fullContext
+        }
+        clearBrainTimeouts()
         brainTimeoutHandle = scheduler.schedule(brainResponseTimeoutMs) { onBrainTimeout(turnId) }
         val startedJob = brain.start(BrainRequest(
             turnId = turnId,
             prompt = prompt,
-            sageCore = core,
-            twinMemory = memory,
-            conversationHistory = history,
-            ownerApps = apps,
-            mode = mode,
+            sageCore = core.takeIf { requestProfile.includeTwinContext },
+            twinMemory = memory.takeIf { requestProfile.includeTwinContext },
+            conversationHistory = history.takeIf { requestProfile.includeTwinContext },
+            ownerApps = apps.takeIf { requestProfile.includeTwinContext },
+            mode = mode.takeIf { requestProfile.includeTwinContext },
             twinContextText = context,
-            onProgress = observer::onBrainProgress
+            maxOutputTokens = requestProfile.outputTokens,
+            deterministic = requestProfile.deterministic,
+            expectedLiteral = requestProfile.expectedLiteral,
+            onProgress = ::onBrainProgress
         )) { result -> finishBrainAttempt(turnId, result) }
         val snapshot = coordinator.snapshot()
         if (snapshot.activeTurnId == turnId && snapshot.state == SageRuntimeState.THINKING_DEEP) {
@@ -180,8 +201,7 @@ class SageRuntime(
     @Synchronized
     private fun handleBrainResponse(response: BrainResponse) {
         brainJob = null
-        brainTimeoutHandle?.cancel()
-        brainTimeoutHandle = null
+        clearBrainTimeouts()
         val snapshot = coordinator.snapshot()
         if (snapshot.activeTurnId != response.turnId) {
             observer.onDiagnostic("stale Brain response ignored before tool parsing: turn=${response.turnId}")
@@ -189,6 +209,13 @@ class SageRuntime(
         }
 
         response.provenance.limitation?.let { observer.onDiagnostic("brain limitation [${response.provenance.engine}]: $it") }
+        observer.onDiagnostic(buildString {
+            append("brain completed: engine=").append(response.provenance.engine)
+            response.provenance.model?.let { append(" model=").append(it) }
+            if (response.provenance.attempts.isNotEmpty()) {
+                append(" evidence=").append(response.provenance.attempts.joinToString(", "))
+            }
+        })
 
         val directive = try {
             BrainToolDirectiveParser.parse(response.text)
@@ -234,8 +261,7 @@ class SageRuntime(
     @Synchronized
     private fun finishBrainAttempt(turnId: Long, result: Result<BrainResponse>) {
         brainJob = null
-        brainTimeoutHandle?.cancel()
-        brainTimeoutHandle = null
+        clearBrainTimeouts()
         result.fold(
             onSuccess = { response -> handleBrainResponse(response) },
             onFailure = {
@@ -308,19 +334,69 @@ class SageRuntime(
     private fun runtimeTaskId(turnId: Long) = "runtime:turn:$turnId"
 
     @Synchronized
-    private fun onBrainTimeout(turnId: Long) {
+    private fun onBrainProgress(progress: BrainProgress) {
+        observer.onBrainProgress(progress)
+        val snapshot = coordinator.snapshot()
+        if (snapshot.activeTurnId != progress.turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
+        when (progress.stage) {
+            BrainProgressStage.PREPARING -> Unit
+            BrainProgressStage.LOADING_MODEL -> scheduleBrainStageTimeout(
+                progress.turnId,
+                brainLoadTimeoutMs,
+                "model loading"
+            )
+            BrainProgressStage.READING_CONTEXT -> scheduleBrainStageTimeout(
+                progress.turnId,
+                brainFirstTokenTimeoutMs,
+                "first response token"
+            )
+            BrainProgressStage.GENERATING -> {
+                val hasToken = (progress.telemetry?.generatedTokens ?: 0) > 0
+                scheduleBrainStageTimeout(
+                    progress.turnId,
+                    if (hasToken) brainStallTimeoutMs else brainFirstTokenTimeoutMs,
+                    if (hasToken) "response generation" else "first response token"
+                )
+            }
+        }
+    }
+
+    @Synchronized
+    private fun scheduleBrainStageTimeout(turnId: Long, timeoutMs: Long, stage: String) {
+        brainStageTimeoutHandle?.cancel()
+        brainStageTimeoutHandle = scheduler.schedule(timeoutMs) {
+            onBrainTimeout(turnId, stage, timeoutMs)
+        }
+    }
+
+    private fun clearBrainTimeouts() {
+        brainTimeoutHandle?.cancel()
+        brainTimeoutHandle = null
+        brainStageTimeoutHandle?.cancel()
+        brainStageTimeoutHandle = null
+    }
+
+    @Synchronized
+    private fun onBrainTimeout(
+        turnId: Long,
+        stage: String = "response",
+        timeoutMs: Long = brainResponseTimeoutMs
+    ) {
         val snapshot = coordinator.snapshot()
         if (snapshot.activeTurnId != turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
         if (brainJob?.turnId == turnId) brainJob?.cancel()
         brainJob = null
-        brainTimeoutHandle = null
+        clearBrainTimeouts()
         checkpointTurn(
             turnId,
             TaskState.FAILED,
-            "Brain timed out before the turn completed.",
+            "Brain timed out during $stage before the turn completed.",
             "Retry from the stored owner prompt; do not replay a completed capability call."
         )
-        submit(SageEvent.BrainFailed(turnId, "local Brain timed out after ${brainResponseTimeoutMs / 1_000L} seconds"))
+        submit(SageEvent.BrainFailed(
+            turnId,
+            "local Brain $stage timed out after ${timeoutMs / 1_000L} seconds"
+        ))
     }
 
     private fun recordOwnerInput(effect: SageEffect.RecordOwnerInput) {

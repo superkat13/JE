@@ -29,6 +29,7 @@ import android.widget.Toast
 import com.pineapple.sage.SageVoiceService
 import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.brain.BrainProgress
+import com.pineapple.sageos2.brain.BrainRequestPolicy
 import com.pineapple.sageos2.capability.Capability
 import com.pineapple.sageos2.capability.CapabilityStatus
 import com.pineapple.sageos2.continuity.TaskState
@@ -371,6 +372,14 @@ open class MainActivity : Activity() {
                 startActivity(Intent(this@MainActivity, com.pineapple.sageos2.brain.BrainModelImportActivity::class.java))
             }
         })
+        content.addView(Button(this).apply {
+            text = "Run local Brain self-check"
+            isAllCaps = false
+            setOnClickListener {
+                host.submitText(BrainRequestPolicy.SELF_CHECK_PROMPT)
+                showPanel(Panel.CHAT)
+            }
+        })
         content.addView(sectionTitle("Authority / capability truth"))
         val states = host.capabilityStatus().states
         Capability.entries.forEach { capability ->
@@ -426,6 +435,20 @@ open class MainActivity : Activity() {
 
     private fun showDiagnostics() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(sectionTitle("Diagnostic report"))
+        content.addView(Button(this).apply {
+            text = "Copy diagnostic report"
+            isAllCaps = false
+            setOnClickListener {
+                copyToClipboard("SageOS 2 diagnostic report", host.diagnosticReport())
+                Toast.makeText(this@MainActivity, "Diagnostic report copied", Toast.LENGTH_SHORT).show()
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Share diagnostic report"
+            isAllCaps = false
+            setOnClickListener { shareDiagnosticReport() }
+        })
         content.addView(sectionTitle("Recent diagnostics"))
         val events = host.traces.recent(100).asReversed()
         if (events.isEmpty()) {
@@ -927,6 +950,21 @@ open class MainActivity : Activity() {
     private fun copyToClipboard(label: String, value: String) {
         val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
+    }
+
+    private fun shareDiagnosticReport() {
+        val report = host.diagnosticReport()
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "SageOS 2 diagnostic report")
+            putExtra(Intent.EXTRA_TEXT, report)
+        }
+        runCatching {
+            startActivity(Intent.createChooser(send, "Share Sage diagnostic report"))
+        }.onFailure {
+            copyToClipboard("SageOS 2 diagnostic report", report)
+            Toast.makeText(this, "Sharing didn't open, so I copied the report", Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()

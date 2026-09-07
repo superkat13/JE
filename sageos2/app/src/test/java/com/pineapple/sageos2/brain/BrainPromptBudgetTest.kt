@@ -5,6 +5,12 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrainPromptBudgetTest {
+    @Test fun defaultBudgetMatchesTheInheritedTabletCeiling() {
+        assertEquals(4_800, BrainPromptBudget.DEFAULT_COMBINED_CHARACTER_BUDGET)
+        assertTrue(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("short finished reply"))
+        assertTrue(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("/no_think"))
+    }
+
     @Test fun shortContextIsUntouched() {
         assertEquals("identity and tools", BrainPromptBudget.fitSystemContext("identity and tools", "hello"))
     }

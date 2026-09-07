@@ -211,7 +211,18 @@ class SageRuntimeHost private constructor(context: Context) {
                     DiagnosticTaskSummary(task.taskId, task.title, task.state.name, task.nextStep)
                 },
                 chickenTonightScopeStatus = scopeStatus,
-                traces = traces.recent(traceLimit.coerceIn(0, 200))
+                traces = traces.recent(traceLimit.coerceIn(0, 200)),
+                brainEvidence = brainHealth.telemetry?.let { telemetry ->
+                    buildMap {
+                        telemetry.nativeStage?.let { put("native stage", it) }
+                        telemetry.promptTokens?.let { put("prompt tokens", it.toString()) }
+                        telemetry.generatedTokens?.let { put("generated tokens", it.toString()) }
+                        telemetry.promptPrefillMs?.let { put("prompt prefill", "$it ms") }
+                        telemetry.firstTokenMs?.let { put("first token", "$it ms") }
+                        telemetry.generationMs?.let { put("generation", "$it ms") }
+                        telemetry.promptTokensPerSecond?.let { put("prompt speed", "$it tokens/s") }
+                    }
+                }.orEmpty()
             )
         )
     }

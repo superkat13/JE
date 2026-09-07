@@ -20,7 +20,8 @@ class BrainRouterEngine(
             ready = ready.isNotEmpty(),
             detail = healthy.joinToString("; ") { (engine, health) -> "${engine.name}=${if (health.ready) "ready" else "down"}:${health.detail}" },
             lastLatencyMs = ready.mapNotNull { it.second.lastLatencyMs }.minOrNull(),
-            progressStage = ready.firstNotNullOfOrNull { it.second.progressStage }
+            progressStage = ready.firstNotNullOfOrNull { it.second.progressStage },
+            telemetry = ready.firstNotNullOfOrNull { it.second.telemetry }
         )
     }
 
@@ -64,7 +65,7 @@ class BrainRouterEngine(
                         onSuccess = { response ->
                             val merged = response.copy(
                                 provenance = response.provenance.copy(
-                                    attempts = attempts.toList()
+                                    attempts = attempts.toList() + response.provenance.attempts
                                 )
                             )
                             callback(Result.success(merged))

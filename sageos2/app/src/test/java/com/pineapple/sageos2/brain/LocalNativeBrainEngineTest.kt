@@ -76,19 +76,115 @@ class LocalNativeBrainEngineTest {
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         assertEquals("virtual twin system context", bridge.systemPrompt)
         assertEquals("current user request", bridge.userPrompt)
+        assertEquals(24, bridge.maxTokens)
+        assertFalse(bridge.deterministic)
         assertEquals("done", result!!.getOrThrow().text)
+    }
+
+    @Test fun requestLimitsAndOutputCleanupCrossTheNativeBoundary() {
+        val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
+        val bridge = FakeBridge().apply {
+            answer = "<think>private reasoning</think>\nBrain online.<|im_end|>"
+        }
+        val engine = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
+        val latch = CountDownLatch(1)
+        var result: Result<BrainResponse>? = null
+        engine.start(
+            BrainRequest(
+                turnId = 88L,
+                prompt = BrainRequestPolicy.SELF_CHECK_PROMPT,
+                twinContextText = "Output only the requested literal. /no_think",
+                maxOutputTokens = 7,
+                deterministic = true,
+                expectedLiteral = "Brain online."
+            )
+        ) {
+            result = it
+            latch.countDown()
+        }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertEquals(7, bridge.maxTokens)
+        assertTrue(bridge.deterministic)
+        assertEquals("Brain online.", result!!.getOrThrow().text)
+        assertTrue(result!!.getOrThrow().provenance.attempts.contains("requested_tokens=7"))
+    }
+
+    @Test fun exactSelfCheckRequiresANativeGeneratedTokenMeasurement() {
+        val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
+        val bridge = FakeBridge().apply {
+            answer = "Brain online."
+            generatedTokens = 0
+        }
+        val engine = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
+        val latch = CountDownLatch(1)
+        var result: Result<BrainResponse>? = null
+        engine.start(
+            BrainRequest(
+                turnId = 89L,
+                prompt = BrainRequestPolicy.SELF_CHECK_PROMPT,
+                twinContextText = "Output only the requested literal. /no_think",
+                maxOutputTokens = 7,
+                deterministic = true,
+                expectedLiteral = "Brain online."
+            )
+        ) {
+            result = it
+            latch.countDown()
+        }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertTrue(result!!.isFailure)
+        assertTrue(result!!.exceptionOrNull()?.message.orEmpty().contains("no measured tokens"))
+    }
+
+    @Test fun failedModelLoadCanBeRetriedWithoutRestartingSage() {
+        val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
+        val bridge = FakeBridge().apply { loadSucceeds = false }
+        val engine = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
+
+        val first = CountDownLatch(1)
+        var firstResult: Result<BrainResponse>? = null
+        engine.start(BrainRequest(91L, "hello", twinContextText = "context")) {
+            firstResult = it
+            first.countDown()
+        }
+        assertTrue(first.await(2, TimeUnit.SECONDS))
+        assertTrue(firstResult!!.isFailure)
+        assertTrue(engine.health().ready)
+
+        bridge.loadSucceeds = true
+        val second = CountDownLatch(1)
+        var secondResult: Result<BrainResponse>? = null
+        engine.start(BrainRequest(92L, "hello again", twinContextText = "context")) {
+            secondResult = it
+            second.countDown()
+        }
+        assertTrue(second.await(2, TimeUnit.SECONDS))
+        assertEquals("ok", secondResult!!.getOrThrow().text)
+        assertEquals(2, bridge.loadCalls)
     }
 
     private class FakeBridge : NativeBrainBridge {
         var systemPrompt = ""
         var userPrompt = ""
         var answer = "ok"
-        override fun loadModel(path: String) = true
+        var maxTokens = -1
+        var deterministic = false
+        var loadSucceeds = true
+        var loadCalls = 0
+        var generatedTokens = 3
+        override fun loadModel(path: String): Boolean {
+            loadCalls += 1
+            return loadSucceeds
+        }
         override fun generate(requestId: Long, systemPrompt: String, userPrompt: String, maxTokens: Int, deterministic: Boolean): String {
             this.systemPrompt = systemPrompt
             this.userPrompt = userPrompt
+            this.maxTokens = maxTokens
+            this.deterministic = deterministic
             return answer
         }
         override fun cancel(requestId: Long) = Unit
+        override fun generatedTokenCount() = generatedTokens
+        override fun lastError() = if (loadSucceeds) "" else "llama.cpp could not load that GGUF model"
     }
 }

@@ -42,6 +42,22 @@ class SageRuntimeTest {
         assertTrue(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
     }
 
+    @Test fun exactBrainSelfCheckUsesOnlyItsMinimalDeterministicContract() {
+        val f = Fixture()
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted(BrainRequestPolicy.SELF_CHECK_PROMPT))
+        val request = f.brain.requests.single()
+        assertEquals("Output only the requested literal. No explanation. /no_think", request.twinContextText)
+        assertEquals("Brain online.", request.expectedLiteral)
+        assertTrue(request.deterministic)
+        assertTrue((request.maxOutputTokens ?: 0) in 4..12)
+        assertEquals(null, request.sageCore)
+        assertEquals(null, request.twinMemory)
+        assertEquals(null, request.conversationHistory)
+        assertEquals(null, request.ownerApps)
+        assertEquals(null, request.mode)
+    }
+
     @Test fun fastDeviceCommandBypassesBrain() {
         val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
         assertEquals(1, f.fast.requests.size); assertEquals(0, f.brain.requests.size)
@@ -107,6 +123,25 @@ class SageRuntimeTest {
         assertTrue(f.observer.textResponses.single().second.contains("message is saved"))
     }
 
+    @Test fun brainWatchdogTracksLoadFirstTokenAndGenerationProgress() {
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("stay responsive"))
+        assertTrue(scheduler.activeDelays().contains(120_000L))
+
+        f.brain.progress(0, BrainProgressStage.LOADING_MODEL)
+        assertTrue(scheduler.activeDelays().contains(30_000L))
+        f.brain.progress(0, BrainProgressStage.READING_CONTEXT)
+        assertTrue(scheduler.activeDelays().contains(60_000L))
+        f.brain.progress(0, BrainProgressStage.GENERATING, generatedTokens = 1)
+        assertTrue(scheduler.activeDelays().contains(30_000L))
+
+        scheduler.runLast(30_000L)
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.observer.textResponses.single().second.contains("taking too long"))
+    }
+
     @Test fun fifthToolCallIsBlockedByPerTurnLimit() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)
@@ -125,7 +160,7 @@ class SageRuntimeTest {
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         scheduler: RuntimeScheduler = FakeScheduler(),
-        brainResponseTimeoutMs: Long = 180_000L
+        brainResponseTimeoutMs: Long = 120_000L
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
@@ -163,21 +198,36 @@ class SageRuntimeTest {
             val request=requests[index]
             callbacks[index](Result.success(BrainResponse(request.turnId,text,name)))
         }
+        fun progress(index:Int,stage:BrainProgressStage,generatedTokens:Int?=null) {
+            val request=requests[index]
+            request.onProgress(BrainProgress(
+                request.turnId,
+                stage,
+                generatedTokens?.let { BrainTelemetry(generatedTokens = it) }
+            ))
+        }
     }
 
     private class FakeFastActions:FastActionEngine{val requests=mutableListOf<FastActionRequest>();override fun start(request:FastActionRequest,callback:(Result<FastActionResponse>)->Unit):FastActionJob{requests+=request;return object:FastActionJob{override val turnId=request.turnId;override fun cancel()=Unit}}}
     private class FakeWorkflows:WorkflowEngine{val launched=mutableListOf<String>();override fun launch(turnId:Long,workflowId:String){launched+=workflowId}}
     private class FakeScheduler:RuntimeScheduler{override fun schedule(delayMs:Long,task:()->Unit)=object:ScheduledHandle{override fun cancel()=Unit}}
     private class ManualScheduler : RuntimeScheduler {
-        private data class Pending(val task: () -> Unit, var cancelled: Boolean = false)
+        private data class Pending(val delayMs: Long, val task: () -> Unit, var cancelled: Boolean = false)
         private val pending = mutableListOf<Pending>()
         override fun schedule(delayMs: Long, task: () -> Unit): ScheduledHandle {
-            val item = Pending(task)
+            val item = Pending(delayMs, task)
             pending += item
             return object : ScheduledHandle { override fun cancel() { item.cancelled = true } }
         }
+        fun activeDelays() = pending.filterNot { it.cancelled }.map { it.delayMs }
         fun runNext() {
             val item = pending.firstOrNull { !it.cancelled } ?: error("no pending task")
+            item.cancelled = true
+            item.task()
+        }
+        fun runLast(delayMs: Long) {
+            val item = pending.lastOrNull { !it.cancelled && it.delayMs == delayMs }
+                ?: error("no pending task for ${delayMs}ms")
             item.cancelled = true
             item.task()
         }

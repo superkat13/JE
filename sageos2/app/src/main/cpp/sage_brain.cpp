@@ -31,8 +31,11 @@ std::atomic<long long> g_active_request_id{0};
 std::atomic<int> g_last_stage{0};
 std::string g_last_error = "Model not loaded";
 bool g_backend_initialized = false;
-constexpr int kContextTokens = 4096;
-constexpr int kMaximumResponseTokens = 192;
+// These ceilings are deliberately tuned for the owner's inherited Qwen3-1.7B-Q8 model on the
+// VASOUN tablet. Larger values compiled successfully but made a real turn exceed the useful
+// physical response window.
+constexpr int kContextTokens = 2048;
+constexpr int kMaximumResponseTokens = 24;
 
 const char * stage_name(int stage) {
     switch (stage) {
@@ -435,7 +438,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         g_last_stage.store(8, std::memory_order_release);
         batch = llama_batch_get_one(&token, 1);
 
-        if (output.size() > 4096U) {
+        if (output.size() > 2048U) {
             break;
         }
     }
