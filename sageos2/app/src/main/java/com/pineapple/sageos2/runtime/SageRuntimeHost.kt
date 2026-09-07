@@ -1,6 +1,7 @@
 package com.pineapple.sageos2.runtime
 
 import android.content.Context
+import android.os.Build
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
@@ -14,6 +15,9 @@ import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.core.SageTurnCoordinator
+import com.pineapple.sageos2.diagnostics.DiagnosticReportRenderer
+import com.pineapple.sageos2.diagnostics.DiagnosticReportSnapshot
+import com.pineapple.sageos2.diagnostics.DiagnosticTaskSummary
 import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import com.pineapple.sageos2.forge.ForgeClient
 import com.pineapple.sageos2.forge.ForgeStore
@@ -126,6 +130,60 @@ class SageRuntimeHost private constructor(context: Context) {
     fun capabilityStatus() = capabilities.snapshot()
     fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
+
+    fun diagnosticReport(traceLimit: Int = 100): String {
+        val now = System.currentTimeMillis()
+        val runtimeSnapshot = snapshot()
+        val brainHealth = brainStatus()
+        val wakeHealth = wakeStatus()
+        val capabilityMap = capabilityStatus().states.mapKeys { it.key.name }.mapValues { it.value.name }
+        val mode = modes.current()
+        val apps = ownerApps.snapshot()
+        val scope = chickenTonightScope.current()
+        val scopeStatus = when {
+            scope == null -> "NOT_CONFIGURED"
+            scope.isExpired(now) -> "EXPIRED"
+            scope.isUsable(now) -> "READY"
+            else -> "INCOMPLETE"
+        }
+        val packageInfo = runCatching {
+            @Suppress("DEPRECATION")
+            appContext.packageManager.getPackageInfo(appContext.packageName, 0)
+        }.getOrNull()
+        val appVersion = buildString {
+            append(packageInfo?.versionName ?: "unknown")
+            packageInfo?.longVersionCode?.let { append(" (").append(it).append(')') }
+        }
+        return DiagnosticReportRenderer.render(
+            DiagnosticReportSnapshot(
+                createdAtMs = now,
+                appVersion = appVersion,
+                packageName = appContext.packageName,
+                device = listOf(Build.MANUFACTURER, Build.MODEL).filter { it.isNotBlank() }.joinToString(" "),
+                android = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",
+                runtimeState = runtimeSnapshot.state.name,
+                listeningMode = runtimeSnapshot.listeningMode.name,
+                brainReady = brainHealth.ready,
+                brainDetail = brainHealth.detail,
+                brainLastLatencyMs = brainHealth.lastLatencyMs,
+                wakeReady = wakeHealth.ready,
+                wakeEngine = wakeHealth.engine,
+                wakeDetail = wakeHealth.detail,
+                capabilities = capabilityMap,
+                sageCoreRevision = core.current().revision,
+                profileId = mode.profileId,
+                modeId = mode.modeId,
+                ownerAppsRevision = apps.revision,
+                ownerAppsCount = apps.apps.size,
+                recoverableTasks = recoverableTasks().map { task ->
+                    DiagnosticTaskSummary(task.taskId, task.title, task.state.name, task.nextStep)
+                },
+                chickenTonightScopeStatus = scopeStatus,
+                traces = traces.recent(traceLimit.coerceIn(0, 200))
+            )
+        )
+    }
+
     fun addListener(listener: SageRuntimeListener) { listeners += listener }
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }
 
