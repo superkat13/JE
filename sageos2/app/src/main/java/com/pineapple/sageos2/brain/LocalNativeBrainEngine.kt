@@ -17,55 +17,59 @@ class LocalNativeBrainEngine(
     private val executor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sage-local-brain").apply { isDaemon = true }
     }
+    private val libraryLoadAttempted = AtomicBoolean(false)
+    private val libraryReady = AtomicBoolean(false)
     private val loadAttempted = AtomicBoolean(false)
     private val loaded = AtomicBoolean(false)
-    private val libraryReady = AtomicBoolean(false)
     private val lastLatency = AtomicLong(-1L)
     @Volatile private var lastError: String? = null
 
-    init {
-        runCatching { libraryLoader(); libraryReady.set(true) }
-            .onFailure { lastError = "native library unavailable: ${it.message ?: it::class.simpleName}" }
-    }
-
     /**
-     * Health is deliberately observational. It must never load a multi-gigabyte GGUF model or
-     * enter native inference merely because the owner opened the cockpit/status screen.
+     * Health is deliberately observational. It must never load a native library, multi-gigabyte
+     * GGUF model, or enter inference merely because the owner opened the cockpit/status screen.
      */
     override fun health(): BrainHealth {
-        if (!libraryReady.get()) return BrainHealth(false, lastError ?: "native library unavailable")
         if (modelPath.isBlank()) return BrainHealth(false, "local model path is not configured")
         if (!File(modelPath).isFile) return BrainHealth(false, "local model file is missing: $modelPath")
+        if (libraryLoadAttempted.get() && !libraryReady.get()) {
+            return BrainHealth(false, lastError ?: "native library unavailable")
+        }
         return BrainHealth(
             ready = true,
-            detail = if (loaded.get()) "native Brain ready" else "native Brain available; model load deferred until first deep turn",
+            detail = when {
+                loaded.get() -> "native Brain ready"
+                libraryReady.get() -> "native Brain library ready; model load deferred until first deep turn"
+                else -> "native Brain available; native load deferred until first deep turn"
+            },
             lastLatencyMs = lastLatency.get().takeIf { it >= 0L }
         )
     }
 
     override fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob {
         val cancelled = AtomicBoolean(false)
-        if (!libraryReady.get()) {
-            callback(Result.failure(BrainFailureException(
-                kind = BrainFailureKind.UNAVAILABLE,
-                engineName = name,
-                message = lastError ?: "local native Brain is unavailable"
-            )))
-            return completedJob(request.turnId)
-        }
-
         var future: Future<*>? = null
         val job = object : BrainJob {
             override val turnId: Long = request.turnId
             override fun cancel() {
                 if (cancelled.compareAndSet(false, true)) {
-                    runCatching { bridge.cancel(request.turnId) }
+                    if (libraryReady.get()) runCatching { bridge.cancel(request.turnId) }
                     future?.cancel(true)
                 }
             }
         }
 
         future = executor.submit {
+            if (cancelled.get()) return@submit
+            if (!ensureLibraryReady()) {
+                if (!cancelled.get()) {
+                    callback(Result.failure(BrainFailureException(
+                        kind = BrainFailureKind.UNAVAILABLE,
+                        engineName = name,
+                        message = lastError ?: "local native Brain library is unavailable"
+                    )))
+                }
+                return@submit
+            }
             if (cancelled.get()) return@submit
             if (!ensureLoaded()) {
                 if (!cancelled.get()) {
@@ -132,6 +136,19 @@ class LocalNativeBrainEngine(
     }
 
     @Synchronized
+    private fun ensureLibraryReady(): Boolean {
+        if (libraryReady.get()) return true
+        if (libraryLoadAttempted.get()) return false
+        libraryLoadAttempted.set(true)
+        return runCatching {
+            libraryLoader()
+            true
+        }.onFailure {
+            lastError = "native library unavailable: ${it.message ?: it::class.simpleName}"
+        }.getOrDefault(false).also { libraryReady.set(it) }
+    }
+
+    @Synchronized
     private fun ensureLoaded(): Boolean {
         if (loaded.get()) return true
         if (loadAttempted.get()) return false
@@ -147,9 +164,9 @@ class LocalNativeBrainEngine(
             }
     }
 
-    private fun safeStage() = runCatching { bridge.stage().trim() }.getOrDefault("")
-    private inline fun safeLong(block: () -> Long) = runCatching(block).getOrDefault(-1L)
-    private inline fun safeInt(block: () -> Int) = runCatching(block).getOrDefault(-1)
+    private fun safeStage() = if (libraryReady.get()) runCatching { bridge.stage().trim() }.getOrDefault("") else "not_loaded"
+    private inline fun safeLong(block: () -> Long) = if (libraryReady.get()) runCatching(block).getOrDefault(-1L) else -1L
+    private inline fun safeInt(block: () -> Int) = if (libraryReady.get()) runCatching(block).getOrDefault(-1) else -1
 
     private fun completedJob(turnId: Long) = object : BrainJob {
         override val turnId: Long = turnId
