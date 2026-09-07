@@ -1,0 +1,221 @@
+name: Build verified signed SageOS 2 candidate
+
+on:
+  push:
+    branches: [sageos-2]
+    paths:
+      - 'sageos2/**'
+      - '.github/workflows/build-sageos2-signed-candidate.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  signed-candidate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install exact Android signing/build tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.3.1'
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            sageos2/.deps/kws
+            sageos2/app/libs/sherpa-onnx-1.13.7.aar
+            sageos2/app/src/main/assets/sherpa-kws
+          key: sageos2-kws-v1-1.13.7-2e6ac2577310bfa2
+
+      - name: Verify in-place upgrade identity before building
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle_file=sageos2/app/build.gradle.kts
+          manifest=sageos2/app/src/main/AndroidManifest.xml
+          grep -F 'applicationId = "com.pineapple.sagecommander.stable"' "$gradle_file"
+          grep -F 'versionCode = 200' "$gradle_file"
+          grep -F 'versionName = "2.0.0"' "$gradle_file"
+          grep -F 'targetSdk = 35' "$gradle_file"
+          grep -F 'abiFilters += listOf("arm64-v8a")' "$gradle_file"
+          for component in \
+            com.pineapple.sage.SageAccessibilityService \
+            com.pineapple.sage.SageNotificationListener \
+            com.pineapple.sage.SageVoiceService \
+            com.pineapple.sage.SageDeviceAdminReceiver \
+            com.pineapple.sage.SageBootReceiver \
+            com.pineapple.sage.SageAssistActivity \
+            com.pineapple.sage.SageSherpaRecognitionService; do
+            grep -F "android:name=\"$component\"" "$manifest"
+          done
+
+      - name: Prepare exact offline wake runtime and pinned llama.cpp
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash sageos2/tools/fetch-kws-deps.sh
+          PIN=d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          DIR=sageos2/third_party/llama.cpp
+          rm -rf "$DIR"
+          mkdir -p "$(dirname "$DIR")"
+          git clone --filter=blob:none --no-checkout https://github.com/ggerganov/llama.cpp.git "$DIR"
+          git -C "$DIR" fetch --depth=1 origin "$PIN"
+          git -C "$DIR" checkout --detach "$PIN"
+          test "$(git -C "$DIR" rev-parse HEAD)" = "$PIN"
+
+      - name: Full release build A with tests and lint
+        shell: bash
+        run: |
+          set -euo pipefail
+          gradle -p sageos2 --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+          cp sageos2/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sageos2-a-unsigned.apk
+          test -s /tmp/sageos2-a-unsigned.apk
+
+      - name: Full independent release build B
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf sageos2/app/build sageos2/.gradle sageos2/app/.cxx sageos2/.cxx
+          gradle -p sageos2 --no-daemon clean testReleaseUnitTest lintRelease assembleRelease --stacktrace
+          cp sageos2/app/build/outputs/apk/release/app-release-unsigned.apk /tmp/sageos2-b-unsigned.apk
+          test -s /tmp/sageos2-b-unsigned.apk
+
+      - name: Compare independent unsigned payloads
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/apk-a /tmp/apk-b
+          unzip -q /tmp/sageos2-a-unsigned.apk -d /tmp/apk-a
+          unzip -q /tmp/sageos2-b-unsigned.apk -d /tmp/apk-b
+          diff -qr /tmp/apk-a /tmp/apk-b
+          find /tmp/apk-a -type f -printf '%P\n' | sort > /tmp/files-a.txt
+          find /tmp/apk-b -type f -printf '%P\n' | sort > /tmp/files-b.txt
+          cmp /tmp/files-a.txt /tmp/files-b.txt
+
+      - name: Restore signing identities and recreate Android 13 rotation lineage
+        shell: bash
+        env:
+          LEGACY_KEYSTORE_B64: ${{ secrets.SAGE_LEGACY_KEYSTORE_B64 }}
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.SAGE_LEGACY_KEYSTORE_PASSWORD }}
+          NEW_KEYSTORE_B64: ${{ secrets.SAGE_RELEASE_KEYSTORE_B64 }}
+          NEW_KEYSTORE_PASSWORD: ${{ secrets.SAGE_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          test -n "$LEGACY_KEYSTORE_B64"
+          test -n "$LEGACY_KEYSTORE_PASSWORD"
+          test -n "$NEW_KEYSTORE_B64"
+          test -n "$NEW_KEYSTORE_PASSWORD"
+          printf '%s' "$LEGACY_KEYSTORE_B64" | base64 --decode > /tmp/sage-legacy.jks
+          printf '%s' "$NEW_KEYSTORE_B64" | base64 --decode > /tmp/sage-release-2026.jks
+          chmod 600 /tmp/sage-legacy.jks /tmp/sage-release-2026.jks
+
+          LEGACY_CERT="$(keytool -exportcert -keystore /tmp/sage-legacy.jks -storepass:env LEGACY_KEYSTORE_PASSWORD -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          NEW_CERT="$(keytool -exportcert -keystore /tmp/sage-release-2026.jks -storepass:env NEW_KEYSTORE_PASSWORD -alias sage-release-2026 | sha256sum | cut -d' ' -f1)"
+          test "$LEGACY_CERT" = 99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35
+          test "$NEW_CERT" = e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e
+
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" rotate \
+            --out /tmp/sage-signing-lineage \
+            --old-signer \
+            --ks /tmp/sage-legacy.jks \
+            --ks-key-alias androiddebugkey \
+            --ks-pass env:LEGACY_KEYSTORE_PASSWORD \
+            --key-pass env:LEGACY_KEYSTORE_PASSWORD \
+            --new-signer \
+            --ks /tmp/sage-release-2026.jks \
+            --ks-key-alias sage-release-2026 \
+            --ks-pass env:NEW_KEYSTORE_PASSWORD \
+            --key-pass env:NEW_KEYSTORE_PASSWORD
+          test -s /tmp/sage-signing-lineage
+
+      - name: Sign both independent candidates with proven lineage
+        shell: bash
+        env:
+          LEGACY_KEYSTORE_PASSWORD: ${{ secrets.SAGE_LEGACY_KEYSTORE_PASSWORD }}
+          NEW_KEYSTORE_PASSWORD: ${{ secrets.SAGE_RELEASE_KEYSTORE_PASSWORD }}
+        run: |
+          set -euo pipefail
+          set +x
+          sign_rotated() {
+            local unsigned="$1" signed="$2"
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" sign \
+              --out "$signed" \
+              --v4-signing-enabled false \
+              --lineage /tmp/sage-signing-lineage \
+              --rotation-min-sdk-version 33 \
+              --ks /tmp/sage-legacy.jks \
+              --ks-key-alias androiddebugkey \
+              --ks-pass env:LEGACY_KEYSTORE_PASSWORD \
+              --key-pass env:LEGACY_KEYSTORE_PASSWORD \
+              --next-signer \
+              --ks /tmp/sage-release-2026.jks \
+              --ks-key-alias sage-release-2026 \
+              --ks-pass env:NEW_KEYSTORE_PASSWORD \
+              --key-pass env:NEW_KEYSTORE_PASSWORD \
+              "$unsigned"
+            test -s "$signed"
+          }
+          sign_rotated /tmp/sageos2-a-unsigned.apk /tmp/SageOS-2.0-signed-a.apk
+          sign_rotated /tmp/sageos2-b-unsigned.apk /tmp/SageOS-2.0-signed-b.apk
+
+      - name: Verify signatures package version native payload and reproducibility
+        shell: bash
+        run: |
+          set -euo pipefail
+          exec > >(tee /tmp/SageOS-2.0-verification.txt) 2>&1
+          A=/tmp/SageOS-2.0-signed-a.apk
+          B=/tmp/SageOS-2.0-signed-b.apk
+          for apk in "$A" "$B"; do
+            unzip -t "$apk" >/dev/null
+            "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$apk" | tee /tmp/apksigner.txt
+            grep -Fi 'e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e' /tmp/apksigner.txt
+            "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$apk" | tee /tmp/badging.txt
+            grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='200' versionName='2.0.0'" /tmp/badging.txt
+            unzip -l "$apk" | grep -F 'lib/arm64-v8a/libsage-brain.so'
+            unzip -l "$apk" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so'
+            unzip -l "$apk" | grep -F 'lib/arm64-v8a/libonnxruntime.so'
+            ! unzip -l "$apk" | grep -E 'lib/(x86|x86_64|armeabi-v7a)/'
+          done
+
+          # Signed bytes can contain signing-block nondeterminism, so compare extracted file payloads.
+          rm -rf /tmp/signed-a /tmp/signed-b
+          mkdir -p /tmp/signed-a /tmp/signed-b
+          unzip -q "$A" -d /tmp/signed-a
+          unzip -q "$B" -d /tmp/signed-b
+          diff -qr /tmp/signed-a /tmp/signed-b
+
+          BYTES="$(stat -c%s "$A")"
+          SHA="$(sha256sum "$A" | cut -d' ' -f1)"
+          printf 'CANDIDATE_BYTES=%s\n' "$BYTES"
+          printf 'CANDIDATE_SHA256=%s\n' "$SHA"
+          printf 'SOURCE_COMMIT=%s\n' '${{ github.sha }}'
+          printf 'PACKAGE=com.pineapple.sagecommander.stable\nVERSION_CODE=200\nVERSION_NAME=2.0.0\n'
+          printf 'SIGNING_CERT_SHA256=e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e\n'
+          printf 'ROTATION_MIN_SDK=33\n'
+          cp "$A" /tmp/SageOS-2.0-signed.apk
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SageOS-2.0-signed-candidate
+          path: |
+            /tmp/SageOS-2.0-signed.apk
+            /tmp/SageOS-2.0-verification.txt
+          if-no-files-found: error
+          retention-days: 14
