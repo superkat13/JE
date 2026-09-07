@@ -16,8 +16,9 @@ import android.os.Messenger
 import android.os.RemoteException
 
 /**
- * Main-process wake client. It deliberately contains no Sherpa/ONNX types so loading this class
- * cannot initialize native wake code in the Sage cockpit process.
+ * Main-process wake client. It deliberately contains no Sherpa/ONNX types and does not resolve
+ * the remote service class, so loading this class cannot initialize native wake code in the Sage
+ * cockpit process.
  */
 class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     private val appContext = context.applicationContext
@@ -112,7 +113,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
             bound = false
             binding = false
             remote = null
-            runCatching { appContext.stopService(Intent(appContext, SageWakeRemoteService::class.java)) }
+            runCatching { appContext.stopService(remoteServiceIntent()) }
         }
     }
 
@@ -125,7 +126,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         if (binding) return
         binding = true
         lastDetail = "starting isolated wake process"
-        val intent = Intent(appContext, SageWakeRemoteService::class.java)
+        val intent = remoteServiceIntent()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) appContext.startForegroundService(intent)
             else appContext.startService(intent)
@@ -141,6 +142,10 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
             lastDetail = "remote wake start failed: ${t.message ?: t::class.java.simpleName}"
         }
     }
+
+    private fun remoteServiceIntent(): Intent = Intent().setComponent(
+        ComponentName(appContext.packageName, REMOTE_SERVICE_CLASS)
+    )
 
     private fun sendConfiguration() {
         val data = Bundle().apply {
@@ -193,5 +198,6 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
 
     companion object {
         private const val ENGINE = "sherpa-onnx-kws-remote-1.13.7"
+        private const val REMOTE_SERVICE_CLASS = "com.pineapple.sageos2.speech.SageWakeRemoteService"
     }
 }
