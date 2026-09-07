@@ -25,6 +25,7 @@ import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
+import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
@@ -53,12 +54,23 @@ class SageRuntimeHost private constructor(context: Context) {
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
     val ownerApps = SharedPreferencesOwnerAppRegistry(appContext)
+    val wakeProfiles = SharedPreferencesWakeProfileStore(appContext)
     val modes = SharedPreferencesSageModeController(appContext)
     val forgeStore = ForgeStore(appContext)
     val forge = ForgeClient(appContext, forgeStore)
     val rootBroker = SocketRootBrokerClient()
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
+
+    /** Runs before speech/wake are constructed so migrated profiles are visible on first start. */
+    private val legacyMigrationReport = LegacySageMigration(
+        appContext,
+        core = core,
+        memory = memory,
+        ownerApps = ownerApps,
+        wakeProfiles = wakeProfiles,
+        tasks = tasks
+    ).runIfNeeded()
 
     private val persistentObserver = PersistentRuntimeObserver(traces)
     private val observer = object : RuntimeObserver {
@@ -80,7 +92,7 @@ class SageRuntimeHost private constructor(context: Context) {
     private val localBrain = LocalNativeBrainEngine(localModel.absolutePath)
     private val brain = BrainRouterEngine(listOf(localBrain))
     private val wakeEngine = SherpaWakeWordEngine(appContext)
-    private val speech = AndroidSpeechPort(appContext, wakeEngine, SharedPreferencesWakeProfileStore(appContext))
+    private val speech = AndroidSpeechPort(appContext, wakeEngine, wakeProfiles)
     private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
     private val fastActions = AndroidFastActionEngine(controller)
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
@@ -104,6 +116,7 @@ class SageRuntimeHost private constructor(context: Context) {
 
     fun start() {
         if (started.compareAndSet(false, true)) {
+            traces.record("legacy_migration", legacyMigrationReport.summary())
             val recovered = recovery.recoverInterruptedRuntimeTasks()
             val states = capabilities.snapshot().states
             traces.record(
