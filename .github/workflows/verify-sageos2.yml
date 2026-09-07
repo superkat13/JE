@@ -118,10 +118,21 @@ jobs:
         run: |
           grep -F 'class AndroidFastActionEngine' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidFastActionEngine.kt
           grep -F 'class AndroidSpeechPort' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
+      - name: Verify owner cockpit is real runtime UI
+        run: |
+          set -euo pipefail
+          cockpit=sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES }' "$cockpit"
+          grep -F 'host.core.replace' "$cockpit"
+          grep -F 'host.recoverableTasks()' "$cockpit"
+          grep -F 'host.traces.recent(100)' "$cockpit"
+          grep -F 'host.ownerApps.upsert' "$cockpit"
+          grep -F 'host.modes.activate' "$cockpit"
+          grep -F 'com.pineapple.sageos2.MainActivity' sageos2/app/src/main/AndroidManifest.xml
       - name: Verify authority component contract
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
-          for component in com.pineapple.sage.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
+          for component in com.pineapple.sageos2.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
