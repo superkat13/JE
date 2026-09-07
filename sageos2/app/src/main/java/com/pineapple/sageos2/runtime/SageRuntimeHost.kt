@@ -10,6 +10,7 @@ import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.capability.Capability
 import com.pineapple.sageos2.capability.CapabilityStatus
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
+import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.core.SageTurnCoordinator
@@ -42,6 +43,7 @@ class SageRuntimeHost private constructor(context: Context) {
 
     val traces = SharedPreferencesTraceStore(appContext)
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
+    val recovery = TaskRecoveryManager(tasks)
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
@@ -90,19 +92,25 @@ class SageRuntimeHost private constructor(context: Context) {
         conversationHistory = history,
         ownerApps = ownerApps,
         modes = modes,
-        capabilities = capabilities
+        capabilities = capabilities,
+        taskContinuity = tasks
     )
 
     fun start() {
         if (started.compareAndSet(false, true)) {
+            val recovered = recovery.recoverInterruptedRuntimeTasks()
             val states = capabilities.snapshot().states
             traces.record(
                 "host",
-                "Sage runtime starting; root=${states[Capability.SAGEOS_ROOT_BROKER] == CapabilityStatus.ACTIVE}; " +
+                "Sage runtime starting; recoveredTurns=${recovered.size}; " +
+                    "root=${states[Capability.SAGEOS_ROOT_BROKER] == CapabilityStatus.ACTIVE}; " +
                     "forge=${states[Capability.FORGE] == CapabilityStatus.ACTIVE}; " +
                     "deviceOwner=${states[Capability.DEVICE_OWNER] == CapabilityStatus.ACTIVE}; " +
                     "accessibility=${states[Capability.ACCESSIBILITY] == CapabilityStatus.ACTIVE}"
             )
+            recovered.forEach { task ->
+                traces.record("recovery", "recoverable task=${task.taskId} next=${task.nextStep}")
+            }
             runtime.start()
         }
     }
@@ -113,6 +121,7 @@ class SageRuntimeHost private constructor(context: Context) {
     fun brainStatus() = brain.health()
     fun wakeStatus() = wakeEngine.health()
     fun capabilityStatus() = capabilities.snapshot()
+    fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
     fun addListener(listener: SageRuntimeListener) { listeners += listener }
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }
