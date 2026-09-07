@@ -21,4 +21,12 @@ class SageCommandRouterTest {
         assertEquals(SageRoute.DEEP_REASONING, decision.route)
         assertNull(decision.workflowId)
     }
+
+    @Test
+    fun diagnosticShareRoutesAroundBrain() {
+        val decision = router.route("Share diagnostic report")
+        assertEquals(SageRoute.FAST_DEVICE, decision.route)
+        assertNull(decision.workflowId)
+        assertEquals("share diagnostic report", decision.normalizedText)
+    }
 }
