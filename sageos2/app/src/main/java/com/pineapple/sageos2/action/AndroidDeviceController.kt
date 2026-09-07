@@ -15,7 +15,8 @@ import com.pineapple.sageos2.apps.OwnerAppResolver
 class AndroidDeviceController(
     private val context: Context,
     private val ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
-    private val appResolver: OwnerAppResolver = OwnerAppResolver()
+    private val appResolver: OwnerAppResolver = OwnerAppResolver(),
+    private val diagnosticReportProvider: () -> String = { "Sage diagnostic report is unavailable." }
 ) : DeviceController {
     override fun execute(command: FastCommand): DeviceControlResult = when (command) {
         is FastCommand.OpenApp -> openApp(command.appName)
@@ -24,10 +25,31 @@ class AndroidDeviceController(
         FastCommand.Recents -> global(AccessibilityService.GLOBAL_ACTION_RECENTS, "Recents")
         FastCommand.Notifications -> global(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, "Notifications")
         FastCommand.QuickSettings -> global(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS, "Quick settings")
+        FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()
         is FastCommand.Scroll -> scroll(command.direction)
         is FastCommand.Tap -> tap(command.x, command.y)
         is FastCommand.Swipe -> swipe(command.direction)
         is FastCommand.Volume -> volume(command.direction)
+    }
+
+    private fun shareDiagnosticReport(): DeviceControlResult {
+        val report = runCatching(diagnosticReportProvider).getOrElse { error ->
+            return DeviceControlResult(false, "Diagnostic report failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_SUBJECT, "SageOS 2 diagnostic report")
+            putExtra(Intent.EXTRA_TEXT, report)
+        }
+        val chooser = Intent.createChooser(send, "Share Sage diagnostic report").apply {
+            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        }
+        return runCatching {
+            context.startActivity(chooser)
+            DeviceControlResult(true, "Diagnostic report ready to share")
+        }.getOrElse { error ->
+            DeviceControlResult(false, "Could not open Android sharing: ${error.message ?: error.javaClass.simpleName}")
+        }
     }
 
     private fun openApp(name: String): DeviceControlResult {
