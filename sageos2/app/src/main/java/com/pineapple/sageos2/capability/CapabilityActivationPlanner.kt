@@ -39,6 +39,9 @@ class CapabilityActivationPlanner(private val context: Context) {
         Capability.SAGEOS_ROOT_BROKER -> CapabilityActivationPlan.ProvisioningRequired(
             "Root-backed Sage capability requires the SageOS root broker/system-image integration."
         )
+        Capability.FORGE -> CapabilityActivationPlan.NotUserActivatable(
+            "Forge becomes active after explicit pairing with its HTTPS origin, certificate pin, and pairing code."
+        )
     }
 
     private fun assistantPlan(): CapabilityActivationPlan {
