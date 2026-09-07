@@ -33,8 +33,13 @@ class AndroidSpeechPort(
     private var destroyed = false
 
     init {
-        wakeWordEngine.configure(wakeProfiles.profiles())
-        main.post { if (!destroyed) tts = TextToSpeech(appContext, this) }
+        runCatching { wakeWordEngine.configure(wakeProfiles.profiles()) }
+        main.post {
+            if (destroyed) return@post
+            runCatching { TextToSpeech(appContext, this) }
+                .onSuccess { engine -> tts = engine }
+                .onFailure { error -> listener?.onSpeechDiagnostic("TTS creation failed: ${error.message ?: error::class.simpleName}") }
+        }
     }
 
     override fun attach(listener: SpeechInputListener) { this.listener = listener }
@@ -71,35 +76,44 @@ class AndroidSpeechPort(
             val resumeGeneration = generation
             stopInput()
             val id = "transient-${UUID.randomUUID()}"
-            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                override fun onStart(utteranceId: String?) = Unit
-                override fun onError(utteranceId: String?) = onDone(utteranceId)
-                override fun onDone(utteranceId: String?) {
-                    main.post {
-                        if (!destroyed && desiredMode == resumeMode && generation == resumeGeneration) {
-                            when (resumeMode) {
-                                SageListeningMode.WAKE_ONLY -> startWake(resumeGeneration)
-                                SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, resumeGeneration)
-                                SageListeningMode.OFF -> Unit
+            runCatching {
+                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                    override fun onStart(utteranceId: String?) = Unit
+                    override fun onError(utteranceId: String?) = onDone(utteranceId)
+                    override fun onDone(utteranceId: String?) {
+                        main.post {
+                            if (!destroyed && desiredMode == resumeMode && generation == resumeGeneration) {
+                                when (resumeMode) {
+                                    SageListeningMode.WAKE_ONLY -> startWake(resumeGeneration)
+                                    SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, resumeGeneration)
+                                    SageListeningMode.OFF -> Unit
+                                }
                             }
                         }
                     }
-                }
-            })
-            tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+                })
+                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
+            }.onFailure { listener?.onSpeechDiagnostic("transient TTS failed: ${it.message ?: it::class.simpleName}") }
         }
     }
 
     override fun onInit(status: Int) {
         main.post {
             if (destroyed) return@post
-            ttsReady = status == TextToSpeech.SUCCESS
-            if (ttsReady) {
-                tts?.language = Locale.US
-                applyLegacyVoiceProfileIfPresent()
-                pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
-            } else {
-                listener?.onSpeechDiagnostic("TTS initialization failed: $status")
+            runCatching {
+                ttsReady = status == TextToSpeech.SUCCESS
+                if (ttsReady) {
+                    tts?.language = Locale.US
+                    runCatching { applyLegacyVoiceProfileIfPresent() }
+                        .onFailure { listener?.onSpeechDiagnostic("legacy TTS profile failed: ${it.message ?: it::class.simpleName}") }
+                    pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
+                } else {
+                    listener?.onSpeechDiagnostic("TTS initialization failed: $status")
+                    pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+                }
+            }.onFailure { error ->
+                ttsReady = false
+                listener?.onSpeechDiagnostic("TTS init callback failed: ${error.message ?: error::class.simpleName}")
                 pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
             }
         }
@@ -108,14 +122,15 @@ class AndroidSpeechPort(
     /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
     private fun applyLegacyVoiceProfileIfPresent() {
         val prefs = appContext.getSharedPreferences("sage_voice_profile", Context.MODE_PRIVATE)
-        val hasLegacyProfile = prefs.contains("voice_name") || prefs.contains("speech_rate") || prefs.contains("speech_pitch")
+        val values = prefs.all
+        val hasLegacyProfile = values.containsKey("voice_name") || values.containsKey("speech_rate") || values.containsKey("speech_pitch")
         if (!hasLegacyProfile) return
         val engine = tts ?: return
-        val rate = prefs.getFloat("speech_rate", 0.90f).coerceIn(0.5f, 2.0f)
-        val pitch = prefs.getFloat("speech_pitch", 0.98f).coerceIn(0.5f, 2.0f)
+        val rate = preferenceFloat(values["speech_rate"], 0.90f).coerceIn(0.5f, 2.0f)
+        val pitch = preferenceFloat(values["speech_pitch"], 0.98f).coerceIn(0.5f, 2.0f)
         engine.setSpeechRate(rate)
         engine.setPitch(pitch)
-        val requestedVoice = prefs.getString("voice_name", "").orEmpty().trim()
+        val requestedVoice = (values["voice_name"] as? String).orEmpty().trim()
         if (requestedVoice.isNotEmpty()) {
             val match = engine.voices?.firstOrNull { it.name == requestedVoice }
             if (match != null) engine.voice = match
@@ -123,14 +138,25 @@ class AndroidSpeechPort(
         }
     }
 
+    private fun preferenceFloat(value: Any?, fallback: Float): Float = when (value) {
+        is Number -> value.toFloat()
+        is String -> value.toFloatOrNull() ?: fallback
+        else -> fallback
+    }
+
     private fun speakNow(pending: PendingSpeech) {
         val id = "sage-${pending.turnId}-${UUID.randomUUID()}"
-        tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-            override fun onStart(utteranceId: String?) = Unit
-            override fun onError(utteranceId: String?) = onDone(utteranceId)
-            override fun onDone(utteranceId: String?) { main.post { pending.onComplete() } }
-        })
-        val result = tts?.speak(pending.text, TextToSpeech.QUEUE_FLUSH, null, id) ?: TextToSpeech.ERROR
+        val result = runCatching {
+            tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
+                override fun onStart(utteranceId: String?) = Unit
+                override fun onError(utteranceId: String?) = onDone(utteranceId)
+                override fun onDone(utteranceId: String?) { main.post { pending.onComplete() } }
+            })
+            tts?.speak(pending.text, TextToSpeech.QUEUE_FLUSH, null, id) ?: TextToSpeech.ERROR
+        }.getOrElse {
+            listener?.onSpeechDiagnostic("TTS speak failed: ${it.message ?: it::class.simpleName}")
+            TextToSpeech.ERROR
+        }
         if (result == TextToSpeech.ERROR) pending.onComplete()
     }
 
@@ -204,8 +230,10 @@ class AndroidSpeechPort(
             destroyed = true
             stopInput()
             try { wakeWordEngine.close() } catch (_: Throwable) {}
-            recognizer?.destroy(); recognizer = null
-            tts?.stop(); tts?.shutdown(); tts = null
+            runCatching { recognizer?.destroy() }; recognizer = null
+            runCatching { tts?.stop() }
+            runCatching { tts?.shutdown() }
+            tts = null
             pendingSpeech = null
         }
     }
