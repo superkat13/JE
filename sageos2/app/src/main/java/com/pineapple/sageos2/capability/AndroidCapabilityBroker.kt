@@ -257,10 +257,14 @@ class AndroidCapabilityBroker(
         CapabilityStatus.UNKNOWN
     }
 
-    private fun forgeStatus(): CapabilityStatus = when {
-        forgeStore == null || forgeClient == null -> CapabilityStatus.UNAVAILABLE
-        runCatching { forgeStore.isPaired() }.getOrDefault(false) -> CapabilityStatus.ACTIVE
-        else -> CapabilityStatus.AVAILABLE
+    private fun forgeStatus(): CapabilityStatus {
+        val store = forgeStore ?: return CapabilityStatus.UNAVAILABLE
+        if (forgeClient == null) return CapabilityStatus.UNAVAILABLE
+        return if (runCatching { store.isPaired() }.getOrDefault(false)) {
+            CapabilityStatus.ACTIVE
+        } else {
+            CapabilityStatus.AVAILABLE
+        }
     }
 
     private fun platformPrivilegeStatus(): CapabilityStatus = if (
