@@ -12,6 +12,15 @@ class SageCommandRouter {
             )
         }
 
+        if (normalized in setOf(
+                "share diagnostic report",
+                "share sage diagnostic report",
+                "send diagnostic report"
+            )
+        ) {
+            return RouteDecision(SageRoute.FAST_DEVICE, normalized)
+        }
+
         val fastPrefixes = listOf(
             "open ", "launch ", "close ", "go back", "go home",
             "scroll ", "swipe ", "tap ", "press ", "volume ",
