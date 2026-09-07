@@ -11,6 +11,7 @@ import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sageos2.apps.EmptyOwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppResolver
+import com.pineapple.sageos2.brain.BrainModelImportActivity
 
 class AndroidDeviceController(
     private val context: Context,
@@ -26,6 +27,7 @@ class AndroidDeviceController(
         FastCommand.Notifications -> global(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS, "Notifications")
         FastCommand.QuickSettings -> global(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS, "Quick settings")
         FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()
+        FastCommand.ImportBrainModel -> importBrainModel()
         is FastCommand.Scroll -> scroll(command.direction)
         is FastCommand.Tap -> tap(command.x, command.y)
         is FastCommand.Swipe -> swipe(command.direction)
@@ -50,6 +52,13 @@ class AndroidDeviceController(
         }.getOrElse { error ->
             DeviceControlResult(false, "Could not open Android sharing: ${error.message ?: error.javaClass.simpleName}")
         }
+    }
+
+    private fun importBrainModel(): DeviceControlResult = runCatching {
+        context.startActivity(Intent(context, BrainModelImportActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        DeviceControlResult(true, "Opened Sage Brain model import")
+    }.getOrElse { error ->
+        DeviceControlResult(false, "Could not open Brain model import: ${error.message ?: error.javaClass.simpleName}")
     }
 
     private fun openApp(name: String): DeviceControlResult {
