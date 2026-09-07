@@ -63,7 +63,6 @@ class SageRuntimeHost private constructor(context: Context) {
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
 
-    /** Runs before speech/wake are constructed so migrated profiles are visible on first start. */
     private val legacyMigrationReport = LegacySageMigration(
         appContext,
         core = core,
@@ -73,7 +72,6 @@ class SageRuntimeHost private constructor(context: Context) {
         tasks = tasks
     ).runIfNeeded()
 
-    /** Retires stale temporary context and preserves owner-taught personality replies as Sage memories. */
     private val legacyPersonalityMigrationReport = LegacyPersonalityContinuityMigration(
         appContext,
         memory = memory
@@ -173,7 +171,14 @@ class SageRuntimeHost private constructor(context: Context) {
         }.getOrNull()
         val appVersion = buildString {
             append(packageInfo?.versionName ?: "unknown")
-            packageInfo?.longVersionCode?.let { append(" (").append(it).append(')') }
+            val versionCode = packageInfo?.let {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) it.longVersionCode
+                else {
+                    @Suppress("DEPRECATION")
+                    it.versionCode.toLong()
+                }
+            }
+            versionCode?.let { append(" (").append(it).append(')') }
         }
         return DiagnosticReportRenderer.render(
             DiagnosticReportSnapshot(
