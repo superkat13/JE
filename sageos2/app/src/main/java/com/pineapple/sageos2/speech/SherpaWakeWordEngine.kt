@@ -34,17 +34,16 @@ class SherpaWakeWordEngine(
         this.profiles = profiles.filter { it.enabled }
     }
 
+    /** Health is observational: the cockpit must not instantiate native KWS merely to render status. */
     override fun health(): WakeWordHealth {
         val compiled = compiledEntries()
         return when {
             appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED ->
                 WakeWordHealth(false, ENGINE, "microphone permission is not granted")
             compiled.isEmpty() -> WakeWordHealth(false, ENGINE, "no wake phrases have compiled BPE tokens")
-            else -> runCatching { ensureSpotter() }
-                .fold(
-                    onSuccess = { WakeWordHealth(true, ENGINE, "offline KWS ready (${compiled.size} phrase${if (compiled.size == 1) "" else "s"})") },
-                    onFailure = { WakeWordHealth(false, ENGINE, it.message ?: "offline KWS initialization failed") }
-                )
+            lastProblem != null -> WakeWordHealth(false, ENGINE, lastProblem ?: "offline KWS problem")
+            spotter != null -> WakeWordHealth(true, ENGINE, "offline KWS ready (${compiled.size} phrase${if (compiled.size == 1) "" else "s"})")
+            else -> WakeWordHealth(true, ENGINE, "offline KWS configured; native initialization deferred (${compiled.size} phrase${if (compiled.size == 1) "" else "s"})")
         }
     }
 
