@@ -9,7 +9,8 @@ enum class Capability {
     DEVICE_OWNER,
     ASSISTANT_ROLE,
     PLATFORM_PRIVILEGED,
-    SAGEOS_ROOT_BROKER
+    SAGEOS_ROOT_BROKER,
+    FORGE
 }
 
 enum class CapabilityStatus { ACTIVE, AVAILABLE, UNAVAILABLE, UNKNOWN }
