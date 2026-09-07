@@ -81,7 +81,7 @@ class SageRuntimeHost private constructor(context: Context) {
     private val brain = BrainRouterEngine(listOf(localBrain))
     private val wakeEngine = SherpaWakeWordEngine(appContext)
     private val speech = AndroidSpeechPort(appContext, wakeEngine, SharedPreferencesWakeProfileStore(appContext))
-    private val controller = AndroidDeviceController(appContext, ownerApps)
+    private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
     private val fastActions = AndroidFastActionEngine(controller)
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
 
