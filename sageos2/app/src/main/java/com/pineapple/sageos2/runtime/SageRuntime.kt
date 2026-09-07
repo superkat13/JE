@@ -10,6 +10,11 @@ import com.pineapple.sageos2.capability.CapabilityBroker
 import com.pineapple.sageos2.capability.CapabilityResult
 import com.pineapple.sageos2.capability.DeviceAction
 import com.pineapple.sageos2.capability.EmptyCapabilityBroker
+import com.pineapple.sageos2.continuity.TaskCheckpoint
+import com.pineapple.sageos2.continuity.TaskContinuityContextRenderer
+import com.pineapple.sageos2.continuity.TaskContinuityStore
+import com.pineapple.sageos2.continuity.TaskRecoveryManager
+import com.pineapple.sageos2.continuity.TaskState
 import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.identity.EmptySageCoreProvider
 import com.pineapple.sageos2.identity.SageCoreProvider
@@ -39,6 +44,7 @@ class SageRuntime(
     private val ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
     private val modes: SageModeController = DefaultSageModeController,
     private val capabilities: CapabilityBroker = EmptyCapabilityBroker,
+    private val taskContinuity: TaskContinuityStore? = null,
     private val twinContextRenderer: TwinContextRenderer = TwinContextRenderer(),
     private val echoGuardMs: Long = 450L,
     private val maxToolCallsPerTurn: Int = 4
@@ -112,7 +118,10 @@ class SageRuntime(
                     )
                 }
             }
-            is SageEffect.QueryDeepBrain -> startBrain(effect.turnId, effect.prompt)
+            is SageEffect.QueryDeepBrain -> {
+                checkpointTurnStarted(effect.turnId, effect.prompt)
+                startBrain(effect.turnId, effect.prompt)
+            }
             is SageEffect.LaunchOwnerWorkflow -> workflows.launch(effect.turnId, effect.workflowId)
             is SageEffect.StartEchoGuard -> {
                 echoGuardHandle?.cancel()
@@ -131,6 +140,7 @@ class SageRuntime(
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
                 capabilityJob?.cancel(true); capabilityJob = null
                 toolCallsByTurn.remove(effect.turnId)
+                checkpointTurn(effect.turnId, TaskState.CANCELLED, "Turn cancelled before completion.", "")
                 echoGuardHandle?.cancel(); echoGuardHandle = null
                 followUpExpiryHandle?.cancel(); followUpExpiryHandle = null
             }
@@ -145,12 +155,16 @@ class SageRuntime(
         val apps = ownerApps.snapshot()
         val mode = modes.current()
         val twinContext = twinContextRenderer.render(core, memory, history, apps, mode)
+        val taskContext = TaskContinuityContextRenderer.render(taskContinuity?.active().orEmpty())
         val toolContext = BrainToolContextRenderer.render(capabilities.snapshot())
-        val context = "$twinContext\n\n$toolContext"
+        val context = "$twinContext\n\n$taskContext\n\n$toolContext"
         brainJob = brain.start(BrainRequest(turnId, prompt, core, memory, history, apps, mode, context)) { result ->
             result.fold(
                 onSuccess = { response -> handleBrainResponse(response) },
-                onFailure = { submit(SageEvent.BrainFailed(turnId, it.message ?: it::class.simpleName.orEmpty())) }
+                onFailure = {
+                    checkpointTurn(turnId, TaskState.FAILED, "Brain failed before the turn completed.", "Review diagnostics and retry from the stored owner prompt.")
+                    submit(SageEvent.BrainFailed(turnId, it.message ?: it::class.simpleName.orEmpty()))
+                }
             )
         }
     }
@@ -170,12 +184,14 @@ class SageRuntime(
             BrainToolDirectiveParser.parse(response.text)
         } catch (t: Throwable) {
             toolCallsByTurn.remove(response.turnId)
+            checkpointTurn(response.turnId, TaskState.FAILED, "Brain produced an invalid structured tool response.", "Retry reasoning from the stored owner prompt.")
             submit(SageEvent.BrainFailed(response.turnId, "invalid structured tool response: ${t.message ?: t::class.simpleName}"))
             return
         }
 
         if (directive == null) {
             toolCallsByTurn.remove(response.turnId)
+            checkpointTurn(response.turnId, TaskState.COMPLETED, "Owner turn completed successfully.", "")
             submit(SageEvent.ResponseReady(response.turnId, response.text, true))
             return
         }
@@ -183,12 +199,20 @@ class SageRuntime(
         val nextCount = (toolCallsByTurn[response.turnId] ?: 0) + 1
         if (nextCount > maxToolCallsPerTurn) {
             toolCallsByTurn.remove(response.turnId)
+            checkpointTurn(response.turnId, TaskState.FAILED, "Structured tool call ceiling reached.", "Continue from the stored owner prompt with a shorter tool plan.")
             submit(SageEvent.BrainFailed(response.turnId, "structured tool call limit exceeded"))
             return
         }
         toolCallsByTurn[response.turnId] = nextCount
 
         val action = DeviceAction(directive.name, directive.arguments)
+        checkpointTurn(
+            response.turnId,
+            TaskState.ACTIVE,
+            "Executing structured capability ${action.name} (step $nextCount of $maxToolCallsPerTurn).",
+            "Wait for the capability result, then continue reasoning without replaying this action.",
+            mapOf("phase" to "capability", "lastAction" to action.name, "toolCount" to nextCount.toString())
+        )
         capabilityJob?.cancel(true)
         capabilityJob = capabilityExecutor.submit {
             val result = runCatching { capabilities.execute(action) }
@@ -205,8 +229,59 @@ class SageRuntime(
             return
         }
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
+        checkpointTurn(
+            turnId,
+            TaskState.ACTIVE,
+            "Capability ${action.name} returned success=${result.success}.",
+            "Continue reasoning from the capability result; do not replay the completed capability call.",
+            mapOf("phase" to "brain_after_capability", "lastAction" to action.name, "lastActionSuccess" to result.success.toString())
+        )
         startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
     }
+
+    private fun checkpointTurnStarted(turnId: Long, ownerPrompt: String) {
+        val store = taskContinuity ?: return
+        val cleanPrompt = ownerPrompt.replace(Regex("\\s+"), " ").trim().take(4_000)
+        store.upsert(
+            TaskCheckpoint(
+                taskId = runtimeTaskId(turnId),
+                title = cleanPrompt.take(80).ifBlank { "Sage owner turn $turnId" },
+                state = TaskState.ACTIVE,
+                summary = "Deep Brain reasoning started for this owner turn.",
+                nextStep = "Generate a final response or one exact structured capability call.",
+                updatedAtMs = System.currentTimeMillis(),
+                metadata = mapOf(
+                    "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                    "turnId" to turnId.toString(),
+                    "ownerPrompt" to cleanPrompt,
+                    "phase" to "brain"
+                )
+            )
+        )
+    }
+
+    private fun checkpointTurn(
+        turnId: Long,
+        state: TaskState,
+        summary: String,
+        nextStep: String,
+        metadata: Map<String, String> = emptyMap()
+    ) {
+        val store = taskContinuity ?: return
+        val id = runtimeTaskId(turnId)
+        val existing = store.get(id) ?: return
+        store.upsert(
+            existing.copy(
+                state = state,
+                summary = summary,
+                nextStep = nextStep,
+                updatedAtMs = System.currentTimeMillis(),
+                metadata = existing.metadata + metadata
+            )
+        )
+    }
+
+    private fun runtimeTaskId(turnId: Long) = "runtime:turn:$turnId"
 
     private fun recordSageResponse(turnId: Long, text: String, input: ConversationInput) {
         (conversationHistory as? ConversationHistoryStore)?.record(
