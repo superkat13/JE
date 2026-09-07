@@ -75,6 +75,18 @@ jobs:
           grep -F 'userPrompt = userPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
           grep -F 'SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"' sageos2/app/src/main/cpp/CMakeLists.txt
           grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
+      - name: Verify private Brain model provisioning
+        run: |
+          set -euo pipefail
+          grep -F 'class BrainModelStore' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'const val MODEL_NAME = "sage-brain.gguf"' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'hasGgufMagic' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'StandardCopyOption.ATOMIC_MOVE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'class BrainModelImportActivity' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelImportActivity.kt
+          grep -F 'data object ImportBrainModel' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'FastCommand.ImportBrainModel -> importBrainModel()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
+          grep -F '"import brain model"' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'com.pineapple.sageos2.brain.BrainModelImportActivity' sageos2/app/src/main/AndroidManifest.xml
       - name: Verify structured tools Forge and safe recovery
         run: |
           set -euo pipefail
@@ -151,7 +163,7 @@ jobs:
       - name: Verify authority component contract
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
-          for component in com.pineapple.sageos2.MainActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
+          for component in com.pineapple.sageos2.MainActivity com.pineapple.sageos2.brain.BrainModelImportActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
