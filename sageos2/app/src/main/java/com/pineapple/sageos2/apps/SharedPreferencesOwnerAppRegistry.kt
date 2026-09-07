@@ -45,6 +45,7 @@ class SharedPreferencesOwnerAppRegistry(context: Context) : OwnerAppProvider {
                     put("aliases", JSONArray(app.aliases))
                     put("purpose", app.purpose)
                     put("enabled", app.enabled)
+                    put("startupProcedure", app.startupProcedure)
                 })
             }
         })
@@ -63,7 +64,16 @@ class SharedPreferencesOwnerAppRegistry(context: Context) : OwnerAppProvider {
                 val aliases = buildList {
                     for (j in 0 until aliasArray.length()) aliasArray.optString(j).trim().takeIf { it.isNotEmpty() }?.let(::add)
                 }
-                add(OwnerAppRecord(packageName, displayName, aliases, item.optString("purpose"), item.optBoolean("enabled", true)))
+                add(
+                    OwnerAppRecord(
+                        packageName = packageName,
+                        displayName = displayName,
+                        aliases = aliases,
+                        purpose = item.optString("purpose"),
+                        enabled = item.optBoolean("enabled", true),
+                        startupProcedure = item.optString("startupProcedure")
+                    )
+                )
             }
         }
         return OwnerAppSnapshot(root.optLong("revision", 0L), apps)
