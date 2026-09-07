@@ -41,7 +41,8 @@ class TwinContextRenderer(
         if (apps.isEmpty()) appendLine("(none)") else apps.forEach { app ->
             val aliases = app.aliases.joinToString(", ").ifBlank { "none" }
             val purpose = app.purpose.ifBlank { "unspecified" }
-            appendLine("- ${app.displayName} [${app.packageName}] aliases=[$aliases] purpose=$purpose")
+            val startup = app.startupProcedure.ifBlank { "none" }
+            appendLine("- ${app.displayName} [${app.packageName}] aliases=[$aliases] purpose=$purpose startup=$startup")
         }
         appendLine()
         appendLine("## Sage self model")
