@@ -34,7 +34,9 @@ class SageCommandRouter {
             return RouteDecision(SageRoute.FAST_DEVICE, normalized)
         }
 
-        return RouteDecision(SageRoute.DEEP_REASONING, normalized)
+        // Normalization is only for deterministic command matching. Sage's Brain must receive the
+        // owner's actual wording, punctuation, capitalization, names, and code unchanged.
+        return RouteDecision(SageRoute.DEEP_REASONING, rawText.trim())
     }
 
     private fun normalize(value: String): String = value

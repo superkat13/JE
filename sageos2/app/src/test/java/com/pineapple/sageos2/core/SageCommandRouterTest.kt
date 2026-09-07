@@ -23,6 +23,13 @@ class SageCommandRouterTest {
     }
 
     @Test
+    fun deepReasoningPreservesTheOwnersExactWords() {
+        val decision = router.route("Can you read THIS, Sage? path=/My Folder/File.kt")
+        assertEquals(SageRoute.DEEP_REASONING, decision.route)
+        assertEquals("Can you read THIS, Sage? path=/My Folder/File.kt", decision.normalizedText)
+    }
+
+    @Test
     fun diagnosticShareRoutesAroundBrain() {
         val decision = router.route("Share diagnostic report")
         assertEquals(SageRoute.FAST_DEVICE, decision.route)

@@ -5,7 +5,7 @@ package com.pineapple.sageos2.brain
  * history outgrows the local model's prompt window. The current owner request is never truncated.
  */
 object BrainPromptBudget {
-    const val DEFAULT_COMBINED_CHARACTER_BUDGET = 12_000
+    const val DEFAULT_COMBINED_CHARACTER_BUDGET = 9_000
     private const val MINIMUM_CONTEXT_CHARACTERS = 1_200
     private const val OMISSION = "\n\n[Older context omitted to fit this local turn.]\n\n"
 
