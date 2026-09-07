@@ -11,7 +11,8 @@ data class WakeProfile(
     val compiledPhrases: Map<String, String> = emptyMap(),
     val modeId: String? = null,
     val acknowledgement: String = "Yes",
-    val enabled: Boolean = true
+    val enabled: Boolean = true,
+    val legacyCommand: String? = null
 ) {
     init {
         require(id.isNotBlank())
@@ -51,11 +52,10 @@ interface WakeProfileProvider {
 class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    /** Returns all configured profiles. The physical wake engine separately filters enabled profiles. */
     override fun profiles(): List<WakeProfile> {
         val raw = prefs.getString(KEY, null) ?: return defaults()
-        return runCatching { decode(raw) }.getOrElse { defaults() }
-            .filter { it.enabled }
-            .ifEmpty { defaults() }
+        return runCatching { decode(raw) }.getOrElse { defaults() }.ifEmpty { defaults() }
     }
 
     fun replace(profiles: List<WakeProfile>) {
@@ -84,6 +84,7 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                 put("modeId", profile.modeId)
                 put("acknowledgement", profile.acknowledgement)
                 put("enabled", profile.enabled)
+                put("legacyCommand", profile.legacyCommand)
             })
         }
     }.toString()
@@ -117,7 +118,8 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                         compiledPhrases = compiled,
                         modeId = item.optString("modeId").trim().ifEmpty { null },
                         acknowledgement = item.optString("acknowledgement", "Yes").ifBlank { "Yes" },
-                        enabled = item.optBoolean("enabled", true)
+                        enabled = item.optBoolean("enabled", true),
+                        legacyCommand = item.optString("legacyCommand").trim().ifEmpty { null }
                     )
                 )
             }
