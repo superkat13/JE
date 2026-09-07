@@ -8,6 +8,7 @@ sealed interface FastCommand {
     data object Notifications : FastCommand
     data object QuickSettings : FastCommand
     data object ShareDiagnosticReport : FastCommand
+    data object ImportBrainModel : FastCommand
     data class Scroll(val direction: Direction) : FastCommand
     data class Tap(val x: Float, val y: Float) : FastCommand
     data class Swipe(val direction: Direction) : FastCommand
@@ -29,6 +30,9 @@ class FastCommandParser {
         if (value == "quick settings" || value == "show quick settings") return FastCommand.QuickSettings
         if (value == "share diagnostic report" || value == "share sage diagnostic report" || value == "send diagnostic report") {
             return FastCommand.ShareDiagnosticReport
+        }
+        if (value == "import brain model" || value == "choose brain model" || value == "load brain model") {
+            return FastCommand.ImportBrainModel
         }
 
         Regex("scroll (up|down|left|right)").matchEntire(value)?.let {
