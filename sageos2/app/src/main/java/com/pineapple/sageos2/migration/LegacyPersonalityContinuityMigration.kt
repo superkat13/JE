@@ -29,6 +29,14 @@ class LegacyPersonalityContinuityMigration(
             return LegacyPersonalityMigrationReport(alreadyCompleted = true)
         }
 
+        val primary = appContext.getSharedPreferences(PRIMARY_MIGRATION_PREFS, Context.MODE_PRIVATE)
+        if (!primary.getBoolean(PRIMARY_KEY_COMPLETE, false)) {
+            return LegacyPersonalityMigrationReport(
+                completed = false,
+                errors = listOf("primary Sage 1.33.3 migration is not complete yet")
+            )
+        }
+
         val errors = mutableListOf<String>()
         var temporaryContextDeactivated = 0
         var personalityRepliesImported = 0
@@ -102,6 +110,8 @@ class LegacyPersonalityContinuityMigration(
     }
 
     companion object {
+        private const val PRIMARY_MIGRATION_PREFS = "sageos2_legacy_migration"
+        private const val PRIMARY_KEY_COMPLETE = "sage_1_33_3_complete"
         private const val MIGRATION_PREFS = "sageos2_legacy_personality_migration"
         private const val KEY_COMPLETE = "sage_1_33_3_personality_complete"
         private const val KEY_COMPLETED_AT = "completed_at"
