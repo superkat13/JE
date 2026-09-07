@@ -75,6 +75,20 @@ jobs:
           grep -F 'userPrompt = userPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
           grep -F 'SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"' sageos2/app/src/main/cpp/CMakeLists.txt
           grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
+      - name: Verify structured tools Forge and safe recovery
+        run: |
+          set -euo pipefail
+          grep -F 'object BrainToolDirectiveParser' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolDirective.kt
+          grep -F 'maxToolCallsPerTurn: Int = 4' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'capabilityExecutor = Executors.newSingleThreadExecutor' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'Capability.FORGE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+          grep -F 'approved = false' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F '"forge.start_job"' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F 'class TaskRecoveryManager' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'Do not automatically replay the previous side effect' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'taskContinuity = tasks' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          ! grep -F 'forge.revoke' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+          ! grep -F 'forge.pair' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
       - name: Verify offline wake architecture
         run: |
           grep -F 'class SherpaWakeWordEngine' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
