@@ -15,7 +15,10 @@ class SageCommandRouter {
         if (normalized in setOf(
                 "share diagnostic report",
                 "share sage diagnostic report",
-                "send diagnostic report"
+                "send diagnostic report",
+                "import brain model",
+                "choose brain model",
+                "load brain model"
             )
         ) {
             return RouteDecision(SageRoute.FAST_DEVICE, normalized)
