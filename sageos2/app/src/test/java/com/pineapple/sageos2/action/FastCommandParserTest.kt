@@ -29,5 +29,10 @@ class FastCommandParserTest {
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share Sage diagnostic report"))
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("send diagnostic report"))
     }
+    @Test fun parsesBrainModelImportWithoutBrain() {
+        assertEquals(FastCommand.ImportBrainModel, parser.parse("import brain model"))
+        assertEquals(FastCommand.ImportBrainModel, parser.parse("choose brain model"))
+        assertEquals(FastCommand.ImportBrainModel, parser.parse("load brain model"))
+    }
     @Test fun rejectsUnknownCommand() = assertNull(parser.parse("explain gravity"))
 }
