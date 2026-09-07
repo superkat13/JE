@@ -89,6 +89,15 @@ jobs:
           grep -F 'taskContinuity = tasks' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
           ! grep -F 'forge.revoke' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
           ! grep -F 'forge.pair' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+      - name: Verify Chicken Tonight scope contract
+        run: |
+          set -euo pipefail
+          grep -F 'data class ChickenTonightScope' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/ChickenTonightScope.kt
+          grep -F 'NON_NEGOTIABLE_EXCLUSIONS' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/ChickenTonightScope.kt
+          grep -F 'scope.isUsable(now)' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/WorkflowRegistryEngine.kt
+          grep -F 'val chickenTonightScope = SharedPreferencesChickenTonightScopeStore' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'Panel.WORKFLOWS to "Workflows"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'Start scoped Chicken Tonight workflow' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
       - name: Verify offline wake architecture
         run: |
           grep -F 'class SherpaWakeWordEngine' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
@@ -122,7 +131,7 @@ jobs:
         run: |
           set -euo pipefail
           cockpit=sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
-          grep -F 'private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES }' "$cockpit"
+          grep -F 'private enum class Panel { CHAT, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }' "$cockpit"
           grep -F 'host.core.replace' "$cockpit"
           grep -F 'host.recoverableTasks()' "$cockpit"
           grep -F 'host.traces.recent(100)' "$cockpit"
