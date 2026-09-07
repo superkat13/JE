@@ -13,17 +13,28 @@ import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sage.SageDeviceAdminReceiver
 import com.pineapple.sage.SageNotificationListener
 import com.pineapple.sage.SageVoiceInteractionService
+import com.pineapple.sageos2.forge.ForgeApproval
+import com.pineapple.sageos2.forge.ForgeCallback
+import com.pineapple.sageos2.forge.ForgeClient
+import com.pineapple.sageos2.forge.ForgeProtocol
+import com.pineapple.sageos2.forge.ForgeStore
 import com.pineapple.sageos2.root.PowerAction
 import com.pineapple.sageos2.root.RootBrokerClient
 import com.pineapple.sageos2.root.RootBrokerRequest
 import com.pineapple.sageos2.root.RootOperation
 import com.pineapple.sageos2.root.SettingNamespace
 import com.pineapple.sageos2.root.UnavailableRootBrokerClient
+import org.json.JSONObject
 import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 class AndroidCapabilityBroker(
     private val context: Context,
-    private val rootBroker: RootBrokerClient = UnavailableRootBrokerClient()
+    private val rootBroker: RootBrokerClient = UnavailableRootBrokerClient(),
+    private val forgeClient: ForgeClient? = null,
+    private val forgeStore: ForgeStore? = null
 ) : CapabilityBroker {
     override fun snapshot(): CapabilitySnapshot = CapabilitySnapshot(
         mapOf(
@@ -35,15 +46,25 @@ class AndroidCapabilityBroker(
             Capability.DEVICE_OWNER to deviceOwnerStatus(),
             Capability.ASSISTANT_ROLE to assistantStatus(),
             Capability.PLATFORM_PRIVILEGED to platformPrivilegeStatus(),
-            Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus()
+            Capability.SAGEOS_ROOT_BROKER to rootBrokerStatus(),
+            Capability.FORGE to forgeStatus()
         )
     )
 
     override fun execute(action: DeviceAction): CapabilityResult = try {
+        when {
+            action.name.startsWith("forge.") -> executeForge(action)
+            else -> executeRoot(action)
+        }
+    } catch (t: Throwable) {
+        CapabilityResult(false, "Capability action failed: ${t.message ?: t::class.java.simpleName}")
+    }
+
+    private fun executeRoot(action: DeviceAction): CapabilityResult {
         val operation = rootOperation(action)
             ?: return CapabilityResult(false, "Unsupported capability action: ${action.name}")
         val result = rootBroker.execute(RootBrokerRequest(UUID.randomUUID().toString(), operation))
-        CapabilityResult(
+        return CapabilityResult(
             success = result.success,
             detail = buildString {
                 append(result.detail)
@@ -52,8 +73,59 @@ class AndroidCapabilityBroker(
                 result.auditId?.let { append("\n[audit ").append(it).append(']') }
             }
         )
-    } catch (t: Throwable) {
-        CapabilityResult(false, "Capability action failed: ${t.message ?: t::class.java.simpleName}")
+    }
+
+    private fun executeForge(action: DeviceAction): CapabilityResult {
+        val client = forgeClient ?: return CapabilityResult(false, "Forge client is unavailable")
+        if (forgeStore?.isPaired() != true) return CapabilityResult(false, "Forge is not paired")
+
+        return awaitForge { callback ->
+            when (action.name) {
+                "forge.health" -> client.health(callback)
+                "forge.tools" -> client.tools(callback)
+                "forge.job" -> client.job(action.required("job_id"), callback)
+                "forge.cancel" -> client.cancel(action.required("job_id"), callback)
+                "forge.start_job" -> {
+                    val toolId = action.required("tool_id")
+                    val input = JSONObject()
+                    action.arguments
+                        .filterKeys { it.startsWith("input.") }
+                        .toSortedMap()
+                        .forEach { (key, value) -> input.put(key.removePrefix("input."), value) }
+                    client.startJob(
+                        toolId = toolId,
+                        input = input,
+                        approval = ForgeApproval(
+                            approved = false,
+                            surface = "sage_brain",
+                            action = "start Forge job $toolId"
+                        ),
+                        callback = callback
+                    )
+                }
+                else -> callback.failed("Unsupported Forge capability action: ${action.name}")
+            }
+        }
+    }
+
+    private fun awaitForge(start: (ForgeCallback) -> Unit): CapabilityResult {
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<CapabilityResult>()
+        start(object : ForgeCallback {
+            override fun complete(value: JSONObject) {
+                result.set(CapabilityResult(true, value.toString()))
+                latch.countDown()
+            }
+            override fun failed(detail: String) {
+                result.set(CapabilityResult(false, detail))
+                latch.countDown()
+            }
+        })
+        val timeoutMs = ForgeProtocol.CONNECT_TIMEOUT_MS + ForgeProtocol.READ_TIMEOUT_MS + 5_000L
+        if (!latch.await(timeoutMs, TimeUnit.MILLISECONDS)) {
+            return CapabilityResult(false, "Forge operation timed out after ${timeoutMs}ms")
+        }
+        return result.get() ?: CapabilityResult(false, "Forge operation completed without a result")
     }
 
     private fun rootOperation(action: DeviceAction): RootOperation? = when (action.name) {
@@ -183,6 +255,12 @@ class AndroidCapabilityBroker(
         if (rootBroker.health().available) CapabilityStatus.ACTIVE else CapabilityStatus.UNAVAILABLE
     } catch (_: RuntimeException) {
         CapabilityStatus.UNKNOWN
+    }
+
+    private fun forgeStatus(): CapabilityStatus = when {
+        forgeStore == null || forgeClient == null -> CapabilityStatus.UNAVAILABLE
+        runCatching { forgeStore.isPaired() }.getOrDefault(false) -> CapabilityStatus.ACTIVE
+        else -> CapabilityStatus.AVAILABLE
     }
 
     private fun platformPrivilegeStatus(): CapabilityStatus = if (
