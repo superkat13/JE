@@ -96,11 +96,30 @@ class AndroidSpeechPort(
             ttsReady = status == TextToSpeech.SUCCESS
             if (ttsReady) {
                 tts?.language = Locale.US
+                applyLegacyVoiceProfileIfPresent()
                 pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
             } else {
                 listener?.onSpeechDiagnostic("TTS initialization failed: $status")
                 pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
             }
+        }
+    }
+
+    /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
+    private fun applyLegacyVoiceProfileIfPresent() {
+        val prefs = appContext.getSharedPreferences("sage_voice_profile", Context.MODE_PRIVATE)
+        val hasLegacyProfile = prefs.contains("voice_name") || prefs.contains("speech_rate") || prefs.contains("speech_pitch")
+        if (!hasLegacyProfile) return
+        val engine = tts ?: return
+        val rate = prefs.getFloat("speech_rate", 0.90f).coerceIn(0.5f, 2.0f)
+        val pitch = prefs.getFloat("speech_pitch", 0.98f).coerceIn(0.5f, 2.0f)
+        engine.setSpeechRate(rate)
+        engine.setPitch(pitch)
+        val requestedVoice = prefs.getString("voice_name", "").orEmpty().trim()
+        if (requestedVoice.isNotEmpty()) {
+            val match = engine.voices?.firstOrNull { it.name == requestedVoice }
+            if (match != null) engine.voice = match
+            else listener?.onSpeechDiagnostic("Legacy TTS voice '$requestedVoice' is not installed; keeping Android's available voice")
         }
     }
 
