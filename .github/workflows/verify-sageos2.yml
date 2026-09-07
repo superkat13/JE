@@ -109,6 +109,16 @@ jobs:
           grep -F 'data class TaskCheckpoint' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskContinuity.kt
           grep -F 'class SharedPreferencesTraceStore' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/SharedPreferencesTraceStore.kt
           grep -F 'class PersistentRuntimeObserver' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/PersistentRuntimeObserver.kt
+      - name: Verify diagnostic report escape hatch
+        run: |
+          set -euo pipefail
+          grep -F 'object DiagnosticReportRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/DiagnosticReport.kt
+          grep -F 'Privacy: conversation text' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/DiagnosticReport.kt
+          grep -F 'fun diagnosticReport(traceLimit: Int = 100): String' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'diagnosticReportProvider = { diagnosticReport() }' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'data object ShareDiagnosticReport' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
+          grep -F '"share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
       - name: Verify twin context and Owner Apps
         run: |
           grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
