@@ -35,6 +35,20 @@ object BrainToolContextRenderer {
         } else {
             appendLine("Root broker: unavailable in this runtime. Do not emit root.* tool calls.")
         }
+
+        appendLine()
+        if (snapshot.states[Capability.FORGE] == CapabilityStatus.ACTIVE) {
+            appendLine("## Active Forge tools")
+            appendLine("- forge.health")
+            appendLine("- forge.tools")
+            appendLine("- forge.start_job: tool_id and optional flat input.<key>=value fields")
+            appendLine("- forge.job: job_id")
+            appendLine("- forge.cancel: job_id")
+            appendLine("Brain-started Forge jobs are never pre-approved. The capability broker always submits owner_approved=false.")
+            appendLine("Pairing, revocation, certificate changes, and device-token management are not Brain tools.")
+        } else {
+            appendLine("Forge: not paired/active in this runtime. Do not emit forge.* tool calls.")
+        }
     }.trim()
 
     fun renderResult(action: DeviceAction, result: CapabilityResult): String = buildString {
