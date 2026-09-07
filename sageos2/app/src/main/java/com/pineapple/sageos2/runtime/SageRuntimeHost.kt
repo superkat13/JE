@@ -25,6 +25,7 @@ import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
+import com.pineapple.sageos2.migration.LegacyPersonalityContinuityMigration
 import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.root.SocketRootBrokerClient
@@ -72,6 +73,12 @@ class SageRuntimeHost private constructor(context: Context) {
         tasks = tasks
     ).runIfNeeded()
 
+    /** Retires stale temporary context and preserves owner-taught personality replies as Sage memories. */
+    private val legacyPersonalityMigrationReport = LegacyPersonalityContinuityMigration(
+        appContext,
+        memory = memory
+    ).runIfNeeded()
+
     private val persistentObserver = PersistentRuntimeObserver(traces)
     private val observer = object : RuntimeObserver {
         override fun onDiagnostic(message: String) = persistentObserver.onDiagnostic(message)
@@ -117,6 +124,7 @@ class SageRuntimeHost private constructor(context: Context) {
     fun start() {
         if (started.compareAndSet(false, true)) {
             traces.record("legacy_migration", legacyMigrationReport.summary())
+            traces.record("legacy_personality_migration", legacyPersonalityMigrationReport.summary())
             val recovered = recovery.recoverInterruptedRuntimeTasks()
             val states = capabilities.snapshot().states
             traces.record(
