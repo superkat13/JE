@@ -57,7 +57,14 @@ class LocalNativeBrainEngine(
 
     override fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob {
         val cancelled = AtomicBoolean(false)
+        val completionSent = AtomicBoolean(false)
         var future: Future<*>? = null
+        val complete: (Result<BrainResponse>) -> Unit = { result ->
+            if (completionSent.compareAndSet(false, true)) {
+                inFlightStage.set(null)
+                callback(result)
+            }
+        }
         val job = object : BrainJob {
             override val turnId: Long = request.turnId
             override fun cancel() {
@@ -75,7 +82,7 @@ class LocalNativeBrainEngine(
                 if (!loaded.get()) reportProgress(request, BrainProgressStage.LOADING_MODEL)
                 if (!ensureLibraryReady()) {
                     if (!cancelled.get()) {
-                        callback(Result.failure(BrainFailureException(
+                        complete(Result.failure(BrainFailureException(
                             kind = BrainFailureKind.UNAVAILABLE,
                             engineName = name,
                             message = lastError ?: "local native Brain library is unavailable"
@@ -86,7 +93,7 @@ class LocalNativeBrainEngine(
                 if (cancelled.get()) return@submit
                 if (!ensureLoaded()) {
                     if (!cancelled.get()) {
-                        callback(Result.failure(BrainFailureException(
+                        complete(Result.failure(BrainFailureException(
                             kind = BrainFailureKind.UNAVAILABLE,
                             engineName = name,
                             message = lastError ?: "local native Brain model failed to load"
@@ -111,13 +118,13 @@ class LocalNativeBrainEngine(
                 lastLatency.set(elapsed)
                 if (cancelled.get()) return@submit
                 if (text.isBlank()) {
-                    callback(Result.failure(BrainFailureException(
+                    complete(Result.failure(BrainFailureException(
                         kind = BrainFailureKind.MODEL_ERROR,
                         engineName = name,
                         message = "native Brain returned an empty response [stage=${safeStage()}]"
                     )))
                 } else {
-                    callback(Result.success(BrainResponse(
+                    complete(Result.success(BrainResponse(
                         turnId = request.turnId,
                         text = text,
                         engine = name,
@@ -138,7 +145,7 @@ class LocalNativeBrainEngine(
                 val nativeError = runCatching { bridge.lastError().trim() }.getOrDefault("")
                 lastError = nativeError.ifBlank { t.message ?: t::class.simpleName }
                 if (!cancelled.get()) {
-                    callback(Result.failure(BrainFailureException(
+                    complete(Result.failure(BrainFailureException(
                         kind = BrainFailureKind.MODEL_ERROR,
                         engineName = name,
                         message = "native Brain failed: ${lastError.orEmpty()} [stage=${safeStage()}]"
