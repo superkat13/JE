@@ -50,7 +50,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val forgeStore = ForgeStore(appContext)
     val forge = ForgeClient(appContext, forgeStore)
     val rootBroker = SocketRootBrokerClient()
-    val capabilities = AndroidCapabilityBroker(appContext, rootBroker)
+    val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
 
     private val persistentObserver = PersistentRuntimeObserver(traces)
     private val observer = object : RuntimeObserver {
@@ -99,6 +99,7 @@ class SageRuntimeHost private constructor(context: Context) {
             traces.record(
                 "host",
                 "Sage runtime starting; root=${states[Capability.SAGEOS_ROOT_BROKER] == CapabilityStatus.ACTIVE}; " +
+                    "forge=${states[Capability.FORGE] == CapabilityStatus.ACTIVE}; " +
                     "deviceOwner=${states[Capability.DEVICE_OWNER] == CapabilityStatus.ACTIVE}; " +
                     "accessibility=${states[Capability.ACCESSIBILITY] == CapabilityStatus.ACTIVE}"
             )
