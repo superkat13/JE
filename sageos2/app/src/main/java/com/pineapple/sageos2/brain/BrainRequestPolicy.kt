@@ -2,8 +2,9 @@ package com.pineapple.sageos2.brain
 
 /**
  * Keeps each local turn inside limits already exercised by the inherited Sage tablet Brain.
- * Long-lived identity remains available, but ordinary questions do not pay the latency cost of
- * the largest conversational prompt and exact health checks carry no unrelated private context.
+ * Ordinary conversation is Sage + twin context only. Engineering contracts are opt-in per turn:
+ * capability/tool context is supplied only for action-shaped requests, and task-recovery context
+ * only when the owner is actually asking to continue or resume work.
  */
 object BrainRequestPolicy {
     const val SELF_CHECK_PROMPT = "Reply with exactly: Brain online."
@@ -12,7 +13,14 @@ object BrainRequestPolicy {
     private val conversationalCue = Regex(
         "(?i)\\b(based on our conversation|what did i|earlier|continue our|do you remember)\\b"
     )
-    private val actionCue = Regex("(?i)^\\s*(open|tap|click|choose|select|scroll|search|find|type|play|pause|share|edit)\\b")
+    private val taskCue = Regex(
+        "(?i)\\b(continue|resume|pick up|where were we|unfinished|recoverable task|previous task)\\b"
+    )
+    private val actionCue = Regex(
+        "(?i)^\\s*(?:(?:can|could|would)\\s+you\\s+|please\\s+)?" +
+            "(open|launch|tap|click|choose|select|scroll|search|find|type|play|pause|share|copy|edit|" +
+            "install|uninstall|send|move|delete|rename|turn|set|change)\\b"
+    )
 
     data class Profile(
         val systemGuide: String,
@@ -20,7 +28,9 @@ object BrainRequestPolicy {
         val outputTokens: Int,
         val deterministic: Boolean,
         val expectedLiteral: String? = null,
-        val includeTwinContext: Boolean = true
+        val includeTwinContext: Boolean = true,
+        val includeToolContext: Boolean = false,
+        val includeTaskContext: Boolean = false
     )
 
     fun forPrompt(prompt: String): Profile {
@@ -38,21 +48,27 @@ object BrainRequestPolicy {
             )
         }
 
-        if (conversationalCue.containsMatchIn(cleaned)) {
+        val wantsTaskContext = taskCue.containsMatchIn(cleaned)
+        val wantsToolContext = actionCue.containsMatchIn(cleaned)
+
+        if (conversationalCue.containsMatchIn(cleaned) || wantsTaskContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = 4_800,
                 outputTokens = 24,
-                deterministic = false
+                deterministic = false,
+                includeTaskContext = wantsTaskContext,
+                includeToolContext = wantsToolContext
             )
         }
 
-        if (actionCue.containsMatchIn(cleaned)) {
+        if (wantsToolContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = 3_900,
                 outputTokens = 20,
-                deterministic = false
+                deterministic = false,
+                includeToolContext = true
             )
         }
 
