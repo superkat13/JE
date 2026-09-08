@@ -49,7 +49,12 @@ class SageChatPresentationTest {
 
     @Test fun queuedMessagesAreExplainedInOwnerLanguage() {
         val ui = SageChatPresentation.present(snapshot(SageRuntimeState.THINKING_DEEP, queued = 2))
-        assertEquals("2 messages are waiting", ui.waitingMessage)
+        assertEquals("Sent — 2 messages are waiting", ui.waitingMessage)
+    }
+
+    @Test fun oneQueuedMessageIsExplicitlyConfirmedAsSent() {
+        val ui = SageChatPresentation.present(snapshot(SageRuntimeState.THINKING_DEEP, queued = 1))
+        assertEquals("Sent — I'll answer that next", ui.waitingMessage)
     }
 
     private fun snapshot(state: SageRuntimeState, queued: Int = 0) = SageRuntimeSnapshot(

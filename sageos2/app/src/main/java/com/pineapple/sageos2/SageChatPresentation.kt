@@ -18,8 +18,8 @@ object SageChatPresentation {
     ): SageChatUiState {
         val waiting = when (snapshot.queuedTextCount) {
             0 -> null
-            1 -> "One message is waiting"
-            else -> "${snapshot.queuedTextCount} messages are waiting"
+            1 -> "Sent — I'll answer that next"
+            else -> "Sent — ${snapshot.queuedTextCount} messages are waiting"
         }
         val (presence, activity) = when (snapshot.state) {
             SageRuntimeState.STOPPED -> "Getting ready" to "I'm getting everything ready"

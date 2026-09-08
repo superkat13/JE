@@ -7,12 +7,12 @@ object SageResponseCopy {
         return when {
             normalized.contains("model file is missing") ||
                 normalized.contains("local model path is not configured") ->
-                "I can't find the part of me that writes replies yet. Tap Advanced, open Local Brain & capabilities, choose the model, then send that again."
+                "I can't find the part of me that writes longer replies yet. Open Settings → Advanced → Local replies & device access, choose the saved model, then send that again."
 
             normalized.contains("model load failed") ||
                 normalized.contains("could not load that gguf") ||
                 normalized.contains("did not finish loading") ->
-                "I couldn't finish getting ready to answer. Your message is still here. Tap Advanced → Local Brain & capabilities for the next step."
+                "I couldn't finish getting ready to answer. Your message is still here. Open Settings → Advanced → Local replies & device access for the next step."
 
             normalized.contains("timed out") || normalized.contains("timeout") ->
                 "I was taking too long, so I stopped this turn instead of leaving chat stuck. Your message is saved—try it once more."
@@ -21,10 +21,10 @@ object SageResponseCopy {
                 "That was more context than I could hold in one turn. Your message is saved—send a shorter version and I'll pick it up."
 
             normalized.contains("self-check") ->
-                "My reply check didn't pass. I'm still here; if we need the exact evidence, it's under Advanced → Diagnostics."
+                "My reply check didn't pass. I'm still here; the exact evidence is under Settings → Advanced → Diagnostics."
 
             else ->
-                "I couldn't finish that reply, but I'm still here and your message is saved. Try it again; if it keeps happening, the details are under Advanced → Diagnostics."
+                "I couldn't finish that reply, but I'm still here and your message is saved. Try it again; if it keeps happening, the details are under Settings → Advanced → Diagnostics."
         }
     }
 }

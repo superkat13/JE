@@ -107,6 +107,37 @@ class TextChatLocalBrainPathTest {
         assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
     }
 
+    @Test fun aSecondTypedMessageAppearsImmediatelyAndTraversesTheSameLocalBrainWithoutDuplication() {
+        val model = File.createTempFile("inherited-sage-brain", ".gguf").apply { deleteOnExit() }
+        val bridge = BlockingBridge("Sage answered.")
+        val history = MemoryHistory()
+        val observer = RecordingObserver()
+        val runtime = runtime(
+            BrainRouterEngine(listOf(LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {}))),
+            history,
+            observer
+        )
+
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("first message"))
+        assertTrue(bridge.loadStarted.await(1, TimeUnit.SECONDS))
+        runtime.submit(SageEvent.TextSubmitted("second message"))
+
+        assertEquals(
+            listOf("first message", "second message"),
+            history.recent(10).entries.map { it.text }
+        )
+        assertEquals(1, runtime.snapshot().queuedTextCount)
+
+        bridge.allowLoad.countDown()
+        waitUntil { observer.responses.size == 2 }
+        assertEquals(0, runtime.snapshot().queuedTextCount)
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+        assertEquals(2, history.recent(10).entries.count { it.speaker == ConversationSpeaker.OWNER })
+        assertEquals(2, history.recent(10).entries.count { it.speaker == ConversationSpeaker.SAGE })
+        assertEquals("second message", bridge.userPrompt)
+    }
+
     private fun runtime(
         brain: BrainRouterEngine,
         history: ConversationHistoryStore,

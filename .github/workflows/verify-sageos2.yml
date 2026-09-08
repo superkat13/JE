@@ -121,7 +121,7 @@ jobs:
           grep -F 'NON_NEGOTIABLE_EXCLUSIONS' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/ChickenTonightScope.kt
           grep -F 'scope.isUsable(now)' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/WorkflowRegistryEngine.kt
           grep -F 'val chickenTonightScope = SharedPreferencesChickenTonightScopeStore' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
-          grep -F 'settingsCard("Workflows & scopes"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'SageSettingsItem("Workflows & scopes"' sageos2/app/src/main/java/com/pineapple/sageos2/SageProductPresentation.kt
           grep -F 'Start scoped Chicken Tonight workflow' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
       - name: Verify offline wake architecture
         run: |
@@ -168,11 +168,30 @@ jobs:
         run: |
           set -euo pipefail
           cockpit=sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
-          grep -F 'private enum class Panel { CHAT, SETTINGS, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }' "$cockpit"
+          home=sageos2/app/src/main/java/com/pineapple/sageos2/SageHomeActivity.kt
+          product=sageos2/app/src/main/java/com/pineapple/sageos2/SageProductPresentation.kt
+          grep -F 'class SageHomeActivity : MainActivity()' "$home"
+          grep -F 'startActivity(Intent(this, SageHomeActivity::class.java))' sageos2/app/src/main/java/com/pineapple/sageos2/SageLaunchActivity.kt
+          grep -F 'private enum class Panel { CHAT, SETTINGS, MEMORY, APPS, MODES, APPEARANCE, ADVANCED, CORE, HEALTH, TASKS, WORKFLOWS, DIAGNOSTICS }' "$cockpit"
           grep -F 'showPanel(Panel.CHAT)' "$cockpit"
-          grep -F 'settingsCard("Local Brain & capabilities"' "$cockpit"
+          grep -F 'SageProductPresentation.settings.forEach' "$cockpit"
+          grep -F 'SageProductPresentation.advancedSettings.forEach' "$cockpit"
+          grep -F 'text = "How to use"' "$cockpit"
+          grep -F 'text = "Send"' "$cockpit"
+          grep -F 'SageSettingsItem("Advanced"' "$product"
+          grep -F 'SageSettingsItem("Local replies & device access"' "$product"
+          grep -F 'SageSettingsItem("Diagnostics"' "$product"
+          grep -F 'SharedPreferencesLearnedPhraseStore' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'private const val LEGACY_TONE_KEY = "owner_tone"' sageos2/app/src/main/java/com/pineapple/sageos2/mode/SharedPreferencesSageModeController.kt
+          grep -F 'private const val KEY_BACKGROUND_URI = "appearance_background_uri"' sageos2/app/src/main/java/com/pineapple/sageos2/appearance/SageAppearancePreferences.kt
+          grep -F 'packageManager.queryIntentActivities' "$cockpit"
+          grep -F 'startupProcedure = existing?.startupProcedure.orEmpty()' "$cockpit"
+          ! grep -F 'Android package name' "$cockpit"
+          grep -F 'SageEffect.RecordOwnerInput(queuedTurnId, cleaned, TurnOrigin.TEXT)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageTurnCoordinator.kt
+          grep -F 'includeToolContext: Boolean = false' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRequestPolicy.kt
+          grep -F 'includeTaskContext: Boolean = false' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRequestPolicy.kt
           grep -F 'SageChatPresentation.present' "$cockpit"
-          grep -F 'What are we doing?' "$cockpit"
+          grep -F 'Talk to me the way you always have' "$product"
           grep -F 'text = "Run local Brain self-check"' "$cockpit"
           ! grep -F 'One Sage. One runtime. Owner control.' "$cockpit"
           ! grep -F 'append(" Root:' "$cockpit"
@@ -181,11 +200,12 @@ jobs:
           grep -F 'host.traces.recent(100)' "$cockpit"
           grep -F 'host.ownerApps.upsert' "$cockpit"
           grep -F 'host.modes.activate' "$cockpit"
+          grep -F 'com.pineapple.sageos2.SageHomeActivity' sageos2/app/src/main/AndroidManifest.xml
           grep -F 'com.pineapple.sageos2.MainActivity' sageos2/app/src/main/AndroidManifest.xml
       - name: Verify authority component contract
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
-          for component in com.pineapple.sageos2.MainActivity com.pineapple.sageos2.brain.BrainModelImportActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
+          for component in com.pineapple.sageos2.SageLaunchActivity com.pineapple.sageos2.SageHomeActivity com.pineapple.sageos2.MainActivity com.pineapple.sageos2.brain.BrainModelImportActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs

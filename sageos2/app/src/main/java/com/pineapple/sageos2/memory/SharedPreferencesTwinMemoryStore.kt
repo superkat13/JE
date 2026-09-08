@@ -5,7 +5,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
 
-class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryProvider {
+class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
     override fun snapshot(): TwinMemorySnapshot {
@@ -14,7 +14,7 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryProvider {
     }
 
     @Synchronized
-    fun remember(
+    override fun remember(
         subject: TwinMemorySubject,
         key: String,
         value: String,
@@ -50,7 +50,7 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryProvider {
     }
 
     @Synchronized
-    fun forget(id: String, nowEpochMs: Long = System.currentTimeMillis()): Boolean {
+    override fun forget(id: String, nowEpochMs: Long): Boolean {
         val current = snapshot()
         val target = current.records.firstOrNull { it.id == id } ?: return false
         val next = current.records.map {

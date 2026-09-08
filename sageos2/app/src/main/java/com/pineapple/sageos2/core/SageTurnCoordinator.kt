@@ -28,7 +28,8 @@ class SageTurnCoordinator(
     private var recognizerGeneration = 0L
     private var nextTurnId = 1L
     private var followUpAfterSpeech = false
-    private val pendingTypedInputs = ArrayDeque<String>()
+    private data class PendingTypedInput(val turnId: Long, val text: String)
+    private val pendingTypedInputs = ArrayDeque<PendingTypedInput>()
 
     @Synchronized fun snapshot() = SageRuntimeSnapshot(
         state, listeningMode, activeTurnId, activeTurnOrigin, recognizerGeneration, pendingTypedInputs.size
@@ -133,8 +134,12 @@ class SageTurnCoordinator(
             return dispatch(activeTurnId, cleaned)
         }
         if (pendingTypedInputs.size >= typedQueueCapacity) return listOf(SageEffect.TypedInputRejected("typed queue full"))
-        pendingTypedInputs.addLast(cleaned)
-        return listOf(SageEffect.TypedInputQueued(pendingTypedInputs.size))
+        val queuedTurnId = nextTurnId++
+        pendingTypedInputs.addLast(PendingTypedInput(queuedTurnId, cleaned))
+        return listOf(
+            SageEffect.RecordOwnerInput(queuedTurnId, cleaned, TurnOrigin.TEXT),
+            SageEffect.TypedInputQueued(pendingTypedInputs.size)
+        )
     }
 
     private fun dispatch(turnId: Long, text: String): List<SageEffect> {
@@ -142,6 +147,18 @@ class SageTurnCoordinator(
         val decision = router.route(text)
         val ownerInput = SageEffect.RecordOwnerInput(turnId, text, activeTurnOrigin)
         return when (decision.route) {
+            SageRoute.LOCAL_SAGE -> {
+                val reply = requireNotNull(decision.localReply)
+                if (activeTurnOrigin == TurnOrigin.TEXT) {
+                    val effects = mutableListOf<SageEffect>(ownerInput, SageEffect.EmitTextResponse(turnId, reply))
+                    effects += finishTextTurn()
+                    effects
+                } else {
+                    followUpAfterSpeech = true
+                    state = SageRuntimeState.SPEAKING
+                    listOf(ownerInput, changeListening(SageListeningMode.OFF), SageEffect.Speak(turnId, reply))
+                }
+            }
             SageRoute.OWNER_WORKFLOW -> {
                 val origin = activeTurnOrigin
                 val effects = mutableListOf<SageEffect>(
@@ -208,9 +225,9 @@ class SageTurnCoordinator(
         if (event.turnId != activeTurnId || state != SageRuntimeState.ECHO_GUARD) return stale("echo guard")
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
-            activeTurnId = nextTurnId++
+            activeTurnId = next.turnId
             activeTurnOrigin = TurnOrigin.TEXT
-            return listOf(SageEffect.RecordDiagnostic("dispatching queued typed input")) + dispatch(activeTurnId, next)
+            return listOf(SageEffect.RecordDiagnostic("dispatching queued typed input")) + dispatchQueued(activeTurnId, next.text)
         }
         return if (followUpAfterSpeech) {
             state = SageRuntimeState.FOLLOW_UP_LISTENING
@@ -231,12 +248,15 @@ class SageTurnCoordinator(
     private fun finishTextTurn(): List<SageEffect> {
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
-            activeTurnId = nextTurnId++
+            activeTurnId = next.turnId
             activeTurnOrigin = TurnOrigin.TEXT
-            return listOf(SageEffect.RecordDiagnostic("dispatching queued typed input")) + dispatch(activeTurnId, next)
+            return listOf(SageEffect.RecordDiagnostic("dispatching queued typed input")) + dispatchQueued(activeTurnId, next.text)
         }
         return closeToWake()
     }
+
+    private fun dispatchQueued(turnId: Long, text: String): List<SageEffect> =
+        dispatch(turnId, text).filterNot { it is SageEffect.RecordOwnerInput }
 
     private fun closeToWake(): List<SageEffect> {
         activeTurnId = 0L

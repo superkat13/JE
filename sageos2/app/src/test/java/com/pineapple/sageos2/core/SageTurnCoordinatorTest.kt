@@ -71,4 +71,19 @@ class SageTurnCoordinatorTest {
         assertTrue(effects.any { it == SageEffect.LaunchOwnerWorkflow(turn, "chicken_tonight") })
         assertTrue(effects.none { it is SageEffect.Speak })
     }
+
+    @Test fun acceptedMessageAppearsImmediatelyEvenWhileSageIsThinking() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.TextSubmitted("first thought"))
+        val firstTurn = c.snapshot().activeTurnId
+
+        val queued = c.handle(SageEvent.TextSubmitted("second thought"))
+        val recorded = queued.filterIsInstance<SageEffect.RecordOwnerInput>().single()
+        assertEquals("second thought", recorded.text)
+        assertEquals(1, c.snapshot().queuedTextCount)
+
+        val next = c.handle(SageEvent.ResponseReady(firstTurn, "first answer"))
+        assertTrue(next.any { it is SageEffect.QueryDeepBrain && it.prompt == "second thought" })
+        assertTrue(next.none { it is SageEffect.RecordOwnerInput })
+    }
 }

@@ -1,6 +1,12 @@
 package com.pineapple.sageos2.core
 
-class SageCommandRouter {
+import com.pineapple.sageos2.personal.EmptySagePersonalResponder
+import com.pineapple.sageos2.personal.SagePersonalResolution
+import com.pineapple.sageos2.personal.SagePersonalResponder
+
+class SageCommandRouter(
+    private val personal: SagePersonalResponder = EmptySagePersonalResponder
+) {
     fun route(rawText: String): RouteDecision {
         val normalized = normalize(rawText)
 
@@ -11,6 +17,22 @@ class SageCommandRouter {
                 workflowId = "chicken_tonight"
             )
         }
+
+        when (val personalResolution = personal.resolve(rawText)) {
+            is SagePersonalResolution.Reply -> return RouteDecision(
+                route = SageRoute.LOCAL_SAGE,
+                normalizedText = rawText.trim(),
+                localReply = personalResolution.text
+            )
+            is SagePersonalResolution.RewrittenRequest -> return routeResolved(personalResolution.text)
+            null -> Unit
+        }
+
+        return routeResolved(rawText)
+    }
+
+    private fun routeResolved(rawText: String): RouteDecision {
+        val normalized = normalize(rawText)
 
         if (normalized in setOf(
                 "share diagnostic report",

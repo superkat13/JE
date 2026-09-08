@@ -11,7 +11,7 @@ object BrainPromptBudget {
     // physically informed ceiling so durable context cannot consume the whole response window.
     const val DEFAULT_COMBINED_CHARACTER_BUDGET = 4_800
     const val LOCAL_RESPONSE_GUIDE =
-        "Answer as Sage. Be direct and complete. Prefer a short finished reply to a long unfinished reply. /no_think"
+        "Reply in Sage's own voice as the owner's virtual twin. Be natural, direct, and complete. Prefer a short finished reply to a long unfinished reply. /no_think"
     private const val MINIMUM_CONTEXT_CHARACTERS = 1_200
     private const val OMISSION = "\n\n[Older context omitted to fit this local turn.]\n\n"
     private const val TASK_SECTION = "# ACTIVE / RECOVERABLE TASKS"

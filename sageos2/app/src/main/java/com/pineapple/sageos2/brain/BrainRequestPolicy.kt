@@ -2,9 +2,8 @@ package com.pineapple.sageos2.brain
 
 /**
  * Keeps each local turn inside limits already exercised by the inherited Sage tablet Brain.
- * Ordinary conversation is Sage + twin context only. Engineering contracts are opt-in per turn:
- * capability/tool context is supplied only for action-shaped requests, and task-recovery context
- * only when the owner is actually asking to continue or resume work.
+ * Ordinary conversation is Sage plus twin context only. Engineering context is added only for
+ * a turn that is actually using a tool or resuming recoverable work.
  */
 object BrainRequestPolicy {
     const val SELF_CHECK_PROMPT = "Reply with exactly: Brain online."
@@ -19,8 +18,9 @@ object BrainRequestPolicy {
     private val actionCue = Regex(
         "(?i)^\\s*(?:(?:can|could|would)\\s+you\\s+|please\\s+)?" +
             "(open|launch|tap|click|choose|select|scroll|search|find|type|play|pause|share|copy|edit|" +
-            "install|uninstall|send|move|delete|rename|turn|set|change)\\b"
+            "install|uninstall|send|move|delete|rename|turn|set|change|check|inspect|run)\\b"
     )
+    private val toolResultCue = Regex("(?i)^\\s*SAGE_TOOL_RESULT\\b")
 
     data class Profile(
         val systemGuide: String,
@@ -48,8 +48,9 @@ object BrainRequestPolicy {
             )
         }
 
-        val wantsTaskContext = taskCue.containsMatchIn(cleaned)
-        val wantsToolContext = actionCue.containsMatchIn(cleaned)
+        val isToolContinuation = toolResultCue.containsMatchIn(cleaned)
+        val wantsTaskContext = taskCue.containsMatchIn(cleaned) || isToolContinuation
+        val wantsToolContext = actionCue.containsMatchIn(cleaned) || isToolContinuation
 
         if (conversationalCue.containsMatchIn(cleaned) || wantsTaskContext) {
             return Profile(

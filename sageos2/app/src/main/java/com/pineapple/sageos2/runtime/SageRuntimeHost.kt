@@ -23,12 +23,14 @@ import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import com.pineapple.sageos2.forge.ForgeClient
 import com.pineapple.sageos2.forge.ForgeStore
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
+import com.pineapple.sageos2.learning.SharedPreferencesLearnedPhraseStore
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.migration.LegacyPersonalityContinuityMigration
 import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
+import com.pineapple.sageos2.personal.SagePersonalCommandEngine
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
 import com.pineapple.sageos2.speech.RemoteWakeWordEngine
@@ -43,6 +45,7 @@ interface SageRuntimeListener {
     fun onStateChanged(snapshot: SageRuntimeSnapshot) = Unit
     fun onBrainProgress(progress: BrainProgress) = Unit
     fun onTextResponse(turnId: Long, text: String) = Unit
+    fun onTypedInputRejected(reason: String) = Unit
 }
 
 class SageRuntimeHost private constructor(context: Context) {
@@ -57,6 +60,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
     val ownerApps = SharedPreferencesOwnerAppRegistry(appContext)
+    val learnedPhrases = SharedPreferencesLearnedPhraseStore(appContext)
     val wakeProfiles = SharedPreferencesWakeProfileStore(appContext)
     val modes = SharedPreferencesSageModeController(appContext)
     val forgeStore = ForgeStore(appContext)
@@ -83,7 +87,10 @@ class SageRuntimeHost private constructor(context: Context) {
     private val observer = object : RuntimeObserver {
         override fun onDiagnostic(message: String) = persistentObserver.onDiagnostic(message)
         override fun onTypedInputQueued(depth: Int) = persistentObserver.onTypedInputQueued(depth)
-        override fun onTypedInputRejected(reason: String) = persistentObserver.onTypedInputRejected(reason)
+        override fun onTypedInputRejected(reason: String) {
+            persistentObserver.onTypedInputRejected(reason)
+            listeners.forEach { it.onTypedInputRejected(reason) }
+        }
         override fun onUnhandledFailure(message: String, cause: Throwable?) = persistentObserver.onUnhandledFailure(message, cause)
         override fun onStateChanged(snapshot: SageRuntimeSnapshot) {
             persistentObserver.onStateChanged(snapshot)
@@ -107,9 +114,10 @@ class SageRuntimeHost private constructor(context: Context) {
     private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
     private val fastActions = AndroidFastActionEngine(controller)
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
+    private val personalCommands = SagePersonalCommandEngine(memory, learnedPhrases, modes)
 
     val runtime = SageRuntime(
-        coordinator = SageTurnCoordinator(),
+        coordinator = SageTurnCoordinator(com.pineapple.sageos2.core.SageCommandRouter(personalCommands)),
         speech = speech,
         brain = brain,
         fastActions = fastActions,
@@ -155,6 +163,22 @@ class SageRuntimeHost private constructor(context: Context) {
     fun capabilityStatus() = capabilities.snapshot()
     fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
+
+    fun forgetLearnedPhrase(phrase: String): Boolean {
+        val normalized = SharedPreferencesLearnedPhraseStore.normalize(phrase)
+        val removed = learnedPhrases.remove(phrase)
+        memory.snapshot().records.filter { record ->
+            if (!record.active) return@filter false
+            val keyMatch = record.key.equals("When I say $normalized", ignoreCase = true)
+            val rememberedPhrase = Regex("(?i)^when\\s+i\\s+say\\s+(.+?)\\s*,\\s+i\\s+mean\\s+.+$")
+                .matchEntire(record.value.trim())
+                ?.groupValues
+                ?.get(1)
+                ?.let { SharedPreferencesLearnedPhraseStore.normalize(it) }
+            keyMatch || rememberedPhrase == normalized
+        }.forEach { memory.forget(it.id) }
+        return removed
+    }
 
     fun diagnosticReport(traceLimit: Int = 100): String {
         val now = System.currentTimeMillis()

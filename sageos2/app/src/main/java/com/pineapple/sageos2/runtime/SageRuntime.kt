@@ -151,17 +151,34 @@ class SageRuntime(
 
     private fun startBrain(turnId: Long, prompt: String) {
         brainJob?.cancel()
+        val requestProfile = BrainRequestPolicy.forPrompt(prompt)
         val core = sageCore.current()
         val memory = twinMemory.snapshot()
         val history = conversationHistory.recent(24).withoutOwnerTurn(turnId)
         val apps = ownerApps.snapshot()
         val mode = modes.current()
-        val twinContext = twinContextRenderer.render(core, memory, history, apps, mode)
-        val taskContext = TaskContinuityContextRenderer.render(taskContinuity?.active().orEmpty())
-        val toolContext = BrainToolContextRenderer.render(capabilities.snapshot())
-        val requestProfile = BrainRequestPolicy.forPrompt(prompt)
+        val twinContext = twinContextRenderer.render(
+            core,
+            memory,
+            history,
+            apps,
+            mode,
+            includeOperationalDetails = requestProfile.includeToolContext
+        )
         val fullContext = if (requestProfile.includeTwinContext) {
-            "${requestProfile.systemGuide}\n\n$twinContext\n\n$taskContext\n\n$toolContext"
+            buildString {
+                append(requestProfile.systemGuide)
+                append("\n\n")
+                append(twinContext)
+                if (requestProfile.includeTaskContext) {
+                    append("\n\n")
+                    append(TaskContinuityContextRenderer.render(taskContinuity?.active().orEmpty()))
+                }
+                if (requestProfile.includeToolContext) {
+                    append("\n\n")
+                    append(BrainToolContextRenderer.render(capabilities.snapshot()))
+                }
+            }
         } else {
             requestProfile.systemGuide
         }

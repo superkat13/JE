@@ -43,7 +43,7 @@
         <activity
             android:name="com.pineapple.sageos2.SageHomeActivity"
             android:exported="false"
-            android:theme="@style/Theme.Sage.Home"
+            android:theme="@style/Theme.Sage"
             android:windowSoftInputMode="adjustResize" />
         <activity
             android:name="com.pineapple.sageos2.MainActivity"

@@ -49,6 +49,19 @@ interface TwinMemoryProvider {
     fun snapshot(): TwinMemorySnapshot
 }
 
+interface TwinMemoryStore : TwinMemoryProvider {
+    fun remember(
+        subject: TwinMemorySubject,
+        key: String,
+        value: String,
+        source: TwinMemorySource,
+        confidence: Double,
+        nowEpochMs: Long = System.currentTimeMillis()
+    ): TwinMemoryRecord
+
+    fun forget(id: String, nowEpochMs: Long = System.currentTimeMillis()): Boolean
+}
+
 object EmptyTwinMemoryProvider : TwinMemoryProvider {
     override fun snapshot() = TwinMemorySnapshot(0L, emptyList())
 }

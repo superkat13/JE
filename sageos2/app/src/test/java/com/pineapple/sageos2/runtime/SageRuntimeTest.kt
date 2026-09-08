@@ -4,6 +4,8 @@ import com.pineapple.sageos2.action.*
 import com.pineapple.sageos2.brain.*
 import com.pineapple.sageos2.capability.*
 import com.pineapple.sageos2.core.*
+import com.pineapple.sageos2.personal.SagePersonalResolution
+import com.pineapple.sageos2.personal.SagePersonalResponder
 import com.pineapple.sageos2.speech.*
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import org.junit.Assert.assertEquals
@@ -45,6 +47,13 @@ class SageRuntimeTest {
         assertFalse(request.twinContextText?.contains("ACTIVE / RECOVERABLE TASKS") == true)
     }
 
+    @Test fun actionReasoningStillReceivesTheToolContractUnderneathSage() {
+        val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("check your root identity"))
+        val context = f.brain.requests.single().twinContextText.orEmpty()
+        assertTrue(context.contains("SAGE TOOL CONTRACT"))
+        assertFalse(context.contains("ACTIVE / RECOVERABLE TASKS"))
+    }
+
     @Test fun exactBrainSelfCheckUsesOnlyItsMinimalDeterministicContract() {
         val f = Fixture()
         f.runtime.start()
@@ -64,6 +73,18 @@ class SageRuntimeTest {
     @Test fun fastDeviceCommandBypassesBrain() {
         val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
         assertEquals(1, f.fast.requests.size); assertEquals(0, f.brain.requests.size)
+    }
+
+    @Test fun familiarSageHelpRepliesImmediatelyWithoutStartingGguf() {
+        val responder = object : SagePersonalResponder {
+            override fun resolve(rawText: String) = SagePersonalResolution.Reply("Just talk to me normally.")
+        }
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(responder)))
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("How do I use Sage?"))
+        assertEquals(0, f.brain.requests.size)
+        assertEquals("Just talk to me normally.", f.observer.textResponses.single().second)
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
     }
 
     @Test fun ownerWorkflowTriggerIsSilent() {
@@ -163,11 +184,12 @@ class SageRuntimeTest {
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         scheduler: RuntimeScheduler = FakeScheduler(),
-        brainResponseTimeoutMs: Long = 120_000L
+        brainResponseTimeoutMs: Long = 120_000L,
+        coordinator: SageTurnCoordinator = SageTurnCoordinator()
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
-            SageTurnCoordinator(),
+            coordinator,
             speech,
             brain,
             fast,

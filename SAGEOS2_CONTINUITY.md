@@ -13,14 +13,16 @@ This file exists so the project can survive a lost conversation, model change, o
 - Never create a version-per-fix branch or APK family. Use commits and CI checkpoints on `sageos-2`.
 - Do not ask the owner to reconstruct the history below. Treat this file plus issue #21 plus current CI as the source of truth.
 
-## Current checkpoint — 2026-09-07
+## Current checkpoint — 2026-09-08
 
 - Candidate 203 source commit `ed2174ce0338b27f9eb337fb8d7ac0609ee03d40` passed ordinary run `34086719218` and signed run `34086719228`. Its signed APK SHA-256 was `a29cfaa23fd88b3e9e100cea89eea727e213a2f7a60408586388208ef13ae58d`.
 - Candidate 203 installed over the existing package and stayed open after native wake isolation, so package/signing continuity and the `:wake` process repair survived that checkpoint.
 - Candidate 203 failed product acceptance: the owner reported that Sage/chat did not work, and Android sharing did not let the owner send the diagnostic report. No exact device trace was recovered, so do not invent one.
 - Comparison with the inherited working Sage 1.33.3 Brain found a concrete tablet regression risk: candidate 203 expanded native context from 2,048 to 4,096 tokens, output from a proven adaptive 16–24 tokens to 192, and prompt context from 3,600–4,800 formatted characters to 9,000. At the previously observed mobile generation rate, 192 tokens can consume almost the entire 180-second watchdog.
-- Candidate 204 is the in-place SageOS 2 repair counter, not a new Sage version. Its source restores the physically informed limits, adds immediate human progress, cleans hidden Qwen reasoning, adds staged watchdogs and evidence, and provides direct Copy/Share report buttons plus an exact local-Brain self-check under Advanced.
-- Candidate 204 is **not approved for tablet handoff** until ordinary CI and the signed workflow both pass, including release lint, two independent builds, payload comparison, signing-lineage verification, package/version/native-payload checks, and independent artifact verification.
+- Candidate 204 source commit `788cd9d4a5225a8c941f0117b52e92a93a9d75cd` passed ordinary run `34139696044` and signed run `34139696093`, including release lint and two-build reproducibility. Its independently downloaded APK SHA-256 was `2974afa733f9c86890477b22878758ab5c880d4fe56bdf71ef5bd3a4288cf4e1`.
+- Candidate 204 remains **withheld** and was not handed to the owner. Automated correctness did not resolve the clarified product blocker: Sage still was not obvious to use, normal Settings still exposed Core/workflows/scopes/capabilities/diagnostics, ordinary conversations still received an engineering tool contract, queued sends were not immediately visible, and familiar taught phrases were stranded.
+- Candidate 205 is the next in-place SageOS 2 repair counter, not a new Sage version. It keeps Chat as home, adds persistent plain-language help, immediately displays accepted/queued messages, restores legacy taught phrases in place, adds owner-friendly memory controls, separates ordinary twin conversation from operational tool prompts, and nests all engineering machinery under Settings → Advanced.
+- Candidate 205 is **not approved for tablet handoff** until product/path tests, ordinary CI, and the signed workflow all pass, including release lint, two independent builds, payload comparison, signing-lineage verification, package/version/native-payload checks, and independent artifact verification.
 - **Do not give the owner a debug APK. Do not hand over candidate 203 again.**
 
 ## Hard owner decisions
@@ -41,14 +43,14 @@ This file exists so the project can survive a lost conversation, model change, o
 - One assistant identity. Red Queen and other modes are facets of Sage, not separate assistants.
 - iPhone integration is an external future bridge and must not block SageOS 2.
 
-## Architecture established; candidate 204 repair pending CI verification
+## Architecture established; candidate 205 product repair pending verification
 
 - Clean Kotlin Android project under `sageos2/`.
 - Application ID remains `com.pineapple.sagecommander.stable` for in-place migration.
-- Current SageOS 2 versionCode is `204`, versionName `2.0.0`, targetSdk 35, arm64 only. This remains the same SageOS 2 lineage; versionCode is only Android's in-place update counter.
+- Current SageOS 2 versionCode is `205`, versionName `2.0.0`, targetSdk 35, arm64 only. This remains the same SageOS 2 lineage; versionCode is only Android's in-place update counter.
 - Single `SageTurnCoordinator` owns turn/listening state.
 - Listening modes are OFF, WAKE_ONLY, COMMAND, FOLLOW_UP.
-- Typed messages queue while a turn is busy.
+- Typed messages queue while a turn is busy; every accepted message is written to Chat immediately and visibly confirmed as sent.
 - Stale callbacks are rejected by turn/generation identity.
 - Fast device commands are separated from deep Brain requests.
 - Android VoiceInteractionService/SessionService architecture exists with heavy work outside the always-running interactor process.
@@ -64,7 +66,8 @@ This file exists so the project can survive a lost conversation, model change, o
 - Offline wake uses pinned sherpa-onnx KWS with verified model dependencies and an arm64-only runtime.
 - Native local Brain compiles from verified donor C++ source against pinned llama.cpp commit `d73c1d6b22a2d3ecc74c2c9cde354015ee72e862`.
 - Local Brain receives twin context as system prompt and the current owner request as user prompt.
-- Candidate 204 configures the inherited 2,048-token native context and tablet request profiles: exact checks use 4–12 output tokens, ordinary answers 16, action selection 20, and contextual conversation 24.
+- Candidate 205 retains the inherited 2,048-token native context and tablet request profiles: exact checks use 4–12 output tokens, ordinary answers 16, action selection 20, and contextual conversation 24.
+- Ordinary twin conversation receives Sage's identity, memories, and relevant history without the engineering tool contract or task machinery. Operational prompts receive those details only when an action is actually being reasoned about.
 - Chat immediately distinguishes getting ready, gathering relevant context, and writing; native token progress drives first-token/stall watchdogs underneath that human language.
 - Qwen `<think>` content and model-control tokens are removed before any response reaches conversation history or the visible Chat surface.
 - Brain provider fallback retains failure provenance.
@@ -73,7 +76,9 @@ This file exists so the project can survive a lost conversation, model change, o
 - Root transport source exists as a small authenticated `sage_rootd` service with init/SELinux policy and an app-side socket client.
 - Root capability is **not active on a normal APK install**; it requires the SageOS platform/system-image path.
 - Persistent task checkpoints and safe reboot/crash recovery exist; recovery never blindly replays the last side effect.
-- Chat is the Sage home experience. Sage Core, Local Brain/capability health, Tasks, Diagnostics, Owner Apps, Modes, and Workflows are retained under Settings/Advanced rather than exposed as a developer console across the home screen.
+- Chat is the Sage home experience, with persistent plain-language help and tappable examples. Normal Settings contains only What Sage remembers, Apps Sage knows, Voice & wake, Appearance, and one Advanced doorway. Sage Core, Local Brain/capability health, Tasks, Diagnostics, and Workflows/scopes are nested one level deeper under Settings → Advanced.
+- Sage 1.33.3 `sage_state/phrase_aliases` remains the live learned-phrase store, so existing lessons work immediately without copying, renaming, or deleting the legacy data. Chat once again supports `remember that…`, two-step teaching, one-line `when I say… it means…`, learned commands, and exact owner-taught personality replies without a GGUF wait.
+- Sage 1.33.3 appearance mode, saved background URI/intensity, and owner language preference remain live in their original `sage_state` keys. SageOS 2 reads them in place, exposes Appearance and language in ordinary Settings, and honors the selected tone in local Brain conversation.
 - Chicken Tonight uses an exact silent trigger and requires a stored usable scope before becoming active.
 - Privacy-conscious diagnostic report generation exists and omits conversation contents, Sage Core contents, owner-app details, and Chicken Tonight authorization details by default. Diagnostics has direct Copy and Share buttons that bypass the Brain; sharing failure falls back to the clipboard.
 - Legacy Android authority component names are preserved where needed for signed in-place migration from Sage 1.x.
@@ -137,7 +142,7 @@ If anything fails, capture the built-in diagnostic report first. Repair the **sa
 
 ## Next build gates after signed-candidate verification
 
-1. Candidate 204 must pass ordinary CI and the double-build/lint/signature/identity workflow.
+1. Candidate 205 must pass the product/path regression suite, ordinary CI, and the double-build/lint/signature/identity workflow.
 2. Independently download and verify the signed artifact; do not rely only on the workflow summary.
 3. Perform the focused Chat/local-Brain physical acceptance pass using the exact self-check and direct diagnostic-copy escape hatch first.
 4. Repair only failures actually observed on hardware and rerun the same integrated gates.

@@ -9,7 +9,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TwinContextRendererTest {
-    @Test fun contextContainsTwinContinuityAppsAndCurrentFacetInNaturalLanguage() {
+    @Test fun contextContainsTwinContinuityAppsToneAndCurrentFacetInNaturalLanguage() {
         val core = SageCoreSnapshot(
             2,
             "Sage is the owner's virtual twin",
@@ -25,13 +25,16 @@ class TwinContextRendererTest {
         val apps = OwnerAppSnapshot(1, listOf(OwnerAppRecord("com.example.browser", "Firefox", listOf("browser"), "web")))
         val rendered = TwinContextRenderer().render(core, memory, history, apps, SageModeSnapshot("sage_glitch", "red_queen"))
 
+        assertTrue(rendered.contains("# WHO I AM"))
         assertTrue(rendered.contains("virtual twin"))
         assertTrue(rendered.contains("complete steps"))
         assertTrue(rendered.contains("visible self rule"))
         assertTrue(rendered.contains("red_queen"))
+        assertTrue(rendered.contains("mirror the owner's language"))
         assertTrue(rendered.contains("keep moving"))
         assertTrue(rendered.contains("Firefox"))
         assertTrue(rendered.contains("browser"))
+        assertFalse(rendered.contains("com.example.browser"))
         assertFalse(rendered.contains("Owner model"))
         assertFalse(rendered.contains("Durable twin memory"))
         assertFalse(rendered.contains("SAGE TOOL CONTRACT"))
@@ -49,5 +52,39 @@ class TwinContextRendererTest {
         assertFalse(rendered.contains("Boundary I have chosen"))
         assertFalse(rendered.contains("secret restriction"))
         assertFalse(rendered.contains("hidden provider"))
+    }
+
+    @Test fun ordinaryConversationOmitsOperationalPackageCapabilityAndStartupDetails() {
+        val core = EmptySageCoreProvider.current().copy(
+            sageSelfModel = SageSelfModel(capabilities = listOf("root.exec"), limitations = listOf("broker unavailable"))
+        )
+        val apps = OwnerAppSnapshot(
+            1,
+            listOf(OwnerAppRecord("com.example.browser", "Firefox", listOf("browser"), "web", startupProcedure = "tap private profile"))
+        )
+        val ordinary = TwinContextRenderer().render(
+            core,
+            TwinMemorySnapshot(0, emptyList()),
+            ConversationHistorySnapshot(0, emptyList()),
+            apps,
+            SageModeSnapshot()
+        )
+        assertFalse(ordinary.contains("com.example.browser"))
+        assertFalse(ordinary.contains("root.exec"))
+        assertFalse(ordinary.contains("broker unavailable"))
+        assertFalse(ordinary.contains("tap private profile"))
+
+        val operational = TwinContextRenderer().render(
+            core,
+            TwinMemorySnapshot(0, emptyList()),
+            ConversationHistorySnapshot(0, emptyList()),
+            apps,
+            SageModeSnapshot(),
+            includeOperationalDetails = true
+        )
+        assertTrue(operational.contains("com.example.browser"))
+        assertTrue(operational.contains("root.exec"))
+        assertTrue(operational.contains("broker unavailable"))
+        assertTrue(operational.contains("tap private profile"))
     }
 }

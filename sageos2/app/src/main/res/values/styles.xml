@@ -10,7 +10,7 @@
         <item name="android:windowActionModeOverlay">true</item>
     </style>
 
-    <!-- Owner-facing Sage. The dark engineering cockpit remains a separate Advanced surface. -->
+    <!-- Crash-safe warm launch surface; the Sage home applies the owner's saved appearance. -->
     <style name="Theme.Sage.Home" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">#F7F4EE</item>

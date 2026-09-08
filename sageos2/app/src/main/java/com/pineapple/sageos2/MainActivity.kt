@@ -8,9 +8,14 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Typeface
+import android.graphics.drawable.BitmapDrawable
+import android.graphics.drawable.ColorDrawable
 import android.graphics.drawable.GradientDrawable
+import android.graphics.drawable.LayerDrawable
+import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -23,10 +28,13 @@ import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.pineapple.sage.SageVoiceService
+import com.pineapple.sageos2.appearance.SageAppearanceMode
+import com.pineapple.sageos2.appearance.SageAppearancePreferences
 import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.brain.BrainProgress
 import com.pineapple.sageos2.brain.BrainRequestPolicy
@@ -35,6 +43,9 @@ import com.pineapple.sageos2.capability.CapabilityStatus
 import com.pineapple.sageos2.continuity.TaskState
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.memory.ConversationSpeaker
+import com.pineapple.sageos2.memory.TwinMemorySource
+import com.pineapple.sageos2.memory.TwinMemorySubject
+import com.pineapple.sageos2.mode.SageTone
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
@@ -46,10 +57,12 @@ import java.util.Date
 import java.util.Locale
 
 open class MainActivity : Activity() {
-    private enum class Panel { CHAT, SETTINGS, CORE, HEALTH, TASKS, DIAGNOSTICS, APPS, MODES, WORKFLOWS }
+    private enum class Panel { CHAT, SETTINGS, MEMORY, APPS, MODES, APPEARANCE, ADVANCED, CORE, HEALTH, TASKS, WORKFLOWS, DIAGNOSTICS }
 
     private lateinit var host: SageRuntimeHost
     private lateinit var wakeProfiles: SharedPreferencesWakeProfileStore
+    private lateinit var appearance: SageAppearancePreferences
+    private lateinit var root: LinearLayout
     private lateinit var title: TextView
     private lateinit var status: TextView
     private lateinit var headerAction: Button
@@ -59,6 +72,7 @@ open class MainActivity : Activity() {
     private var chatActivity: TextView? = null
     private var input: EditText? = null
     private var activeBrainProgress: BrainProgress? = null
+    private var lastSubmittedText = ""
     private var currentPanel = Panel.CHAT
     private val uiHandler = Handler(Looper.getMainLooper())
     private var pulseFrame = 0
@@ -84,6 +98,19 @@ open class MainActivity : Activity() {
             activeBrainProgress = null
             renderLiveState()
         }
+        override fun onTypedInputRejected(reason: String) = runOnUiThread {
+            input?.let { field ->
+                if (field.text.isNullOrBlank() && lastSubmittedText.isNotBlank()) {
+                    field.setText(lastSubmittedText)
+                    field.setSelection(field.text.length)
+                }
+            }
+            Toast.makeText(
+                this@MainActivity,
+                "I couldn't take that message yet. It's still in the box—give me a moment, then tap Send again.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,6 +119,7 @@ open class MainActivity : Activity() {
         window.navigationBarColor = COLOR_BACKGROUND
         host = SageRuntimeHost.get(this)
         wakeProfiles = SharedPreferencesWakeProfileStore(this)
+        appearance = SageAppearancePreferences(this)
         buildUi()
         showPanel(Panel.CHAT)
         requestRuntimePermissionsIfNeeded()
@@ -111,7 +139,7 @@ open class MainActivity : Activity() {
     }
 
     private fun buildUi() {
-        val root = LinearLayout(this).apply {
+        root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(16), dp(12), dp(16), dp(12))
             setBackgroundColor(COLOR_BACKGROUND)
@@ -175,6 +203,7 @@ open class MainActivity : Activity() {
         }
         root.addView(body, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, 0, 1f))
         setContentView(root)
+        applyAppearance()
     }
 
     private fun showPanel(panel: Panel) {
@@ -188,12 +217,15 @@ open class MainActivity : Activity() {
         when (panel) {
             Panel.CHAT -> showChat()
             Panel.SETTINGS -> showSettings()
+            Panel.MEMORY -> showMemory()
+            Panel.ADVANCED -> showAdvanced()
             Panel.CORE -> showCore()
             Panel.HEALTH -> showHealth()
             Panel.TASKS -> showTasks()
             Panel.DIAGNOSTICS -> showDiagnostics()
             Panel.APPS -> showOwnerApps()
             Panel.MODES -> showModes()
+            Panel.APPEARANCE -> showAppearance()
             Panel.WORKFLOWS -> showWorkflows()
         }
         renderChrome()
@@ -224,7 +256,7 @@ open class MainActivity : Activity() {
         ).apply { setMargins(0, dp(4), 0, dp(8)) })
 
         input = EditText(this).apply {
-            hint = "Message Sage"
+            hint = "Tell Sage what you need…"
             setHintTextColor(COLOR_MUTED)
             setTextColor(COLOR_TEXT)
             textSize = 17f
@@ -252,6 +284,12 @@ open class MainActivity : Activity() {
             setPadding(0, dp(8), 0, 0)
         }
         controls.addView(Button(this).apply {
+            text = "How to use"
+            contentDescription = "Ask Sage how to use Chat"
+            styleChatButton(primary = false)
+            setOnClickListener { submitMessage("What can you do?") }
+        }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
+        controls.addView(Button(this).apply {
             text = "Talk"
             contentDescription = "Talk to Sage"
             styleChatButton(primary = false)
@@ -276,44 +314,139 @@ open class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding(dp(2), 0, dp(2), dp(18))
         }
-        content.addView(sectionTitle("Sage settings"))
+        content.addView(sectionTitle("Make Sage yours"))
         content.addView(TextView(this).apply {
-            text = "Chat stays home. Identity, tools, continuity, and engineering details live here when you need them."
+            text = SageProductPresentation.SETTINGS_INTRO
             textSize = 15f
             setTextColor(COLOR_MUTED)
             setPadding(0, 0, 0, dp(12))
         })
-        content.addView(settingsGroup("Sage"))
-        content.addView(settingsCard("Sage Core", "Her identity, preferences, principles, and revision history", Panel.CORE))
-        content.addView(settingsCard("My apps", "Apps Sage knows, including your names and purposes for them", Panel.APPS))
-        content.addView(settingsCard("Voice & modes", "Wake profiles and facets of the same Sage", Panel.MODES))
-        content.addView(settingsGroup("Continuity"))
-        content.addView(settingsCard("Tasks", "Active and safely recoverable work", Panel.TASKS))
-        content.addView(settingsCard("Workflows & scopes", "Owner-defined workflows, including Chicken Tonight", Panel.WORKFLOWS))
-        content.addView(settingsGroup("Advanced"))
-        content.addView(settingsCard("Local Brain & capabilities", "Model status, device authority, and capability truth", Panel.HEALTH))
-        content.addView(settingsCard("Diagnostics", "Technical evidence for troubleshooting", Panel.DIAGNOSTICS))
+        SageProductPresentation.settings.forEach { item ->
+            content.addView(settingsCard(item.title, item.description, panelFor(item.destination)))
+        }
+        body.addView(scroll(content))
+    }
+
+    private fun showAdvanced() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), 0, dp(2), dp(18))
+        }
+        content.addView(sectionTitle("Advanced"))
+        content.addView(TextView(this).apply {
+            text = SageProductPresentation.ADVANCED_INTRO
+            textSize = 15f
+            setTextColor(COLOR_MUTED)
+            setPadding(0, 0, 0, dp(12))
+        })
+        SageProductPresentation.advancedSettings.forEach { item ->
+            content.addView(settingsCard(item.title, item.description, panelFor(item.destination)))
+        }
+        body.addView(scroll(content))
+    }
+
+    private fun showMemory() {
+        val content = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(2), 0, dp(2), dp(18))
+        }
+        val memories = host.memory.snapshot().records.filter { it.active }
+            .filterNot { it.key.startsWith("When I say ", ignoreCase = true) }
+            .sortedByDescending { it.updatedAtEpochMs }
+        val lessons = host.learnedPhrases.list()
+        content.addView(sectionTitle("What Sage remembers"))
+        content.addView(TextView(this).apply {
+            text = "These stay with Sage across restarts and updates. You can also say “remember that…” or “teach me something” in Chat."
+            textSize = 15f
+            setTextColor(COLOR_MUTED)
+            setPadding(0, 0, 0, dp(8))
+        })
+
+        val memoryInput = editor("Something Sage should remember", "", 3)
+        content.addView(memoryInput)
+        content.addView(Button(this).apply {
+            text = "Remember this"
+            isAllCaps = false
+            setOnClickListener {
+                val value = memoryInput.text.toString().trim()
+                if (value.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Tell Sage what to remember", Toast.LENGTH_SHORT).show()
+                } else {
+                    host.memory.remember(
+                        subject = TwinMemorySubject.OWNER,
+                        key = "Owner note: ${value.lowercase(Locale.US).replace(Regex("\\s+"), " ").take(72)}",
+                        value = value,
+                        source = TwinMemorySource.EXPLICIT_OWNER,
+                        confidence = 1.0
+                    )
+                    Toast.makeText(this@MainActivity, "Sage will remember that", Toast.LENGTH_SHORT).show()
+                    showPanel(Panel.MEMORY)
+                }
+            }
+        })
+
+        content.addView(sectionTitle("Phrases you've taught Sage"))
+        if (lessons.isEmpty()) {
+            content.addView(info("Lessons", "No custom phrases yet"))
+        } else {
+            lessons.forEach { lesson ->
+                content.addView(personalItem(
+                    title = "“${lesson.phrase}”",
+                    detail = "Means: ${lesson.meaning}",
+                    action = "Forget phrase"
+                ) {
+                    confirmForget(
+                        title = "Forget “${lesson.phrase}”?",
+                        message = "Sage will stop recognizing this taught phrase. Other memories stay saved."
+                    ) {
+                        host.forgetLearnedPhrase(lesson.phrase)
+                        showPanel(Panel.MEMORY)
+                    }
+                })
+            }
+        }
+
+        content.addView(sectionTitle("Shared memories"))
+        if (memories.isEmpty()) {
+            content.addView(info("Memories", "Nothing saved yet"))
+        } else {
+            memories.forEach { record ->
+                content.addView(personalItem(
+                    title = memoryLabel(record),
+                    detail = record.value,
+                    action = "Forget"
+                ) {
+                    confirmForget(
+                        title = "Forget this memory?",
+                        message = "This removes only the memory shown here."
+                    ) {
+                        host.memory.forget(record.id)
+                        showPanel(Panel.MEMORY)
+                    }
+                })
+            }
+        }
         body.addView(scroll(content))
     }
 
     private fun showCore() {
         val core = host.core.current()
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        form.addView(sectionTitle("Sage Core • revision ${core.revision}"))
+        form.addView(sectionTitle("Sage's inner notes • saved version ${core.revision}"))
         form.addView(TextView(this).apply {
-            text = "These are owner-controlled instructions and identity context used by the same Sage runtime. Saving creates a new revision."
+            text = "This is Sage's long-term picture of herself and the way you work together. Every save keeps the previous version."
             textSize = 14f
         })
 
-        val identity = editor("Twin identity", core.twinIdentity, 5)
-        val principles = editor("Principles • one per line", core.principles.joinToString("\n"), 5)
-        val preferences = editor("Preferences • one per line", core.preferences.joinToString("\n"), 5)
-        val restrictions = editor("Self restrictions / boundaries • one per line", core.selfRestrictions.joinToString("\n"), 5)
-        val notes = editor("Owner notes", core.notes, 7)
+        val identity = editor("Who Sage is", core.twinIdentity, 5)
+        val principles = editor("What matters to Sage • one per line", core.principles.joinToString("\n"), 5)
+        val preferences = editor("What Sage prefers • one per line", core.preferences.joinToString("\n"), 5)
+        val restrictions = editor("Promises Sage keeps • one per line", core.selfRestrictions.joinToString("\n"), 5)
+        val notes = editor("Notes you share with Sage", core.notes, 7)
         listOf(identity, principles, preferences, restrictions, notes).forEach(form::addView)
 
         form.addView(Button(this).apply {
-            text = "Save new Core revision"
+            text = "Save Sage's changes"
             setOnClickListener {
                 val saved = host.core.replace(
                     host.core.current().copy(
@@ -325,12 +458,12 @@ open class MainActivity : Activity() {
                     )
                 )
                 host.traces.record("owner_core", "Sage Core saved revision=${saved.revision}")
-                Toast.makeText(this@MainActivity, "Saved Sage Core revision ${saved.revision}", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this@MainActivity, "Saved as version ${saved.revision}", Toast.LENGTH_SHORT).show()
                 showPanel(Panel.CORE)
             }
         })
         form.addView(Button(this).apply {
-            text = "Restore previous Core revision"
+            text = "Restore the previous version"
             isEnabled = core.revision > 1
             setOnClickListener {
                 val current = host.core.current()
@@ -348,7 +481,7 @@ open class MainActivity : Activity() {
             }
         })
         form.addView(Button(this).apply {
-            text = "Copy Core JSON"
+            text = "Copy advanced identity data"
             setOnClickListener {
                 copyToClipboard("Sage Core", host.core.exportJson())
                 Toast.makeText(this@MainActivity, "Sage Core copied", Toast.LENGTH_SHORT).show()
@@ -359,7 +492,7 @@ open class MainActivity : Activity() {
 
     private fun showHealth() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        content.addView(sectionTitle("Local Brain & capabilities"))
+        content.addView(sectionTitle("Local replies & device access"))
         val brain = host.brainStatus()
         val wake = host.wakeStatus()
         content.addView(info("Brain", if (brain.ready) "READY" else brain.detail))
@@ -380,7 +513,7 @@ open class MainActivity : Activity() {
                 showPanel(Panel.CHAT)
             }
         })
-        content.addView(sectionTitle("Authority / capability truth"))
+        content.addView(sectionTitle("Device access details"))
         val states = host.capabilityStatus().states
         Capability.entries.forEach { capability ->
             content.addView(info(capability.displayName(), states[capability]?.name ?: CapabilityStatus.UNKNOWN.name))
@@ -480,29 +613,28 @@ open class MainActivity : Activity() {
     private fun showOwnerApps() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val snapshot = host.ownerApps.snapshot()
-        content.addView(sectionTitle("Owner Apps • revision ${snapshot.revision}"))
+        content.addView(sectionTitle("Apps Sage knows"))
         content.addView(Button(this).apply {
-            text = "Add Owner App"
-            setOnClickListener { showOwnerAppEditor(null) }
+            text = "Add an app"
+            setOnClickListener { chooseInstalledApp() }
         })
         if (snapshot.apps.isEmpty()) {
-            content.addView(info("Apps", "No owner apps registered yet"))
+            content.addView(info("Apps", "Sage hasn't learned any app names yet"))
         } else {
             snapshot.apps.sortedBy { it.displayName.lowercase() }.forEach { app ->
                 content.addView(TextView(this).apply {
                     text = buildString {
                         append(app.displayName)
-                        append(if (app.enabled) "  • enabled" else "  • disabled")
-                        append("\n${app.packageName}")
-                        if (app.aliases.isNotEmpty()) append("\nAliases: ${app.aliases.joinToString()}")
-                        if (app.purpose.isNotBlank()) append("\nPurpose: ${app.purpose}")
+                        append(if (app.enabled) "  • Sage can use this" else "  • paused")
+                        if (app.aliases.isNotEmpty()) append("\nYou also call it: ${app.aliases.joinToString()}")
+                        if (app.purpose.isNotBlank()) append("\nWhat it's for: ${app.purpose}")
                     }
                     textSize = 15f
                     setPadding(0, dp(10), 0, dp(4))
                 })
                 val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
                 row.addView(Button(this).apply {
-                    text = if (app.enabled) "Disable" else "Enable"
+                    text = if (app.enabled) "Pause" else "Let Sage use it"
                     setOnClickListener { host.ownerApps.upsert(app.copy(enabled = !app.enabled)); showPanel(Panel.APPS) }
                 }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
                 row.addView(Button(this).apply {
@@ -523,25 +655,53 @@ open class MainActivity : Activity() {
                 content.addView(row)
             }
         }
-        content.addView(Button(this).apply {
-            text = "Copy Owner Apps JSON"
-            setOnClickListener { copyToClipboard("Sage Owner Apps", host.ownerApps.exportJson()) }
-        })
         body.addView(scroll(content))
     }
 
-    private fun showOwnerAppEditor(existing: OwnerAppRecord?) {
-        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), 0) }
-        val packageName = editor("Android package name", existing?.packageName.orEmpty(), 1).apply {
-            inputType = InputType.TYPE_CLASS_TEXT
-            isEnabled = existing == null
+    private fun chooseInstalledApp() {
+        val launcher = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val apps = packageManager.queryIntentActivities(launcher, 0)
+            .mapNotNull { resolved ->
+                val packageName = resolved.activityInfo?.packageName.orEmpty().trim()
+                if (packageName.isEmpty() || packageName == this.packageName) null
+                else packageName to resolved.loadLabel(packageManager).toString().trim().ifEmpty { packageName }
+            }
+            .distinctBy { it.first }
+            .sortedBy { it.second.lowercase(Locale.US) }
+        if (apps.isEmpty()) {
+            Toast.makeText(this, "Android didn't show any apps Sage can add.", Toast.LENGTH_LONG).show()
+            return
         }
-        val displayName = editor("Display name", existing?.displayName.orEmpty(), 1)
-        val aliases = editor("Aliases • comma or line separated", existing?.aliases?.joinToString(", ").orEmpty(), 3)
-        val purpose = editor("Purpose", existing?.purpose.orEmpty(), 3)
-        listOf(packageName, displayName, aliases, purpose).forEach(form::addView)
         AlertDialog.Builder(this)
-            .setTitle(if (existing == null) "Add Owner App" else "Edit ${existing.displayName}")
+            .setTitle("Which app should Sage know?")
+            .setItems(apps.map { it.second }.toTypedArray()) { _, index ->
+                val (packageName, displayName) = apps[index]
+                val existing = host.ownerApps.snapshot().apps.firstOrNull { it.packageName == packageName }
+                showOwnerAppEditor(existing, packageName, displayName)
+            }
+            .setNegativeButton("Cancel", null)
+            .show()
+    }
+
+    private fun showOwnerAppEditor(
+        existing: OwnerAppRecord?,
+        selectedPackageName: String = existing?.packageName.orEmpty(),
+        selectedDisplayName: String = existing?.displayName.orEmpty()
+    ) {
+        val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(18), 0, dp(18), 0) }
+        form.addView(TextView(this).apply {
+            text = selectedDisplayName
+            textSize = 18f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_TEXT)
+            setPadding(0, dp(4), 0, dp(8))
+        })
+        val displayName = editor("What you call this app", selectedDisplayName, 1)
+        val aliases = editor("Aliases • comma or line separated", existing?.aliases?.joinToString(", ").orEmpty(), 3)
+        val purpose = editor("What Sage should know about it", existing?.purpose.orEmpty(), 3)
+        listOf(displayName, aliases, purpose).forEach(form::addView)
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add app" else "Edit ${existing.displayName}")
             .setView(form)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Save", null)
@@ -549,10 +709,10 @@ open class MainActivity : Activity() {
             .also { dialog ->
                 dialog.setOnShowListener {
                     dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                        val pkg = packageName.text.toString().trim()
+                        val pkg = selectedPackageName.trim()
                         val name = displayName.text.toString().trim()
                         if (pkg.isEmpty() || name.isEmpty()) {
-                            Toast.makeText(this, "Package name and display name are required", Toast.LENGTH_SHORT).show()
+                            Toast.makeText(this, "Give the app a name Sage can use", Toast.LENGTH_SHORT).show()
                         } else {
                             host.ownerApps.upsert(
                                 OwnerAppRecord(
@@ -560,7 +720,8 @@ open class MainActivity : Activity() {
                                     displayName = name,
                                     aliases = aliases(aliases.text.toString()),
                                     purpose = purpose.text.toString().trim(),
-                                    enabled = existing?.enabled ?: true
+                                    enabled = existing?.enabled ?: true,
+                                    startupProcedure = existing?.startupProcedure.orEmpty()
                                 )
                             )
                             host.traces.record("owner_apps", "Owner app saved package=$pkg")
@@ -576,16 +737,35 @@ open class MainActivity : Activity() {
     private fun showModes() {
         val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         val current = host.modes.current()
-        content.addView(sectionTitle("Modes and wake profiles"))
-        content.addView(info("Current profile", current.profileId))
-        content.addView(info("Current mode", current.modeId ?: "normal Sage"))
+        content.addView(sectionTitle("Voice & wake"))
+        val activeProfile = wakeProfiles.profiles().firstOrNull { it.id == current.profileId }
+        content.addView(info("Sage is listening for", activeProfile?.phrases?.joinToString().orEmpty().ifBlank { "Sage" }))
+        content.addView(info("Sage's personality mode", current.modeId?.replace('_', ' ') ?: "everyday Sage"))
+        content.addView(info("Sage's language", current.tone.displayName()))
+        content.addView(sectionTitle("Language"))
+        content.addView(TextView(this).apply {
+            text = "This is your choice and carries forward from the Sage you already had."
+            textSize = 15f
+            setTextColor(COLOR_MUTED)
+        })
+        SageTone.entries.forEach { tone ->
+            content.addView(Button(this).apply {
+                text = if (tone == current.tone) "${tone.displayName()} • selected" else tone.displayName()
+                isAllCaps = false
+                setOnClickListener {
+                    host.modes.setTone(tone)
+                    showPanel(Panel.MODES)
+                }
+            })
+        }
+        content.addView(sectionTitle("Wake names"))
         wakeProfiles.profiles().forEach { profile ->
             content.addView(TextView(this).apply {
                 text = buildString {
                     append(profile.displayName)
-                    append("\nWake: ${profile.phrases.joinToString()}")
-                    append("\nAcknowledgement: ${profile.acknowledgement}")
-                    append("\nMode: ${profile.modeId ?: "normal Sage"}")
+                    append("\nCall Sage with: ${profile.phrases.joinToString()}")
+                    append("\nShe answers: ${profile.acknowledgement}")
+                    append("\nTone: ${profile.modeId?.replace('_', ' ') ?: "herself"}")
                 }
                 textSize = 15f
                 setPadding(0, dp(10), 0, dp(4))
@@ -599,6 +779,65 @@ open class MainActivity : Activity() {
                 }
             })
         }
+        body.addView(scroll(content))
+    }
+
+    private fun showAppearance() {
+        val saved = appearance.current()
+        val content = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        content.addView(sectionTitle("Appearance"))
+        content.addView(TextView(this).apply {
+            text = "Your Sage look carries forward from the app you already had."
+            textSize = 15f
+            setTextColor(COLOR_MUTED)
+            setPadding(0, 0, 0, dp(10))
+        })
+        content.addView(Button(this).apply {
+            text = "Look: ${saved.mode.displayName()}"
+            isAllCaps = false
+            setOnClickListener {
+                appearance.cycleMode()
+                applyAppearance()
+                showPanel(Panel.APPEARANCE)
+            }
+        })
+        content.addView(Button(this).apply {
+            text = "Choose background image"
+            isAllCaps = false
+            setOnClickListener { chooseBackgroundImage() }
+        })
+        content.addView(Button(this).apply {
+            text = "Clear background image"
+            isAllCaps = false
+            isEnabled = saved.backgroundUri.isNotBlank()
+            setOnClickListener {
+                confirmForget(
+                    title = "Clear Sage's background?",
+                    message = "The image itself will not be deleted. Sage will return to the selected dark look.",
+                    confirmLabel = "Clear"
+                ) {
+                    appearance.setBackgroundUri("")
+                    applyAppearance()
+                    showPanel(Panel.APPEARANCE)
+                }
+            }
+        })
+        content.addView(sectionTitle("Background brightness"))
+        content.addView(SeekBar(this).apply {
+            max = 100
+            progress = saved.backgroundIntensity
+            isEnabled = saved.backgroundUri.isNotBlank()
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(seekBar: SeekBar?, value: Int, fromUser: Boolean) {
+                    if (fromUser) {
+                        appearance.setBackgroundIntensity(value)
+                        applyAppearance()
+                    }
+                }
+                override fun onStartTrackingTouch(seekBar: SeekBar?) = Unit
+                override fun onStopTrackingTouch(seekBar: SeekBar?) = Unit
+            })
+        })
         body.addView(scroll(content))
     }
 
@@ -725,16 +964,7 @@ open class MainActivity : Activity() {
         container.removeAllViews()
         val entries = host.recentConversation(60)
         if (entries.isEmpty()) {
-            container.addView(TextView(this).apply {
-                text = "I'm here. What are we doing?"
-                textSize = 18f
-                setTextColor(COLOR_TEXT)
-                setPadding(dp(16), dp(16), dp(16), dp(16))
-                background = rounded(COLOR_SAGE_BUBBLE, 20)
-            }, LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            ).apply { setMargins(0, dp(12), dp(44), dp(8)) })
+            container.addView(welcomeView())
         } else {
             entries.forEach { entry -> container.addView(messageBubble(entry)) }
         }
@@ -767,7 +997,26 @@ open class MainActivity : Activity() {
         val message = input?.text?.toString()?.trim().orEmpty()
         if (message.isEmpty()) return
         input?.setText("")
-        host.submitText(message)
+        submitMessage(message)
+    }
+
+    private fun submitMessage(message: String) {
+        lastSubmittedText = message
+        runCatching { host.submitText(message) }
+            .onFailure { error ->
+                input?.let { field ->
+                    if (field.text.isNullOrBlank()) {
+                        field.setText(message)
+                        field.setSelection(field.text.length)
+                    }
+                }
+                runCatching { host.traces.record("chat", "Typed send failed before dispatch: ${error.message ?: error::class.simpleName}") }
+                Toast.makeText(
+                    this,
+                    "I couldn't take that message yet. I put it back in the box so it isn't lost.",
+                    Toast.LENGTH_LONG
+                ).show()
+            }
         renderLiveState()
     }
 
@@ -779,7 +1028,9 @@ open class MainActivity : Activity() {
             when (currentPanel) {
                 Panel.CHAT -> showPanel(Panel.SETTINGS)
                 Panel.SETTINGS -> showPanel(Panel.CHAT)
-                else -> showPanel(Panel.SETTINGS)
+                Panel.ADVANCED -> showPanel(Panel.SETTINGS)
+                Panel.CORE, Panel.HEALTH, Panel.TASKS, Panel.WORKFLOWS, Panel.DIAGNOSTICS -> showPanel(Panel.ADVANCED)
+                Panel.MEMORY, Panel.APPS, Panel.MODES, Panel.APPEARANCE -> showPanel(Panel.SETTINGS)
             }
         }
     }
@@ -787,25 +1038,82 @@ open class MainActivity : Activity() {
     private fun panelTitle(panel: Panel): String = when (panel) {
         Panel.CHAT -> "Sage"
         Panel.SETTINGS -> "Settings"
-        Panel.CORE -> "Sage Core"
-        Panel.HEALTH -> "Advanced"
-        Panel.TASKS -> "Tasks"
-        Panel.DIAGNOSTICS -> "Diagnostics"
-        Panel.APPS -> "My apps"
-        Panel.MODES -> "Voice & modes"
+        Panel.MEMORY -> "Sage remembers"
+        Panel.APPS -> "Apps Sage knows"
+        Panel.MODES -> "Voice & wake"
+        Panel.APPEARANCE -> "Appearance"
+        Panel.ADVANCED -> "Advanced"
+        Panel.CORE -> "Identity"
+        Panel.HEALTH -> "Local replies"
+        Panel.TASKS -> "Recoverable work"
         Panel.WORKFLOWS -> "Workflows"
+        Panel.DIAGNOSTICS -> "Diagnostics"
     }
 
     private fun panelSubtitle(panel: Panel): String = when (panel) {
         Panel.CHAT -> "Here with you"
-        Panel.SETTINGS -> "Everything underneath Sage"
-        Panel.CORE -> "Identity and continuity"
-        Panel.HEALTH -> "Local Brain and device truth"
-        Panel.TASKS -> "Active and recoverable work"
-        Panel.DIAGNOSTICS -> "Technical details"
-        Panel.APPS -> "Apps Sage knows"
-        Panel.MODES -> "One Sage, every mode"
+        Panel.SETTINGS -> "The things that make Sage yours"
+        Panel.MEMORY -> "What stays with Sage"
+        Panel.APPS -> "Names and purposes Sage knows"
+        Panel.MODES -> "How Sage listens and answers"
+        Panel.APPEARANCE -> "Sage's saved look"
+        Panel.ADVANCED -> "Setup and repair"
+        Panel.CORE -> "Sage's long-term identity"
+        Panel.HEALTH -> "Reply and device details"
+        Panel.TASKS -> "Work Sage can pick back up"
         Panel.WORKFLOWS -> "Owner-defined work"
+        Panel.DIAGNOSTICS -> "Technical details"
+    }
+
+    private fun panelFor(destination: SageDestination): Panel = when (destination) {
+        SageDestination.MEMORIES -> Panel.MEMORY
+        SageDestination.APPS -> Panel.APPS
+        SageDestination.VOICE -> Panel.MODES
+        SageDestination.APPEARANCE -> Panel.APPEARANCE
+        SageDestination.ADVANCED -> Panel.ADVANCED
+        SageDestination.CORE -> Panel.CORE
+        SageDestination.TASKS -> Panel.TASKS
+        SageDestination.WORKFLOWS -> Panel.WORKFLOWS
+        SageDestination.LOCAL_REPLIES -> Panel.HEALTH
+        SageDestination.DIAGNOSTICS -> Panel.DIAGNOSTICS
+    }
+
+    private fun welcomeView(): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        setPadding(dp(16), dp(16), dp(16), dp(14))
+        background = rounded(COLOR_SAGE_BUBBLE, 20)
+        addView(TextView(this@MainActivity).apply {
+            text = "Sage"
+            textSize = 13f
+            typeface = Typeface.DEFAULT_BOLD
+            setTextColor(COLOR_SAGE)
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = SageProductPresentation.HOME_GREETING
+            textSize = 18f
+            setTextColor(COLOR_TEXT)
+            setPadding(0, dp(4), 0, dp(12))
+        })
+        SageProductPresentation.starters.forEach { starter ->
+            addView(Button(this@MainActivity).apply {
+                text = starter.label
+                contentDescription = "Ask Sage: ${starter.message}"
+                isAllCaps = false
+                gravity = Gravity.START or Gravity.CENTER_VERTICAL
+                textSize = 15f
+                setTextColor(COLOR_TEXT)
+                background = rounded(COLOR_SURFACE, 16, COLOR_BORDER)
+                setPadding(dp(14), 0, dp(14), 0)
+                setOnClickListener { submitMessage(starter.message) }
+            }, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                dp(46)
+            ).apply { setMargins(0, 0, 0, dp(7)) })
+        }
+        layoutParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        ).apply { setMargins(0, dp(12), 0, dp(8)) }
     }
 
     private fun messageBubble(entry: com.pineapple.sageos2.memory.ConversationEntry): View {
@@ -842,12 +1150,47 @@ open class MainActivity : Activity() {
         }
     }
 
-    private fun settingsGroup(label: String) = TextView(this).apply {
-        text = label.uppercase(Locale.US)
-        textSize = 12f
-        typeface = Typeface.DEFAULT_BOLD
-        setTextColor(COLOR_SAGE)
-        setPadding(dp(4), dp(16), dp(4), dp(7))
+    private fun personalItem(title: String, detail: String, action: String, onAction: () -> Unit): View =
+        LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(14), dp(12), dp(14), dp(10))
+            background = rounded(COLOR_SURFACE, 16, COLOR_BORDER)
+            addView(TextView(this@MainActivity).apply {
+                text = title
+                textSize = 16f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(COLOR_TEXT)
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = detail
+                textSize = 15f
+                setTextColor(COLOR_MUTED)
+                setPadding(0, dp(4), 0, dp(5))
+            })
+            addView(Button(this@MainActivity).apply {
+                text = action
+                isAllCaps = false
+                setOnClickListener { onAction() }
+            })
+            layoutParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply { setMargins(0, 0, 0, dp(8)) }
+        }
+
+    private fun memoryLabel(record: com.pineapple.sageos2.memory.TwinMemoryRecord): String {
+        val taughtPrefix = "Owner-taught reply for:"
+        if (record.key.startsWith(taughtPrefix, ignoreCase = true)) {
+            return "When you say “${record.key.substring(taughtPrefix.length).trim()}”"
+        }
+        return when (record.subject) {
+        TwinMemorySubject.OWNER -> "About you"
+        TwinMemorySubject.SAGE -> "About Sage"
+        TwinMemorySubject.SHARED -> "About you and Sage"
+        TwinMemorySubject.DEVICE -> "About this device"
+        TwinMemorySubject.APP -> "About an app"
+        TwinMemorySubject.PROJECT -> "About a project"
+        }
     }
 
     private fun settingsCard(label: String, description: String, destination: Panel): View =
@@ -952,6 +1295,69 @@ open class MainActivity : Activity() {
         clipboard.setPrimaryClip(ClipData.newPlainText(label, value))
     }
 
+    private fun confirmForget(
+        title: String,
+        message: String,
+        confirmLabel: String = "Forget",
+        action: () -> Unit
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle(title)
+            .setMessage(message)
+            .setNegativeButton("Keep", null)
+            .setPositiveButton(confirmLabel) { _, _ -> action() }
+            .show()
+    }
+
+    private fun chooseBackgroundImage() {
+        val picker = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+            addCategory(Intent.CATEGORY_OPENABLE)
+            type = "image/*"
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        }
+        runCatching { startActivityForResult(picker, REQUEST_BACKGROUND) }
+            .onFailure { Toast.makeText(this, "Android couldn't open the image picker.", Toast.LENGTH_LONG).show() }
+    }
+
+    @Deprecated("Activity result compatibility is intentional for the inherited Android app surface")
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode != REQUEST_BACKGROUND || resultCode != RESULT_OK) return
+        val uri = data?.data ?: return
+        runCatching {
+            contentResolver.takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        appearance.setBackgroundUri(uri.toString())
+        applyAppearance()
+        showPanel(Panel.APPEARANCE)
+    }
+
+    private fun applyAppearance() {
+        if (!::root.isInitialized || !::appearance.isInitialized) return
+        val saved = appearance.current()
+        val base = when (saved.mode) {
+            SageAppearanceMode.DARK -> Color.rgb(17, 24, 39)
+            SageAppearanceMode.DIM -> Color.rgb(32, 35, 42)
+            SageAppearanceMode.BLACK -> Color.BLACK
+        }
+        window.statusBarColor = base
+        window.navigationBarColor = base
+        val bitmap = saved.backgroundUri.takeIf(String::isNotBlank)?.let { value ->
+            runCatching {
+                contentResolver.openInputStream(Uri.parse(value)).use { input ->
+                    BitmapFactory.decodeStream(input)
+                }
+            }.getOrNull()
+        }
+        root.background = if (bitmap == null) {
+            ColorDrawable(base)
+        } else {
+            val image = BitmapDrawable(resources, bitmap).apply { gravity = Gravity.FILL }
+            val darkness = (255 - (saved.backgroundIntensity * 1.7f).toInt()).coerceIn(70, 235)
+            LayerDrawable(arrayOf(image, ColorDrawable(Color.argb(darkness, 0, 0, 0))))
+        }
+    }
+
     private fun shareDiagnosticReport() {
         val report = host.diagnosticReport()
         val send = Intent(Intent.ACTION_SEND).apply {
@@ -988,6 +1394,7 @@ open class MainActivity : Activity() {
 
     companion object {
         private const val REQUEST_RUNTIME = 220
+        private const val REQUEST_BACKGROUND = 221
         private val COLOR_BACKGROUND = Color.rgb(14, 17, 22)
         private val COLOR_SURFACE = Color.rgb(27, 32, 39)
         private val COLOR_BORDER = Color.rgb(53, 62, 70)

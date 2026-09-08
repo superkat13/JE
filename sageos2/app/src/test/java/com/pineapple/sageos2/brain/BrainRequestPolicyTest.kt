@@ -41,9 +41,16 @@ class BrainRequestPolicyTest {
         assertTrue(action.includeToolContext)
         assertFalse(action.includeTaskContext)
 
+        val diagnosticAction = BrainRequestPolicy.forPrompt("check your root identity")
+        assertTrue(diagnosticAction.includeToolContext)
+
         val continuation = BrainRequestPolicy.forPrompt("Continue the task from where we left off")
         assertTrue(continuation.includeTaskContext)
         assertFalse(continuation.includeToolContext)
+
+        val toolResult = BrainRequestPolicy.forPrompt("SAGE_TOOL_RESULT\naction=open.app\nsuccess=true")
+        assertTrue(toolResult.includeToolContext)
+        assertTrue(toolResult.includeTaskContext)
     }
 
     @Test fun literalComparisonAllowsOnlyWrappingQuotesAndWhitespaceDifferences() {

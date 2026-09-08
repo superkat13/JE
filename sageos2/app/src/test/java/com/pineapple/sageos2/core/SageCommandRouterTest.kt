@@ -1,5 +1,7 @@
 package com.pineapple.sageos2.core
 
+import com.pineapple.sageos2.personal.SagePersonalResolution
+import com.pineapple.sageos2.personal.SagePersonalResponder
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
@@ -43,5 +45,25 @@ class SageCommandRouterTest {
         assertEquals(SageRoute.FAST_DEVICE, decision.route)
         assertNull(decision.workflowId)
         assertEquals("import brain model", decision.normalizedText)
+    }
+
+    @Test
+    fun familiarSageReplyRoutesWithoutWaitingForBrain() {
+        val router = SageCommandRouter(object : SagePersonalResponder {
+            override fun resolve(rawText: String) = SagePersonalResolution.Reply("I'm right here.")
+        })
+        val decision = router.route("How do I use Sage?")
+        assertEquals(SageRoute.LOCAL_SAGE, decision.route)
+        assertEquals("I'm right here.", decision.localReply)
+    }
+
+    @Test
+    fun learnedPhraseCanResolveIntoExistingFastDevicePath() {
+        val router = SageCommandRouter(object : SagePersonalResponder {
+            override fun resolve(rawText: String) = SagePersonalResolution.RewrittenRequest("open YouTube")
+        })
+        val decision = router.route("movie time")
+        assertEquals(SageRoute.FAST_DEVICE, decision.route)
+        assertEquals("open youtube", decision.normalizedText)
     }
 }
