@@ -20,7 +20,7 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
         value: String,
         source: TwinMemorySource,
         confidence: Double,
-        nowEpochMs: Long = System.currentTimeMillis()
+        nowEpochMs: Long
     ): TwinMemoryRecord {
         val current = snapshot()
         val existing = current.records.firstOrNull { it.active && it.subject == subject && it.key.equals(key, ignoreCase = true) }
