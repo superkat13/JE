@@ -26,6 +26,9 @@ This file exists so the project can survive a lost conversation, model change, o
 - The signed artifact `10057183257` was independently downloaded and inspected. Archive SHA-256 is `4f0073246cda2f681e6fc8de5389077e3b7398e07b22fe10579806ab81fbbf21`; APK SHA-256 is `9e2f30be52f1a1a15fd4a422b57695a8c727c212879c910002c2820199b5261e` (41,687,363 bytes).
 - Candidate 205 failed physical voice acceptance. After a recognition miss, Sage repeatedly spoke `I didn't catch that.` without stopping. The exact state-machine cause was `onRecognitionFailed` reopening `FOLLOW_UP_LISTENING` after its error speech, so silence recursively created another recognition miss.
 - Candidate 206 is the next in-place repair counter in the same SageOS 2 lineage. A recognition miss is terminal for that voice turn: Sage speaks the error at most once, returns to wake-ready after echo guard, and rejects stale duplicate callbacks. A regression test reproduces the failed path before another tablet build is considered.
+- Candidate 206 source commit `e133e032df42ec6d4e3dac1f976441ef155f2964` passed ordinary run `34281038636` and signed run `34281038596`, including the full unit suite, release lint, two independent builds, payload comparison, signing-lineage verification, and package/version/native-payload checks.
+- Signed artifact `10077833315` was independently downloaded and inspected. Archive SHA-256 is `0ee58dab29c760d866297f8d0928f44fdd7cb19a551e1a34c82f2bf37e7b359d`; APK SHA-256 is `3ce9966a6d6f3364692d955dddf6af28909b7e082774696afe2eed6e34beb71b` (41,687,363 bytes).
+- Candidate 206 has automated release integrity only. It remains withheld until the owner-visible Chat and inherited private-GGUF text path have a meaningful acceptance pass; compilation does not establish physical behavior.
 - **Do not give the owner a debug APK. Do not hand over candidate 203 or 205 again.**
 
 ## Hard owner decisions
@@ -46,7 +49,7 @@ This file exists so the project can survive a lost conversation, model change, o
 - One assistant identity. Red Queen and other modes are facets of Sage, not separate assistants.
 - iPhone integration is an external future bridge and must not block SageOS 2.
 
-## Architecture established; candidate 206 voice-loop repair under verification
+## Architecture established; candidate 206 automated verification passed
 
 - Clean Kotlin Android project under `sageos2/`.
 - Application ID remains `com.pineapple.sagecommander.stable` for in-place migration.
@@ -145,9 +148,9 @@ If anything fails, capture the built-in diagnostic report first. Repair the **sa
 
 ## Next gates for candidate 206
 
-1. Run the focused recognition-loop regression together with the existing product/path suite.
-2. Pass ordinary CI and the full double-build/release-lint/signature/identity workflow.
-3. Independently download and verify the signed artifact, archive/APK checksums, ZIP integrity, and arm64 native payload before handoff.
+1. **Passed:** the recognition-loop regression and full existing unit/product/path suite in ordinary and release CI.
+2. **Passed:** ordinary CI and the full double-build/release-lint/signature/identity workflow.
+3. **Passed:** independent signed-artifact download, archive/APK checksum match, ZIP integrity, and arm64 native-payload inspection.
 4. Perform the focused Chat/local-Brain and voice physical acceptance pass using the exact self-check and direct diagnostic-copy escape hatch first.
 5. Repair only failures actually observed on hardware and rerun the same integrated gates.
 6. Continue the SageOS root-broker/system-image path using the already-written daemon/init/SELinux sources; do not substitute Shizuku or raw unrestricted model root.
