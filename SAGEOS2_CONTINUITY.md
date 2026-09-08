@@ -22,7 +22,9 @@ This file exists so the project can survive a lost conversation, model change, o
 - Candidate 204 source commit `788cd9d4a5225a8c941f0117b52e92a93a9d75cd` passed ordinary run `34139696044` and signed run `34139696093`, including release lint and two-build reproducibility. Its independently downloaded APK SHA-256 was `2974afa733f9c86890477b22878758ab5c880d4fe56bdf71ef5bd3a4288cf4e1`.
 - Candidate 204 remains **withheld** and was not handed to the owner. Automated correctness did not resolve the clarified product blocker: Sage still was not obvious to use, normal Settings still exposed Core/workflows/scopes/capabilities/diagnostics, ordinary conversations still received an engineering tool contract, queued sends were not immediately visible, and familiar taught phrases were stranded.
 - Candidate 205 is the next in-place SageOS 2 repair counter, not a new Sage version. It keeps Chat as home, adds persistent plain-language help, immediately displays accepted/queued messages, restores legacy taught phrases in place, adds owner-friendly memory controls, separates ordinary twin conversation from operational tool prompts, and nests all engineering machinery under Settings → Advanced.
-- Candidate 205 is **not approved for tablet handoff** until product/path tests, ordinary CI, and the signed workflow all pass, including release lint, two independent builds, payload comparison, signing-lineage verification, package/version/native-payload checks, and independent artifact verification.
+- Candidate 205 source commit `b10607a506e637651027ec3d9f8d107887b96a11` passed 102 focused product/path tests, ordinary run `34228707869`, and signed run `34228707889`, including release lint, two independent builds, payload comparison, signing-lineage verification, and package/version/native-payload checks.
+- The signed artifact `10057183257` was independently downloaded and inspected. Archive SHA-256 is `4f0073246cda2f681e6fc8de5389077e3b7398e07b22fe10579806ab81fbbf21`; APK SHA-256 is `9e2f30be52f1a1a15fd4a422b57695a8c727c212879c910002c2820199b5261e` (41,687,363 bytes).
+- Candidate 205 is eligible for one signed in-place **physical acceptance** install. It is not final: the inherited private GGUF and the visible Chat experience must still pass on the real VASOUN tablet, and any observed failure returns to the same `sageos-2` repair loop.
 - **Do not give the owner a debug APK. Do not hand over candidate 203 again.**
 
 ## Hard owner decisions
@@ -43,7 +45,7 @@ This file exists so the project can survive a lost conversation, model change, o
 - One assistant identity. Red Queen and other modes are facets of Sage, not separate assistants.
 - iPhone integration is an external future bridge and must not block SageOS 2.
 
-## Architecture established; candidate 205 product repair pending verification
+## Architecture established; candidate 205 automated verification passed
 
 - Clean Kotlin Android project under `sageos2/`.
 - Application ID remains `com.pineapple.sagecommander.stable` for in-place migration.
@@ -105,7 +107,7 @@ The signed candidate must use the existing GitHub signing secrets and the same `
 
 Physical acceptance means proving Sage on the VASOUN L10_T05 hardware after the signed candidate passes CI. It is not a claim that compilation equals success.
 
-Candidate 203 was the first install and failed the Chat/product gate. The next install must be one meaningfully verified signed in-place repair, not a debug build carousel. Preserve app data through the same package and signing lineage.
+Candidate 203 was the first install and failed the Chat/product gate. Candidate 205 is the next meaningfully verified signed in-place repair, not part of a debug build carousel. Preserve app data through the same package and signing lineage.
 
 Initial acceptance order:
 
@@ -140,10 +142,10 @@ If anything fails, capture the built-in diagnostic report first. Repair the **sa
 - CI fails if Shizuku references return to SageOS 2.
 - AVAILABLE is not ACTIVE. Never claim root, Device Owner, Assistant role, or another authority is active until the physical device proves it.
 
-## Next build gates after signed-candidate verification
+## Next gates after candidate 205 automated verification
 
-1. Candidate 205 must pass the product/path regression suite, ordinary CI, and the double-build/lint/signature/identity workflow.
-2. Independently download and verify the signed artifact; do not rely only on the workflow summary.
+1. **Passed:** product/path regression suite, ordinary CI, and the double-build/lint/signature/identity workflow.
+2. **Passed:** independent signed-artifact download, archive/APK checksum comparison, ZIP integrity, and arm64 native-payload inspection.
 3. Perform the focused Chat/local-Brain physical acceptance pass using the exact self-check and direct diagnostic-copy escape hatch first.
 4. Repair only failures actually observed on hardware and rerun the same integrated gates.
 5. Continue the SageOS root-broker/system-image path using the already-written daemon/init/SELinux sources; do not substitute Shizuku or raw unrestricted model root.

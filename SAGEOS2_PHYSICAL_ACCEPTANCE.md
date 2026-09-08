@@ -1,6 +1,6 @@
 # SageOS 2 physical tablet acceptance
 
-This runbook is for the **next meaningful signed SageOS 2 candidate** on the VASOUN L10_T05. Candidate 203 already proved in-place signing and native wake isolation, but failed the Chat/product gate. This is not a version carousel. Repair the same `sageos-2` codebase and rerun every gate after any hardware-specific defect.
+This runbook is for **signed candidate 205** on the VASOUN L10_T05. Candidate 203 already proved in-place signing and native wake isolation, but failed the Chat/product gate. Candidate 205 source `b10607a506e637651027ec3d9f8d107887b96a11` passed ordinary and signed automated gates; its independently checked APK SHA-256 is `9e2f30be52f1a1a15fd4a422b57695a8c727c212879c910002c2820199b5261e`. This is not a version carousel. Repair the same `sageos-2` codebase and rerun every gate after any hardware-specific defect.
 
 ## Before touching the tablet
 
