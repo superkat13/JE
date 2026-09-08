@@ -31,12 +31,20 @@
         android:label="Sage"
         android:supportsRtl="true"
         android:theme="@style/Theme.Sage">
-        <activity android:name="com.pineapple.sageos2.SageLaunchActivity" android:exported="true">
+        <activity
+            android:name="com.pineapple.sageos2.SageLaunchActivity"
+            android:exported="true"
+            android:theme="@style/Theme.Sage.Home">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name="com.pineapple.sageos2.SageHomeActivity"
+            android:exported="false"
+            android:theme="@style/Theme.Sage.Home"
+            android:windowSoftInputMode="adjustResize" />
         <activity
             android:name="com.pineapple.sageos2.MainActivity"
             android:exported="false"
