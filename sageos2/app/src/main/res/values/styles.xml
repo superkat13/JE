@@ -9,4 +9,16 @@
         <item name="android:windowLightStatusBar">false</item>
         <item name="android:windowActionModeOverlay">true</item>
     </style>
+
+    <!-- Owner-facing Sage. The dark engineering cockpit remains a separate Advanced surface. -->
+    <style name="Theme.Sage.Home" parent="android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:fontFamily">sans</item>
+        <item name="android:windowBackground">#F7F4EE</item>
+        <item name="android:navigationBarColor">#F7F4EE</item>
+        <item name="android:statusBarColor">#F7F4EE</item>
+        <item name="android:colorAccent">#688B6F</item>
+        <item name="android:windowLightStatusBar">true</item>
+        <item name="android:windowLightNavigationBar">true</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
 </resources>
