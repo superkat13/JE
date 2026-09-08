@@ -26,8 +26,8 @@ import java.util.Locale
 /**
  * Crash-safe front door for SageOS 2.
  *
- * The owner cockpit must never vanish just because one runtime subsystem cannot initialize on a
- * particular Android build. This activity renders first, then constructs the runtime. It also
+ * The visible Sage home must never vanish just because one runtime subsystem cannot initialize on
+ * a particular Android build. This activity renders first, then constructs the runtime. It also
  * records an uncaught main-process crash so the next launch can show exact evidence instead of
  * repeating a half-second close loop.
  */
@@ -60,7 +60,7 @@ class SageLaunchActivity : Activity() {
             text = "S"
             textSize = 32f
             typeface = Typeface.DEFAULT_BOLD
-            setTextColor(COLOR_BACKGROUND)
+            setTextColor(Color.WHITE)
             gravity = Gravity.CENTER
             background = rounded(COLOR_SAGE, 40)
         }, LinearLayout.LayoutParams(dp(78), dp(78)))
@@ -106,7 +106,7 @@ class SageLaunchActivity : Activity() {
         runCatching { SageRuntimeHost.get(this) }
             .onSuccess {
                 StartupCrashRecorder.clear(applicationContext)
-                startActivity(Intent(this, MainActivity::class.java))
+                startActivity(Intent(this, SageHomeActivity::class.java))
                 finish()
             }
             .onFailure { error -> showStartupFailure("Runtime construction failed", error) }
@@ -185,7 +185,7 @@ class SageLaunchActivity : Activity() {
         isAllCaps = false
         textSize = 16f
         typeface = Typeface.DEFAULT_BOLD
-        setTextColor(if (primary) COLOR_BACKGROUND else COLOR_TEXT)
+        setTextColor(if (primary) Color.WHITE else COLOR_TEXT)
         background = rounded(if (primary) COLOR_SAGE else COLOR_SURFACE, 18, if (primary) null else COLOR_BORDER)
         layoutParams = LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -208,12 +208,12 @@ class SageLaunchActivity : Activity() {
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
 
     companion object {
-        private val COLOR_BACKGROUND = Color.rgb(14, 17, 22)
-        private val COLOR_SURFACE = Color.rgb(27, 32, 39)
-        private val COLOR_BORDER = Color.rgb(53, 62, 70)
-        private val COLOR_TEXT = Color.rgb(244, 247, 244)
-        private val COLOR_MUTED = Color.rgb(168, 180, 174)
-        private val COLOR_SAGE = Color.rgb(169, 213, 178)
+        private val COLOR_BACKGROUND = Color.rgb(247, 244, 238)
+        private val COLOR_SURFACE = Color.rgb(255, 253, 249)
+        private val COLOR_BORDER = Color.rgb(220, 215, 205)
+        private val COLOR_TEXT = Color.rgb(42, 40, 36)
+        private val COLOR_MUTED = Color.rgb(105, 101, 94)
+        private val COLOR_SAGE = Color.rgb(104, 139, 111)
     }
 }
 
