@@ -7,6 +7,7 @@ import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.speech.*
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -33,13 +34,15 @@ class SageRuntimeTest {
         assertEquals("red_queen", com.pineapple.sageos2.mode.DefaultSageModeController.current().modeId)
     }
 
-    @Test fun deepBrainReceivesRenderedVirtualTwinContext() {
+    @Test fun deepBrainReceivesNaturalTwinContextWithoutEngineeringContracts() {
         val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("tell me something useful"))
         assertEquals(1, f.brain.requests.size)
         val request = f.brain.requests.single()
         assertTrue(request.twinContextText?.contains("virtual twin") == true)
-        assertTrue(request.twinContextText?.contains("Self restrictions: (none)") == true)
-        assertTrue(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
+        assertTrue(request.twinContextText?.contains("# WHO I AM") == true)
+        assertFalse(request.twinContextText?.contains("Self restrictions: (none)") == true)
+        assertFalse(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
+        assertFalse(request.twinContextText?.contains("ACTIVE / RECOVERABLE TASKS") == true)
     }
 
     @Test fun exactBrainSelfCheckUsesOnlyItsMinimalDeterministicContract() {
