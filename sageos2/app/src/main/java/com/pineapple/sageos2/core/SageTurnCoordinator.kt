@@ -115,7 +115,10 @@ class SageTurnCoordinator(
     private fun onRecognitionFailed(event: SageEvent.RecognitionFailed): List<SageEffect> {
         if (!validRecognition(event.turnId, event.recognizerGeneration)) return stale("recognition error turn/generation mismatch")
         if (state != SageRuntimeState.COMMAND_LISTENING && state != SageRuntimeState.FOLLOW_UP_LISTENING) return stale("recognition error in $state")
-        followUpAfterSpeech = true
+        // A recognition miss is terminal for this voice turn. Reopening the
+        // follow-up listener after speaking the error creates a feedback loop:
+        // silence produces another miss, Sage speaks again, then listens again.
+        followUpAfterSpeech = false
         state = SageRuntimeState.SPEAKING
         return listOf(
             changeListening(SageListeningMode.OFF),

@@ -63,6 +63,32 @@ class SageTurnCoordinatorTest {
         assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
     }
 
+    @Test fun recognitionFailureSpeaksOnceThenClosesToWakeWithoutListeningAgain() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val turn = c.snapshot().activeTurnId
+        c.handle(SageEvent.TranscriptFinal(turn, c.snapshot().recognizerGeneration, "hello"))
+        c.handle(SageEvent.ResponseReady(turn, "Hi", true))
+        c.handle(SageEvent.SpeechFinished(turn))
+        c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertEquals(SageRuntimeState.FOLLOW_UP_LISTENING, c.snapshot().state)
+        val failedGeneration = c.snapshot().recognizerGeneration
+
+        val failure = c.handle(SageEvent.RecognitionFailed(turn, failedGeneration, 7))
+        assertEquals(1, failure.filterIsInstance<SageEffect.Speak>().size)
+        assertTrue(failure.contains(SageEffect.Speak(turn, "I didn't catch that.")))
+
+        c.handle(SageEvent.SpeechFinished(turn))
+        val afterGuard = c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+        assertEquals(SageListeningMode.WAKE_ONLY, c.snapshot().listeningMode)
+        assertTrue(afterGuard.any { it is SageEffect.SetListeningMode && it.mode == SageListeningMode.WAKE_ONLY })
+        assertTrue(afterGuard.none { it is SageEffect.ScheduleFollowUpExpiry })
+
+        val repeatedCallback = c.handle(SageEvent.RecognitionFailed(turn, failedGeneration, 7))
+        assertTrue(repeatedCallback.none { it is SageEffect.Speak })
+    }
+
     @Test fun chickenTonightTriggerIsSilentAndRoutesToWorkflow() {
         val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
         var g = c.snapshot().recognizerGeneration; c.handle(SageEvent.WakeDetected(g)); val turn = c.snapshot().activeTurnId

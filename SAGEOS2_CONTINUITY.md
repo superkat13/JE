@@ -24,8 +24,9 @@ This file exists so the project can survive a lost conversation, model change, o
 - Candidate 205 is the next in-place SageOS 2 repair counter, not a new Sage version. It keeps Chat as home, adds persistent plain-language help, immediately displays accepted/queued messages, restores legacy taught phrases in place, adds owner-friendly memory controls, separates ordinary twin conversation from operational tool prompts, and nests all engineering machinery under Settings → Advanced.
 - Candidate 205 source commit `b10607a506e637651027ec3d9f8d107887b96a11` passed 102 focused product/path tests, ordinary run `34228707869`, and signed run `34228707889`, including release lint, two independent builds, payload comparison, signing-lineage verification, and package/version/native-payload checks.
 - The signed artifact `10057183257` was independently downloaded and inspected. Archive SHA-256 is `4f0073246cda2f681e6fc8de5389077e3b7398e07b22fe10579806ab81fbbf21`; APK SHA-256 is `9e2f30be52f1a1a15fd4a422b57695a8c727c212879c910002c2820199b5261e` (41,687,363 bytes).
-- Candidate 205 is eligible for one signed in-place **physical acceptance** install. It is not final: the inherited private GGUF and the visible Chat experience must still pass on the real VASOUN tablet, and any observed failure returns to the same `sageos-2` repair loop.
-- **Do not give the owner a debug APK. Do not hand over candidate 203 again.**
+- Candidate 205 failed physical voice acceptance. After a recognition miss, Sage repeatedly spoke `I didn't catch that.` without stopping. The exact state-machine cause was `onRecognitionFailed` reopening `FOLLOW_UP_LISTENING` after its error speech, so silence recursively created another recognition miss.
+- Candidate 206 is the next in-place repair counter in the same SageOS 2 lineage. A recognition miss is terminal for that voice turn: Sage speaks the error at most once, returns to wake-ready after echo guard, and rejects stale duplicate callbacks. A regression test reproduces the failed path before another tablet build is considered.
+- **Do not give the owner a debug APK. Do not hand over candidate 203 or 205 again.**
 
 ## Hard owner decisions
 
@@ -45,11 +46,11 @@ This file exists so the project can survive a lost conversation, model change, o
 - One assistant identity. Red Queen and other modes are facets of Sage, not separate assistants.
 - iPhone integration is an external future bridge and must not block SageOS 2.
 
-## Architecture established; candidate 205 automated verification passed
+## Architecture established; candidate 206 voice-loop repair under verification
 
 - Clean Kotlin Android project under `sageos2/`.
 - Application ID remains `com.pineapple.sagecommander.stable` for in-place migration.
-- Current SageOS 2 versionCode is `205`, versionName `2.0.0`, targetSdk 35, arm64 only. This remains the same SageOS 2 lineage; versionCode is only Android's in-place update counter.
+- Current SageOS 2 versionCode is `206`, versionName `2.0.0`, targetSdk 35, arm64 only. This remains the same SageOS 2 lineage; versionCode is only Android's in-place update counter.
 - Single `SageTurnCoordinator` owns turn/listening state.
 - Listening modes are OFF, WAKE_ONLY, COMMAND, FOLLOW_UP.
 - Typed messages queue while a turn is busy; every accepted message is written to Chat immediately and visibly confirmed as sent.
@@ -68,7 +69,7 @@ This file exists so the project can survive a lost conversation, model change, o
 - Offline wake uses pinned sherpa-onnx KWS with verified model dependencies and an arm64-only runtime.
 - Native local Brain compiles from verified donor C++ source against pinned llama.cpp commit `d73c1d6b22a2d3ecc74c2c9cde354015ee72e862`.
 - Local Brain receives twin context as system prompt and the current owner request as user prompt.
-- Candidate 205 retains the inherited 2,048-token native context and tablet request profiles: exact checks use 4–12 output tokens, ordinary answers 16, action selection 20, and contextual conversation 24.
+- Candidate 206 retains the inherited 2,048-token native context and tablet request profiles: exact checks use 4–12 output tokens, ordinary answers 16, action selection 20, and contextual conversation 24.
 - Ordinary twin conversation receives Sage's identity, memories, and relevant history without the engineering tool contract or task machinery. Operational prompts receive those details only when an action is actually being reasoned about.
 - Chat immediately distinguishes getting ready, gathering relevant context, and writing; native token progress drives first-token/stall watchdogs underneath that human language.
 - Qwen `<think>` content and model-control tokens are removed before any response reaches conversation history or the visible Chat surface.
@@ -107,7 +108,7 @@ The signed candidate must use the existing GitHub signing secrets and the same `
 
 Physical acceptance means proving Sage on the VASOUN L10_T05 hardware after the signed candidate passes CI. It is not a claim that compilation equals success.
 
-Candidate 203 was the first install and failed the Chat/product gate. Candidate 205 is the next meaningfully verified signed in-place repair, not part of a debug build carousel. Preserve app data through the same package and signing lineage.
+Candidate 203 was the first install and failed the Chat/product gate. Candidate 205 then failed physical voice acceptance with a recursive recognition-error speech loop. Candidate 206 is the same-lineage repair and must pass every automated release gate before it can become the next meaningful physical candidate. Preserve app data through the same package and signing lineage.
 
 Initial acceptance order:
 
@@ -117,7 +118,7 @@ Initial acceptance order:
 4. Existing `files/brain/sage-brain.gguf` is reused if present; otherwise use the Advanced model importer once.
 5. Advanced → Run local Brain self-check returns exactly `Brain online.` and Diagnostics records real native prompt/token/timing evidence.
 6. Text chat produces repeated cleaned Sage responses and returns to an idle, sendable state after both success and failure.
-7. Push-to-talk recognizes a command and returns correctly.
+7. Push-to-talk recognizes a command and returns correctly; a recognition miss speaks at most once and returns to wake-ready without reopening a follow-up microphone.
 8. `Sage` -> spoken `Yes` -> command works repeatedly.
 9. Saying `Sage` while a deep turn is active produces the lightweight thinking acknowledgement without cancelling the turn.
 10. `sage glitch` activates Red Queen as a mode of the same Sage.
@@ -142,14 +143,15 @@ If anything fails, capture the built-in diagnostic report first. Repair the **sa
 - CI fails if Shizuku references return to SageOS 2.
 - AVAILABLE is not ACTIVE. Never claim root, Device Owner, Assistant role, or another authority is active until the physical device proves it.
 
-## Next gates after candidate 205 automated verification
+## Next gates for candidate 206
 
-1. **Passed:** product/path regression suite, ordinary CI, and the double-build/lint/signature/identity workflow.
-2. **Passed:** independent signed-artifact download, archive/APK checksum comparison, ZIP integrity, and arm64 native-payload inspection.
-3. Perform the focused Chat/local-Brain physical acceptance pass using the exact self-check and direct diagnostic-copy escape hatch first.
-4. Repair only failures actually observed on hardware and rerun the same integrated gates.
-5. Continue the SageOS root-broker/system-image path using the already-written daemon/init/SELinux sources; do not substitute Shizuku or raw unrestricted model root.
-6. Build device-specific staged OS update/rollback only after the VASOUN boot/recovery/partition facts are verified from the actual hardware.
-7. Final SageOS 2 acceptance requires both normal virtual-twin operation and the intended authenticated root-broker path on the real tablet.
+1. Run the focused recognition-loop regression together with the existing product/path suite.
+2. Pass ordinary CI and the full double-build/release-lint/signature/identity workflow.
+3. Independently download and verify the signed artifact, archive/APK checksums, ZIP integrity, and arm64 native payload before handoff.
+4. Perform the focused Chat/local-Brain and voice physical acceptance pass using the exact self-check and direct diagnostic-copy escape hatch first.
+5. Repair only failures actually observed on hardware and rerun the same integrated gates.
+6. Continue the SageOS root-broker/system-image path using the already-written daemon/init/SELinux sources; do not substitute Shizuku or raw unrestricted model root.
+7. Build device-specific staged OS update/rollback only after the VASOUN boot/recovery/partition facts are verified from the actual hardware.
+8. Final SageOS 2 acceptance requires both normal virtual-twin operation and the intended authenticated root-broker path on the real tablet.
 
 If a future assistant cannot determine what to do next, inspect issue #21, this file, branch HEAD, and the latest CI runs instead of asking the owner to retell the project.

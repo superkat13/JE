@@ -164,6 +164,7 @@ jobs:
         run: |
           grep -F 'class AndroidFastActionEngine' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidFastActionEngine.kt
           grep -F 'class AndroidSpeechPort' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
+          grep -F 'recognitionFailureSpeaksOnceThenClosesToWakeWithoutListeningAgain' sageos2/app/src/test/java/com/pineapple/sageos2/core/SageTurnCoordinatorTest.kt
       - name: Verify Chat-first Sage home and hidden engineering surfaces
         run: |
           set -euo pipefail
