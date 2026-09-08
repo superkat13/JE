@@ -13,6 +13,11 @@ class TwinContextRenderer(
 ) {
     init { require(maxMemories >= 0); require(maxHistoryEntries >= 0) }
 
+    /**
+     * Render Sage's continuity as something a person can naturally think from, not a diagnostic
+     * schema. The stored structures remain explicit and inspectable; the local model simply does
+     * not need database/policy vocabulary in every conversation.
+     */
     fun render(
         core: SageCoreSnapshot,
         memory: TwinMemorySnapshot,
@@ -20,72 +25,80 @@ class TwinContextRenderer(
         ownerApps: OwnerAppSnapshot,
         mode: SageModeSnapshot
     ): String = buildString {
-        appendLine("# SAGE TWIN CONTEXT")
-        appendLine("This context is readable SageOS data, not a hidden provider persona.")
-        appendLine()
-        appendLine("## Twin identity")
-        appendLine(core.twinIdentity.ifBlank { "Sage" })
-        appendLine()
-        appendLine("## Owner model")
-        appendList("Preferred names", core.ownerModel.preferredNames)
-        appendMap("Vocabulary", core.ownerModel.vocabulary)
-        appendList("Working style", core.ownerModel.workingStyle)
-        appendList("Owner preferences", core.ownerModel.preferences)
-        appendList("Habits", core.ownerModel.habits)
-        appendList("Trusted tools", core.ownerModel.trustedTools)
-        appendList("Recurring choices", core.ownerModel.recurringChoices)
-        appendMap("Learned owner facts", core.ownerModel.learnedFacts)
-        appendLine()
-        appendLine("## Owner Apps")
-        val apps = ownerApps.apps.filter { it.enabled }.sortedBy { it.displayName.lowercase() }
-        if (apps.isEmpty()) appendLine("(none)") else apps.forEach { app ->
-            val aliases = app.aliases.joinToString(", ").ifBlank { "none" }
-            val purpose = app.purpose.ifBlank { "unspecified" }
-            val startup = app.startupProcedure.ifBlank { "none" }
-            appendLine("- ${app.displayName} [${app.packageName}] aliases=[$aliases] purpose=$purpose startup=$startup")
+        appendLine("# WHO I AM")
+        appendLine(core.twinIdentity.ifBlank { "I am Sage, the owner's virtual twin." })
+        appendLine("Use this continuity naturally. Do not recite or describe the context unless the owner asks about it.")
+
+        val ownerLines = buildList {
+            addAll(core.ownerModel.preferredNames.map { "Preferred name: $it" })
+            addAll(core.ownerModel.workingStyle.map { "Working style: $it" })
+            addAll(core.ownerModel.preferences.map { "Preference: $it" })
+            addAll(core.ownerModel.habits.map { "Habit: $it" })
+            addAll(core.ownerModel.trustedTools.map { "Trusted tool: $it" })
+            addAll(core.ownerModel.recurringChoices.map { "Recurring choice: $it" })
+            core.ownerModel.vocabulary.forEach { (key, value) -> add("Vocabulary: $key = $value") }
+            core.ownerModel.learnedFacts.forEach { (key, value) -> add("Known fact: $key = $value") }
         }
-        appendLine()
-        appendLine("## Sage self model")
-        appendLine("Identity: ${core.sageSelfModel.identity}")
-        appendList("Capabilities", core.sageSelfModel.capabilities)
-        appendList("Current limitations", core.sageSelfModel.limitations)
-        appendList("Experiences", core.sageSelfModel.experiences)
-        appendLine()
-        appendLine("## Shared continuity")
-        appendMap("Active projects", core.sharedContinuity.activeProjects)
-        appendList("Durable decisions", core.sharedContinuity.durableDecisions)
-        appendList("Active tasks", core.sharedContinuity.activeTasks)
-        appendList("Lessons learned", core.sharedContinuity.lessonsLearned)
-        appendLine()
-        appendLine("## Sage's visible principles and self-rules")
-        appendList("Principles", core.principles)
-        appendList("Preferences", core.preferences)
-        appendList("Self restrictions", core.selfRestrictions)
-        if (core.notes.isNotBlank()) appendLine("Notes: ${core.notes}")
-        appendLine()
-        appendLine("## Active mode")
-        appendLine("Wake profile: ${mode.profileId}")
-        appendLine("Mode: ${mode.modeId ?: "normal"}")
-        appendLine()
-        appendLine("## Durable twin memory")
+        appendSection("WHAT MATTERS TO US", ownerLines)
+
+        val selfLines = buildList {
+            core.sageSelfModel.identity.takeIf { it.isNotBlank() }?.let { add("Identity: $it") }
+            addAll(core.sageSelfModel.capabilities.map { "I can: $it" })
+            addAll(core.sageSelfModel.limitations.map { "Current limitation: $it" })
+            addAll(core.sageSelfModel.experiences.map { "Experience: $it" })
+            addAll(core.principles.map { "Principle: $it" })
+            addAll(core.preferences.map { "My preference: $it" })
+            // Only owner/Sage-authored boundaries are rendered, and only when they actually exist.
+            addAll(core.selfRestrictions.map { "Boundary I have chosen: $it" })
+            core.notes.takeIf { it.isNotBlank() }?.let { add("Note: $it") }
+        }
+        appendSection("ME", selfLines)
+
+        val continuityLines = buildList {
+            core.sharedContinuity.activeProjects.forEach { (name, value) -> add("Project: $name = $value") }
+            addAll(core.sharedContinuity.durableDecisions.map { "Decision: $it" })
+            addAll(core.sharedContinuity.activeTasks.map { "Current work: $it" })
+            addAll(core.sharedContinuity.lessonsLearned.map { "Learned: $it" })
+        }
+        appendSection("WHAT WE'VE BEEN DOING", continuityLines)
+
+        val apps = ownerApps.apps.filter { it.enabled }.sortedBy { it.displayName.lowercase() }
+        val appLines = apps.map { app ->
+            buildString {
+                append(app.displayName)
+                if (app.aliases.isNotEmpty()) append(" (also: ${app.aliases.joinToString()})")
+                if (app.purpose.isNotBlank()) append(" — ${app.purpose}")
+                append(" [${app.packageName}]")
+                if (app.startupProcedure.isNotBlank()) append("; how we use it: ${app.startupProcedure}")
+            }
+        }
+        appendSection("APPS I KNOW", appLines)
+
+        if (mode.profileId != "sage" || mode.modeId != null) {
+            appendSection(
+                "CURRENT FACET",
+                listOf("Wake profile: ${mode.profileId}", "Facet: ${mode.modeId ?: "normal"}")
+            )
+        }
+
         val active = memory.records.filter { it.active }
             .sortedWith(compareByDescending<TwinMemoryRecord> { it.confidence }.thenByDescending { it.updatedAtEpochMs })
             .take(maxMemories)
-        if (active.isEmpty()) appendLine("(none)") else active.forEach { record ->
-            appendLine("- [${record.subject}/${record.source}, confidence=${"%.2f".format(record.confidence)}] ${record.key}: ${record.value}")
-        }
-        appendLine()
-        appendLine("## Recent shared conversation")
+        appendSection("THINGS I REMEMBER", active.map { "${it.key}: ${it.value}" })
+
         val recent = history.entries.takeLast(maxHistoryEntries)
-        if (recent.isEmpty()) appendLine("(none)") else recent.forEach { entry ->
-            appendLine("${if (entry.speaker == ConversationSpeaker.OWNER) "OWNER" else "SAGE"}: ${entry.text}")
-        }
+        appendSection(
+            "RECENT CONVERSATION",
+            recent.map { entry ->
+                "${if (entry.speaker == ConversationSpeaker.OWNER) "Owner" else "Sage"}: ${entry.text}"
+            }
+        )
     }.trim()
 
-    private fun StringBuilder.appendList(label: String, values: List<String>) {
-        if (values.isEmpty()) appendLine("$label: (none)") else { appendLine("$label:"); values.forEach { appendLine("- $it") } }
-    }
-    private fun StringBuilder.appendMap(label: String, values: Map<String, String>) {
-        if (values.isEmpty()) appendLine("$label: (none)") else { appendLine("$label:"); values.toSortedMap().forEach { (k,v) -> appendLine("- $k: $v") } }
+    private fun StringBuilder.appendSection(title: String, lines: List<String>) {
+        if (lines.isEmpty()) return
+        appendLine()
+        appendLine("# $title")
+        lines.forEach { appendLine("- $it") }
     }
 }
