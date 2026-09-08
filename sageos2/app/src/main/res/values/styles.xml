@@ -11,14 +11,17 @@
     </style>
 
     <!-- Crash-safe warm launch surface; the Sage home applies the owner's saved appearance. -->
-    <style name="Theme.Sage.Home" parent="android:style/Theme.Material.Light.NoActionBar">
+    <style name="Theme.Sage.Home.Base" parent="android:style/Theme.Material.Light.NoActionBar">
         <item name="android:fontFamily">sans</item>
         <item name="android:windowBackground">#F7F4EE</item>
-        <item name="android:navigationBarColor">#F7F4EE</item>
         <item name="android:statusBarColor">#F7F4EE</item>
         <item name="android:colorAccent">#688B6F</item>
         <item name="android:windowLightStatusBar">true</item>
-        <item name="android:windowLightNavigationBar">true</item>
         <item name="android:windowActionModeOverlay">true</item>
+    </style>
+
+    <style name="Theme.Sage.Home" parent="@style/Theme.Sage.Home.Base">
+        <!-- API 26 has no light-navigation-icon flag, so keep enough contrast there. -->
+        <item name="android:navigationBarColor">#0E1116</item>
     </style>
 </resources>

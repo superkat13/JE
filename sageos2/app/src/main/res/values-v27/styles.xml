@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Android 8.1+ can keep the warm navigation bar readable with dark system icons. -->
+    <style name="Theme.Sage.Home" parent="@style/Theme.Sage.Home.Base">
+        <item name="android:navigationBarColor">#F7F4EE</item>
+        <item name="android:windowLightNavigationBar">true</item>
+    </style>
+</resources>
