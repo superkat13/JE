@@ -1,11 +1,13 @@
 package com.pineapple.sageos2.core
 
+import com.pineapple.sageos2.action.FastCommandParser
 import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
 
 class SageCommandRouter(
-    private val personal: SagePersonalResponder = EmptySagePersonalResponder
+    private val personal: SagePersonalResponder = EmptySagePersonalResponder,
+    private val fastCommands: FastCommandParser = FastCommandParser()
 ) {
     fun route(rawText: String): RouteDecision {
         val normalized = normalize(rawText)
@@ -34,25 +36,9 @@ class SageCommandRouter(
     private fun routeResolved(rawText: String): RouteDecision {
         val normalized = normalize(rawText)
 
-        if (normalized in setOf(
-                "share diagnostic report",
-                "share sage diagnostic report",
-                "send diagnostic report",
-                "import brain model",
-                "choose brain model",
-                "load brain model"
-            )
-        ) {
-            return RouteDecision(SageRoute.FAST_DEVICE, normalized)
-        }
-
-        val fastPrefixes = listOf(
-            "open ", "launch ", "close ", "go back", "go home",
-            "scroll ", "swipe ", "tap ", "press ", "volume ",
-            "turn on ", "turn off ", "set timer", "set alarm",
-            "take screenshot", "show notifications"
-        )
-        if (fastPrefixes.any { normalized == it.trim() || normalized.startsWith(it) }) {
+        // The parser is the single source of truth for deterministic device commands. A phrase
+        // must never bypass Sage's Brain unless the fast executor can actually carry it out.
+        if (fastCommands.parse(normalized) != null) {
             return RouteDecision(SageRoute.FAST_DEVICE, normalized)
         }
 

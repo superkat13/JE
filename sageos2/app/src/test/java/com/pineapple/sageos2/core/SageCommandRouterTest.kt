@@ -66,4 +66,38 @@ class SageCommandRouterTest {
         assertEquals(SageRoute.FAST_DEVICE, decision.route)
         assertEquals("open youtube", decision.normalizedText)
     }
+
+    @Test
+    fun unsupportedDeviceWordsReachBrainInsteadOfDeadFastPath() {
+        listOf(
+            "Close YouTube",
+            "Set timer for ten minutes",
+            "Set alarm for 7 AM",
+            "Take screenshot",
+            "Turn on Wi-Fi",
+            "Tap Submit"
+        ).forEach { request ->
+            val decision = router.route(request)
+            assertEquals(request, SageRoute.DEEP_REASONING, decision.route)
+            assertEquals(request, decision.normalizedText)
+        }
+    }
+
+    @Test
+    fun everySupportedFastShapeStillRoutesAroundBrain() {
+        listOf(
+            "Open YouTube",
+            "go back",
+            "home",
+            "show recents",
+            "show notifications",
+            "quick settings",
+            "scroll down",
+            "swipe left",
+            "tap 420, 815",
+            "volume up"
+        ).forEach { request ->
+            assertEquals(request, SageRoute.FAST_DEVICE, router.route(request).route)
+        }
+    }
 }

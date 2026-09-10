@@ -4,6 +4,7 @@ import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.apps.OwnerAppSnapshot
 import com.pineapple.sageos2.memory.*
 import com.pineapple.sageos2.mode.SageModeSnapshot
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -86,5 +87,62 @@ class TwinContextRendererTest {
         assertTrue(operational.contains("root.exec"))
         assertTrue(operational.contains("broker unavailable"))
         assertTrue(operational.contains("tap private profile"))
+    }
+
+    @Test fun migratedOwnerCoreIsEarlyExplicitAndNotDuplicatedAsANote() {
+        val core = EmptySageCoreProvider.current().copy(
+            notes = "A retained note.\n\nImported Sage 1.33.3 owner instructions:\nCall me Kat. Stay warm and finish the job."
+        )
+        val rendered = TwinContextRenderer().render(
+            core,
+            TwinMemorySnapshot(0, emptyList()),
+            ConversationHistorySnapshot(0, emptyList()),
+            OwnerAppSnapshot(0, emptyList()),
+            SageModeSnapshot()
+        )
+
+        assertTrue(rendered.indexOf("# OWNER CORE") < rendered.indexOf("# ME"))
+        assertTrue(rendered.contains("Call me Kat. Stay warm and finish the job."))
+        assertTrue(rendered.contains("Note: A retained note."))
+        assertFalse(rendered.contains("Note: A retained note.\n\nImported Sage"))
+        assertEquals(1, Regex("Call me Kat").findAll(rendered).count())
+    }
+
+    @Test fun importedOwnerCoreUsesHistoricalPromptBoundWithoutMutatingStoredText() {
+        val ownerCore = "begin:" + "x".repeat(3_000) + ":stored-end"
+        val notes = "Imported Sage 1.33.3 owner instructions:\n$ownerCore"
+        val core = EmptySageCoreProvider.current().copy(notes = notes)
+        val rendered = TwinContextRenderer().render(
+            core,
+            TwinMemorySnapshot(0, emptyList()),
+            ConversationHistorySnapshot(0, emptyList()),
+            OwnerAppSnapshot(0, emptyList()),
+            SageModeSnapshot()
+        )
+
+        assertTrue(rendered.contains("begin:"))
+        assertFalse(rendered.contains(":stored-end"))
+        assertEquals(notes, core.notes)
+    }
+
+    @Test fun currentRequestMovesRelevantMemoryAheadOfHigherConfidenceNoise() {
+        val memory = TwinMemorySnapshot(
+            1,
+            listOf(
+                TwinMemoryRecord("noise", TwinMemorySubject.SHARED, "weather", "Clouds are white", TwinMemorySource.IMPORTED, 1.0, 1, 20),
+                TwinMemoryRecord("relevant", TwinMemorySubject.OWNER, "coffee", "Kat takes coffee with cinnamon", TwinMemorySource.EXPLICIT_OWNER, 0.7, 1, 10)
+            )
+        )
+        val rendered = TwinContextRenderer(maxMemories = 1).render(
+            EmptySageCoreProvider.current(),
+            memory,
+            ConversationHistorySnapshot(0, emptyList()),
+            OwnerAppSnapshot(0, emptyList()),
+            SageModeSnapshot(),
+            currentRequest = "How does Kat take coffee?"
+        )
+
+        assertTrue(rendered.contains("Kat takes coffee with cinnamon"))
+        assertFalse(rendered.contains("Clouds are white"))
     }
 }

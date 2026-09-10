@@ -61,7 +61,7 @@
             <intent-filter><action android:name="android.service.voice.VoiceInteractionService" /></intent-filter>
         </service>
         <service android:name="com.pineapple.sage.SageVoiceInteractionSessionService" android:exported="true" android:permission="android.permission.BIND_VOICE_INTERACTION" android:process=":session" />
-        <service android:name="com.pineapple.sage.SageSherpaRecognitionService" android:exported="true">
+        <service android:name="com.pineapple.sage.SageSherpaRecognitionService" android:exported="false">
             <intent-filter>
                 <action android:name="android.speech.RecognitionService" />
                 <category android:name="android.intent.category.DEFAULT" />

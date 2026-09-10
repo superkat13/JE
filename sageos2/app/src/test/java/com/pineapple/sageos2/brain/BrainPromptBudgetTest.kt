@@ -9,7 +9,7 @@ class BrainPromptBudgetTest {
     @Test fun defaultBudgetMatchesTheInheritedTabletCeiling() {
         assertEquals(4_800, BrainPromptBudget.DEFAULT_COMBINED_CHARACTER_BUDGET)
         assertTrue(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("short finished reply"))
-        assertTrue(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("/no_think"))
+        assertFalse(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("/no_think"))
     }
 
     @Test fun shortContextIsUntouchedWhenItHasNoEngineeringSections() {
@@ -89,5 +89,30 @@ class BrainPromptBudgetTest {
         val prompt = "keep every character of this request"
         BrainPromptBudget.fitSystemContext("x".repeat(20_000), prompt, 4_000)
         assertEquals("keep every character of this request", prompt)
+    }
+
+    @Test fun longStructuredContextKeepsIdentityCoreMemoryAndRecentHistoryRepresented() {
+        val context = listOf(
+            "System guide " + "g".repeat(1_000),
+            "# WHO I AM\nSage identity " + "i".repeat(2_000),
+            "# OWNER CORE\nKat's instructions " + "c".repeat(3_000),
+            "# WHAT MATTERS TO US\nOwner context " + "o".repeat(2_000),
+            "# ME\nSelf model " + "s".repeat(2_000),
+            "# APPS I KNOW\nApps " + "a".repeat(2_000),
+            "# THINGS I REMEMBER\nrelevant-coffee-memory " + "m".repeat(2_000),
+            "# RECENT CONVERSATION\nold-turn " + "h".repeat(2_000) + " newest-turn"
+        ).joinToString("\n\n")
+
+        val fitted = BrainPromptBudget.fitSystemContext(context, "coffee follow-up", 4_800)
+
+        assertTrue(fitted.length <= 4_800 - "coffee follow-up".length)
+        assertTrue(fitted.contains("# WHO I AM"))
+        assertTrue(fitted.contains("# OWNER CORE"))
+        assertTrue(fitted.contains("# WHAT MATTERS TO US"))
+        assertTrue(fitted.contains("# ME"))
+        assertTrue(fitted.contains("# THINGS I REMEMBER"))
+        assertTrue(fitted.contains("relevant-coffee-memory"))
+        assertTrue(fitted.contains("# RECENT CONVERSATION"))
+        assertTrue(fitted.endsWith("newest-turn"))
     }
 }

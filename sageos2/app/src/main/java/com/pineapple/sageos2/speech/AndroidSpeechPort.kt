@@ -1,5 +1,6 @@
 package com.pineapple.sageos2.speech
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.os.Build
@@ -11,19 +12,24 @@ import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.speech.tts.UtteranceProgressListener
+import com.pineapple.sage.SageSherpaRecognitionService
 import com.pineapple.sageos2.core.SageListeningMode
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 class AndroidSpeechPort(
     context: Context,
     private val wakeWordEngine: WakeWordEngine,
     private val wakeProfiles: WakeProfileProvider = SharedPreferencesWakeProfileStore(context)
-) : SpeechPort, RecognitionListener, TextToSpeech.OnInitListener {
+) : SpeechPort, TextToSpeech.OnInitListener {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private var listener: SpeechInputListener? = null
     private var recognizer: SpeechRecognizer? = null
+    private var recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
+    private var recognitionSession = 0L
+    private var localFallbackAttempted = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
     private var pendingSpeech: PendingSpeech? = null
@@ -51,6 +57,7 @@ class AndroidSpeechPort(
             this.generation = generation
             this.turnId = turnId
             stopInput()
+            localFallbackAttempted = false
             when (mode) {
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
@@ -81,6 +88,7 @@ class AndroidSpeechPort(
                     override fun onStart(utteranceId: String?) = Unit
                     override fun onError(utteranceId: String?) = onDone(utteranceId)
                     override fun onDone(utteranceId: String?) {
+                        if (utteranceId != id) return
                         main.post {
                             if (!destroyed && desiredMode == resumeMode && generation == resumeGeneration) {
                                 when (resumeMode) {
@@ -146,18 +154,22 @@ class AndroidSpeechPort(
 
     private fun speakNow(pending: PendingSpeech) {
         val id = "sage-${pending.turnId}-${UUID.randomUUID()}"
+        val completed = AtomicBoolean(false)
+        val completeOnce = { if (completed.compareAndSet(false, true)) pending.onComplete() }
         val result = runCatching {
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
                 override fun onError(utteranceId: String?) = onDone(utteranceId)
-                override fun onDone(utteranceId: String?) { main.post { pending.onComplete() } }
+                override fun onDone(utteranceId: String?) {
+                    if (utteranceId == id) main.post { completeOnce() }
+                }
             })
             tts?.speak(pending.text, TextToSpeech.QUEUE_FLUSH, null, id) ?: TextToSpeech.ERROR
         }.getOrElse {
             listener?.onSpeechDiagnostic("TTS speak failed: ${it.message ?: it::class.simpleName}")
             TextToSpeech.ERROR
         }
-        if (result == TextToSpeech.ERROR) pending.onComplete()
+        if (result == TextToSpeech.ERROR) completeOnce()
     }
 
     private fun startWake(generation: Long) {
@@ -169,11 +181,20 @@ class AndroidSpeechPort(
         }
     }
 
-    private fun startRecognition(turnId: Long, generation: Long) {
-        if (!ensureRecognizer()) {
+    private fun startRecognition(turnId: Long, generation: Long, allowLocal: Boolean = true) {
+        val localComponent = if (allowLocal) SageSherpaRecognitionService.primaryComponent(appContext) else null
+        val backend = CommandRecognizerPolicy.choose(
+            localSherpaReady = localComponent != null,
+            androidOnDeviceAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext),
+            androidDefaultAvailable = SpeechRecognizer.isRecognitionAvailable(appContext)
+        )
+        if (!ensureRecognizer(backend, localComponent)) {
             listener?.onRecognitionError(turnId, generation, SpeechRecognizer.ERROR_CLIENT)
             return
         }
+        val session = ++recognitionSession
+        recognizer?.setRecognitionListener(SessionRecognitionListener(session, turnId, generation))
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
             putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US.toLanguageTag())
@@ -184,19 +205,32 @@ class AndroidSpeechPort(
         try { recognizer?.startListening(intent) }
         catch (t: Throwable) {
             listener?.onSpeechDiagnostic("recognizer start failed: ${t.message}")
-            listener?.onRecognitionError(turnId, generation, SpeechRecognizer.ERROR_CLIENT)
+            handleRecognitionError(session, turnId, generation, SpeechRecognizer.ERROR_CLIENT)
         }
     }
 
-    private fun ensureRecognizer(): Boolean {
-        if (recognizer != null) return true
+    private fun ensureRecognizer(
+        backend: CommandRecognizerBackend,
+        localComponent: android.content.ComponentName?
+    ): Boolean {
+        if (backend == CommandRecognizerBackend.UNAVAILABLE) return false
+        if (recognizer != null && recognizerBackend == backend) return true
+        recognitionSession += 1
+        runCatching { recognizer?.cancel() }
+        runCatching { recognizer?.destroy() }
+        recognizer = null
+        recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
         return try {
-            recognizer = when {
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext) -> SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
-                SpeechRecognizer.isRecognitionAvailable(appContext) -> SpeechRecognizer.createSpeechRecognizer(appContext)
-                else -> null
+            recognizer = when (backend) {
+                CommandRecognizerBackend.LOCAL_SHERPA -> SpeechRecognizer.createSpeechRecognizer(
+                    appContext,
+                    requireNotNull(localComponent)
+                )
+                CommandRecognizerBackend.ANDROID_ON_DEVICE -> createOnDeviceRecognizer()
+                CommandRecognizerBackend.ANDROID_DEFAULT -> SpeechRecognizer.createSpeechRecognizer(appContext)
+                CommandRecognizerBackend.UNAVAILABLE -> null
             }
-            recognizer?.setRecognitionListener(this)
+            recognizerBackend = if (recognizer == null) CommandRecognizerBackend.UNAVAILABLE else backend
             recognizer != null
         } catch (t: Throwable) {
             listener?.onSpeechDiagnostic("recognizer creation failed: ${t.message}")
@@ -207,23 +241,71 @@ class AndroidSpeechPort(
 
     private fun stopInput() {
         try { wakeWordEngine.stop() } catch (_: Throwable) {}
+        recognitionSession += 1
         try { recognizer?.cancel() } catch (_: Throwable) {}
     }
 
-    override fun onResults(results: Bundle?) {
-        val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
-        if (text == null) listener?.onRecognitionError(turnId, generation, SpeechRecognizer.ERROR_NO_MATCH)
-        else listener?.onTranscriptFinal(turnId, generation, text)
+    @SuppressLint("NewApi") // The only caller selects this branch after an explicit API 31 check.
+    private fun createOnDeviceRecognizer(): SpeechRecognizer {
+        return SpeechRecognizer.createOnDeviceSpeechRecognizer(appContext)
     }
 
-    override fun onError(error: Int) { listener?.onRecognitionError(turnId, generation, error) }
-    override fun onReadyForSpeech(params: Bundle?) = Unit
-    override fun onBeginningOfSpeech() = Unit
-    override fun onRmsChanged(rmsdB: Float) = Unit
-    override fun onBufferReceived(buffer: ByteArray?) = Unit
-    override fun onEndOfSpeech() = Unit
-    override fun onPartialResults(partialResults: Bundle?) = Unit
-    override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    private fun handleResults(session: Long, capturedTurnId: Long, capturedGeneration: Long, results: Bundle?) {
+        if (session != recognitionSession) {
+            listener?.onSpeechDiagnostic("ignored stale recognizer result session=$session")
+            return
+        }
+        recognitionSession += 1
+        val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
+        if (text == null) listener?.onRecognitionError(capturedTurnId, capturedGeneration, SpeechRecognizer.ERROR_NO_MATCH)
+        else listener?.onTranscriptFinal(capturedTurnId, capturedGeneration, text)
+    }
+
+    private fun handleRecognitionError(
+        session: Long,
+        capturedTurnId: Long,
+        capturedGeneration: Long,
+        error: Int
+    ) {
+        if (session != recognitionSession) {
+            listener?.onSpeechDiagnostic("ignored stale recognizer error session=$session code=$error")
+            return
+        }
+        val canFallback = recognizerBackend == CommandRecognizerBackend.LOCAL_SHERPA &&
+            !localFallbackAttempted && error in LOCAL_BACKEND_FAILURES &&
+            capturedTurnId == turnId && capturedGeneration == generation &&
+            desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)
+        recognitionSession += 1
+        if (canFallback) {
+            localFallbackAttempted = true
+            listener?.onSpeechDiagnostic("local command recognizer failed code=$error; trying Android once")
+            runCatching { recognizer?.cancel() }
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+            recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
+            startRecognition(capturedTurnId, capturedGeneration, allowLocal = false)
+            return
+        }
+        listener?.onRecognitionError(capturedTurnId, capturedGeneration, error)
+    }
+
+    private inner class SessionRecognitionListener(
+        private val session: Long,
+        private val capturedTurnId: Long,
+        private val capturedGeneration: Long
+    ) : RecognitionListener {
+        override fun onResults(results: Bundle?) =
+            handleResults(session, capturedTurnId, capturedGeneration, results)
+        override fun onError(error: Int) =
+            handleRecognitionError(session, capturedTurnId, capturedGeneration, error)
+        override fun onReadyForSpeech(params: Bundle?) = Unit
+        override fun onBeginningOfSpeech() = Unit
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+        override fun onEndOfSpeech() = Unit
+        override fun onPartialResults(partialResults: Bundle?) = Unit
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    }
 
     override fun shutdown() {
         main.post {
@@ -231,6 +313,7 @@ class AndroidSpeechPort(
             stopInput()
             try { wakeWordEngine.close() } catch (_: Throwable) {}
             runCatching { recognizer?.destroy() }; recognizer = null
+            recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
             runCatching { tts?.stop() }
             runCatching { tts?.shutdown() }
             tts = null
@@ -239,4 +322,18 @@ class AndroidSpeechPort(
     }
 
     private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
+
+    companion object {
+        private val LOCAL_BACKEND_FAILURES = setOf(
+            SpeechRecognizer.ERROR_AUDIO,
+            SpeechRecognizer.ERROR_CLIENT,
+            SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS,
+            SpeechRecognizer.ERROR_RECOGNIZER_BUSY,
+            SpeechRecognizer.ERROR_SERVER,
+            ERROR_SERVER_DISCONNECTED_COMPAT
+        )
+        // API 31's ERROR_SERVER_DISCONNECTED is the inlined value 11. Keeping the compatibility
+        // name local avoids resolving the newer framework field on Sage's minSdk 26.
+        private const val ERROR_SERVER_DISCONNECTED_COMPAT = 11
+    }
 }

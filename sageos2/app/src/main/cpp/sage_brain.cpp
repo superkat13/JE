@@ -31,9 +31,8 @@ std::atomic<long long> g_active_request_id{0};
 std::atomic<int> g_last_stage{0};
 std::string g_last_error = "Model not loaded";
 bool g_backend_initialized = false;
-// These ceilings are deliberately tuned for the owner's inherited Qwen3-1.7B-Q8 model on the
-// VASOUN tablet. Larger values compiled successfully but made a real turn exceed the useful
-// physical response window.
+// These family-neutral ceilings preserve the last physically informed tablet configuration.
+// The inherited GGUF identity must be read from the installed file before model-specific tuning.
 constexpr int kContextTokens = 2048;
 constexpr int kMaximumResponseTokens = 24;
 
@@ -190,8 +189,8 @@ std::string format_chat_prompt(
     const bool owner_selected_thinking = user_prompt.find("/think") != std::string::npos
             || user_prompt.find("/no_think") != std::string::npos;
     if (thinking_template && !owner_selected_thinking) {
-        // The inherited Qwen3 model otherwise spends a short mobile response budget entirely on
-        // hidden reasoning. Direct mode produces a complete owner-visible answer by default.
+        // Templates that explicitly advertise thinking can spend the short mobile response budget
+        // entirely on hidden reasoning. Request direct mode only for those detected templates.
         effective_user_prompt += "\n/no_think";
     }
     llama_chat_message messages[] = {

@@ -1,13 +1,10 @@
 package com.pineapple.sage
 
 import android.content.Context
-import android.content.Intent
 import android.os.Bundle
 import android.service.voice.VoiceInteractionService
 import android.service.voice.VoiceInteractionSession
 import android.service.voice.VoiceInteractionSessionService
-import android.speech.RecognitionService
-import android.speech.SpeechRecognizer
 
 /**
  * System-selected, lightweight home for Sage's always-available voice identity.
@@ -37,18 +34,3 @@ class SageVoiceInteractionSessionService : VoiceInteractionSessionService() {
 }
 
 class SageVoiceInteractionSession(context: Context) : VoiceInteractionSession(context)
-
-/**
- * Preserves the recognizer component expected by Sage 1.x and by Android's voice
- * interaction metadata. Real recognition is intentionally not faked here: until
- * the new local recognizer is connected, callers receive an explicit client error.
- */
-class SageSherpaRecognitionService : RecognitionService() {
-    override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
-        listener?.error(SpeechRecognizer.ERROR_CLIENT)
-    }
-
-    override fun onStopListening(listener: Callback?) = Unit
-
-    override fun onCancel(listener: Callback?) = Unit
-}

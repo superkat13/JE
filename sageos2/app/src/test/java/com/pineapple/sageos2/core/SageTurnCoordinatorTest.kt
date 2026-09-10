@@ -112,4 +112,65 @@ class SageTurnCoordinatorTest {
         assertTrue(next.any { it is SageEffect.QueryDeepBrain && it.prompt == "second thought" })
         assertTrue(next.none { it is SageEffect.RecordOwnerInput })
     }
+
+    @Test fun duplicateRecognizerFinalCannotCreateADuplicateBrainTurn() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val turn = c.snapshot().activeTurnId
+        val generation = c.snapshot().recognizerGeneration
+
+        val accepted = c.handle(SageEvent.TranscriptFinal(turn, generation, "one request"))
+        val duplicate = c.handle(SageEvent.TranscriptFinal(turn, generation, "one request"))
+
+        assertEquals(1, accepted.filterIsInstance<SageEffect.QueryDeepBrain>().size)
+        assertTrue(duplicate.none { it is SageEffect.QueryDeepBrain })
+        assertTrue(duplicate.single() is SageEffect.IgnoreStaleCallback)
+    }
+
+    @Test fun staleFinalFromClosedTurnCannotReopenOrReplaceNewListener() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val oldTurn = c.snapshot().activeTurnId
+        val oldGeneration = c.snapshot().recognizerGeneration
+        c.handle(SageEvent.RecognitionFailed(oldTurn, oldGeneration, 7))
+        c.handle(SageEvent.SpeechFinished(oldTurn))
+        c.handle(SageEvent.EchoGuardElapsed(oldTurn))
+        c.handle(SageEvent.PushToTalkRequested)
+        val current = c.snapshot()
+
+        val stale = c.handle(SageEvent.TranscriptFinal(oldTurn, oldGeneration, "late callback"))
+
+        assertEquals(SageRuntimeState.COMMAND_LISTENING, c.snapshot().state)
+        assertEquals(current.activeTurnId, c.snapshot().activeTurnId)
+        assertTrue(stale.none { it is SageEffect.QueryDeepBrain })
+    }
+
+    @Test fun duplicateTtsCompletionAfterRecognitionMissCannotRestartListening() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val turn = c.snapshot().activeTurnId
+        c.handle(SageEvent.RecognitionFailed(turn, c.snapshot().recognizerGeneration, 7))
+
+        val first = c.handle(SageEvent.SpeechFinished(turn))
+        val duplicate = c.handle(SageEvent.SpeechFinished(turn))
+
+        assertTrue(first.single() is SageEffect.StartEchoGuard)
+        assertTrue(duplicate.none { it is SageEffect.SetListeningMode })
+        val afterGuard = c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertTrue(afterGuard.none { it is SageEffect.ScheduleFollowUpExpiry })
+        assertEquals(SageListeningMode.WAKE_ONLY, c.snapshot().listeningMode)
+    }
+
+    @Test fun wakeDuringBrainWorkOnlyAcknowledgesAndNeverCancelsOrDuplicatesTurn() {
+        val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
+        c.handle(SageEvent.TextSubmitted("slow thought"))
+        val active = c.snapshot().activeTurnId
+
+        val wake = c.handle(SageEvent.WakeDetected(c.snapshot().recognizerGeneration))
+
+        assertEquals(listOf(SageEffect.SpeakTransient("I'm thinking")), wake)
+        assertEquals(active, c.snapshot().activeTurnId)
+        assertEquals(SageRuntimeState.THINKING_DEEP, c.snapshot().state)
+        assertTrue(wake.none { it is SageEffect.CancelTurn || it is SageEffect.QueryDeepBrain })
+    }
 }

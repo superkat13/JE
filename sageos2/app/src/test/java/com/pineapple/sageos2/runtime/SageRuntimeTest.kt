@@ -4,6 +4,8 @@ import com.pineapple.sageos2.action.*
 import com.pineapple.sageos2.brain.*
 import com.pineapple.sageos2.capability.*
 import com.pineapple.sageos2.core.*
+import com.pineapple.sageos2.identity.*
+import com.pineapple.sageos2.memory.*
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
 import com.pineapple.sageos2.speech.*
@@ -45,6 +47,46 @@ class SageRuntimeTest {
         assertFalse(request.twinContextText?.contains("Self restrictions: (none)") == true)
         assertFalse(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
         assertFalse(request.twinContextText?.contains("ACTIVE / RECOVERABLE TASKS") == true)
+    }
+
+    @Test fun deepBrainReceivesCoreOwnerMemoryHistoryAndExactCurrentWordingTogether() {
+        val coreSnapshot = EmptySageCoreProvider.current().copy(
+            ownerModel = OwnerModel(preferredNames = listOf("Kat")),
+            notes = "Imported Sage 1.33.3 owner instructions:\nStay warm, persistent, and honest."
+        )
+        val memorySnapshot = TwinMemorySnapshot(1, listOf(
+            TwinMemoryRecord(
+                "coffee", TwinMemorySubject.OWNER, "coffee",
+                "Kat takes coffee with cinnamon", TwinMemorySource.EXPLICIT_OWNER,
+                1.0, 1, 1
+            )
+        ))
+        val historySnapshot = ConversationHistorySnapshot(1, listOf(
+            ConversationEntry(
+                "prior", 77, ConversationSpeaker.SAGE, ConversationInput.TEXT,
+                "We were planning the garden.", 1
+            )
+        ))
+        val f = Fixture(
+            sageCore = object : SageCoreProvider { override fun current() = coreSnapshot },
+            twinMemory = object : TwinMemoryProvider { override fun snapshot() = memorySnapshot },
+            conversationHistory = object : ConversationHistoryProvider {
+                override fun recent(limit: Int) = historySnapshot
+            }
+        )
+        val exact = "Can we continue MY coffee plan, Sage? path=/Shared Notes"
+
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted(exact))
+        val request = f.brain.requests.single()
+        val context = request.twinContextText.orEmpty()
+
+        assertEquals(exact, request.prompt)
+        assertTrue(context.contains("# OWNER CORE"))
+        assertTrue(context.contains("Stay warm, persistent, and honest."))
+        assertTrue(context.contains("Preferred name: Kat"))
+        assertTrue(context.contains("Kat takes coffee with cinnamon"))
+        assertTrue(context.contains("Sage: We were planning the garden."))
     }
 
     @Test fun actionReasoningStillReceivesTheToolContractUnderneathSage() {
@@ -117,6 +159,8 @@ class SageRuntimeTest {
         assertEquals(turn, f.brain.requests[1].turnId)
         assertTrue(f.brain.requests[1].prompt.contains("SAGE_TOOL_RESULT"))
         assertTrue(f.brain.requests[1].prompt.contains("success=true"))
+        assertTrue(f.brain.requests[1].twinContextText.orEmpty().contains("SAGE TOOL CONTRACT"))
+        assertTrue(f.brain.requests[1].twinContextText.orEmpty().contains("ACTIVE / RECOVERABLE TASKS"))
 
         f.brain.respond(1, "Root is alive and answering through the broker.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
@@ -185,7 +229,10 @@ class SageRuntimeTest {
         capability: CapabilityBroker = EmptyCapabilityBroker,
         scheduler: RuntimeScheduler = FakeScheduler(),
         brainResponseTimeoutMs: Long = 120_000L,
-        coordinator: SageTurnCoordinator = SageTurnCoordinator()
+        coordinator: SageTurnCoordinator = SageTurnCoordinator(),
+        sageCore: SageCoreProvider = EmptySageCoreProvider,
+        twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
+        conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
@@ -196,6 +243,9 @@ class SageRuntimeTest {
             workflows,
             scheduler,
             observer = observer,
+            sageCore = sageCore,
+            twinMemory = twinMemory,
+            conversationHistory = conversationHistory,
             capabilities = capability,
             brainResponseTimeoutMs = brainResponseTimeoutMs
         )

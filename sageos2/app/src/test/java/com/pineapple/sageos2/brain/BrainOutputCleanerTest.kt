@@ -4,7 +4,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Test
 
 class BrainOutputCleanerTest {
-    @Test fun removesQwenThinkingAndControlTokensFromVisibleReply() {
+    @Test fun removesThinkingAndControlTokensFromVisibleReply() {
         val raw = "<|assistant|><think>I should reason privately.</think>\nI'm here with you.<|im_end|>"
         assertEquals("I'm here with you.", BrainOutputCleaner.clean(raw))
     }

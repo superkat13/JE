@@ -20,7 +20,7 @@ object BrainRequestPolicy {
             "(open|launch|tap|click|choose|select|scroll|search|find|type|play|pause|share|copy|edit|" +
             "install|uninstall|send|move|delete|rename|turn|set|change|check|inspect|run)\\b"
     )
-    private val toolResultCue = Regex("(?i)^\\s*SAGE_TOOL_RESULT\\b")
+    private val toolResultCue = Regex("(?i)^\\s*<?SAGE_TOOL_RESULT\\b")
 
     data class Profile(
         val systemGuide: String,

@@ -51,6 +51,12 @@ class BrainRequestPolicyTest {
         val toolResult = BrainRequestPolicy.forPrompt("SAGE_TOOL_RESULT\naction=open.app\nsuccess=true")
         assertTrue(toolResult.includeToolContext)
         assertTrue(toolResult.includeTaskContext)
+
+        val realToolResult = BrainRequestPolicy.forPrompt(
+            "<SAGE_TOOL_RESULT>\nname=root.health\nsuccess=true\n</SAGE_TOOL_RESULT>"
+        )
+        assertTrue(realToolResult.includeToolContext)
+        assertTrue(realToolResult.includeTaskContext)
     }
 
     @Test fun literalComparisonAllowsOnlyWrappingQuotesAndWhitespaceDifferences() {

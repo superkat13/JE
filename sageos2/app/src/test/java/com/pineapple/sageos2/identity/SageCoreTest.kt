@@ -8,7 +8,9 @@ import org.junit.Test
 class SageCoreTest {
     @Test fun defaultCoreDeclaresVirtualTwinIdentity() {
         val core = EmptySageCoreProvider.current()
-        assertTrue(core.twinIdentity.contains("virtual twin"))
+        assertTrue(core.twinIdentity.contains("Kat's personal AI"))
+        assertTrue(core.twinIdentity.contains("digital twin"))
+        assertTrue(core.twinIdentity.contains("direct, capable, warm"))
         assertEquals("Sage", core.sageSelfModel.identity)
     }
 

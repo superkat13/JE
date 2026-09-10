@@ -1,6 +1,6 @@
 package com.pineapple.sageos2.brain
 
-/** Keeps model-control tokens and Qwen reasoning markup out of Sage's visible reply. */
+/** Keeps common model-control tokens and hidden-reasoning markup out of Sage's visible reply. */
 object BrainOutputCleaner {
     private val completeThinking = Regex("(?is)<think>.*?</think>")
     private val prefixThroughThinkingEnd = Regex("(?is)^.*?</think>")

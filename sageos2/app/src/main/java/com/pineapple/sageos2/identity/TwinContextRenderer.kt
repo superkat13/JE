@@ -6,6 +6,7 @@ import com.pineapple.sageos2.memory.ConversationSpeaker
 import com.pineapple.sageos2.memory.TwinMemoryRecord
 import com.pineapple.sageos2.memory.TwinMemorySnapshot
 import com.pineapple.sageos2.mode.SageModeSnapshot
+import java.util.Locale
 
 class TwinContextRenderer(
     private val maxMemories: Int = 64,
@@ -24,11 +25,19 @@ class TwinContextRenderer(
         history: ConversationHistorySnapshot,
         ownerApps: OwnerAppSnapshot,
         mode: SageModeSnapshot,
-        includeOperationalDetails: Boolean = false
+        includeOperationalDetails: Boolean = false,
+        currentRequest: String = ""
     ): String = buildString {
         appendLine("# WHO I AM")
         appendLine(core.twinIdentity.ifBlank { "I am Sage, the owner's virtual twin." })
         appendLine("Use this continuity naturally. Do not recite or describe it unless the owner asks.")
+
+        legacyOwnerCore(core.notes)?.let { ownerCore ->
+            appendLine()
+            appendLine("# OWNER CORE")
+            appendLine("This is the owner's authoritative Sage identity and behavior continuity. Apply it naturally. Device actions still require the runtime's capability, caller, transport, OS-integrity, and execution validation.")
+            appendLine(ownerCore)
+        }
 
         val ownerLines = buildList {
             addAll(core.ownerModel.preferredNames.map { "Preferred name: $it" })
@@ -53,7 +62,7 @@ class TwinContextRenderer(
                 addAll(core.sageSelfModel.capabilities.map { "I can: $it" })
                 addAll(core.sageSelfModel.limitations.map { "Current technical limit: $it" })
             }
-            core.notes.takeIf { it.isNotBlank() }?.let { add("Note: $it") }
+            notesWithoutLegacyOwnerCore(core.notes).takeIf { it.isNotBlank() }?.let { add("Note: $it") }
         }
         appendSection("ME", selfLines)
 
@@ -88,8 +97,13 @@ class TwinContextRenderer(
             )
         }
 
+        val requestTokens = searchableTokens(currentRequest)
         val active = memory.records.filter { it.active }
-            .sortedWith(compareByDescending<TwinMemoryRecord> { it.confidence }.thenByDescending { it.updatedAtEpochMs })
+            .sortedWith(
+                compareByDescending<TwinMemoryRecord> { relevanceScore(it, requestTokens) }
+                    .thenByDescending { it.confidence }
+                    .thenByDescending { it.updatedAtEpochMs }
+            )
             .take(maxMemories)
         appendSection("THINGS I REMEMBER", active.map { it.value })
 
@@ -107,5 +121,40 @@ class TwinContextRenderer(
         appendLine()
         appendLine("# $title")
         lines.forEach { appendLine("- $it") }
+    }
+
+    private fun legacyOwnerCore(notes: String): String? {
+        val markerIndex = notes.indexOf(LEGACY_OWNER_CORE_MARKER)
+        if (markerIndex < 0) return null
+        return notes.substring(markerIndex + LEGACY_OWNER_CORE_MARKER.length)
+            .trimStart(':', ' ', '\n', '\r', '\t')
+            .trim()
+            .take(MAX_LEGACY_OWNER_CORE_PROMPT_CHARACTERS)
+            .trimEnd()
+            .takeIf { it.isNotEmpty() }
+    }
+
+    private fun notesWithoutLegacyOwnerCore(notes: String): String {
+        val markerIndex = notes.indexOf(LEGACY_OWNER_CORE_MARKER)
+        return if (markerIndex < 0) notes.trim() else notes.substring(0, markerIndex).trim()
+    }
+
+    private fun relevanceScore(record: TwinMemoryRecord, requestTokens: Set<String>): Int {
+        if (requestTokens.isEmpty()) return 0
+        val memoryTokens = searchableTokens(record.key + " " + record.value)
+        return requestTokens.count { it in memoryTokens }
+    }
+
+    private fun searchableTokens(value: String): Set<String> = SEARCHABLE_TOKEN
+        .findAll(value.lowercase(Locale.US))
+        .map { it.value }
+        .filter { it.length >= 3 }
+        .toSet()
+
+    companion object {
+        private const val LEGACY_OWNER_CORE_MARKER = "Imported Sage 1.33.3 owner instructions"
+        // Matches the last-good Sage Core contribution limit; the complete source remains stored.
+        private const val MAX_LEGACY_OWNER_CORE_PROMPT_CHARACTERS = 2_400
+        private val SEARCHABLE_TOKEN = Regex("[a-z0-9]+")
     }
 }

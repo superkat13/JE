@@ -163,7 +163,8 @@ class SageRuntime(
             history,
             apps,
             mode,
-            includeOperationalDetails = requestProfile.includeToolContext
+            includeOperationalDetails = requestProfile.includeToolContext,
+            currentRequest = prompt
         )
         val fullContext = if (requestProfile.includeTwinContext) {
             buildString {
