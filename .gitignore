@@ -13,5 +13,6 @@ sageos2/app/build/
 sageos2/app/.cxx/
 sageos2/app/src/main/assets/sherpa-kws/
 sageos2/.deps/
+sageos2/.kotlin/
 sageos2/local.properties
 sageos2/third_party/llama.cpp/

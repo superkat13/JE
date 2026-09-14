@@ -2,4 +2,14 @@
 <resources>
     <string name="app_name">Sage</string>
     <string name="sage_accessibility_description">Lets Sage perform owner-requested actions on this tablet.</string>
+    <string name="brain_identity_inspect">Inspect installed Brain (read-only)</string>
+    <string name="brain_identity_copy">Copy Brain identity report</string>
+    <string name="brain_identity_copied">Brain identity report copied</string>
+    <string name="brain_identity_reading">Reading installed GGUF metadata and SHA-256 without changing the model…</string>
+    <string name="brain_identity_wait">This may take a minute.</string>
+    <string name="brain_identity_summary">GGUF %1$s • parameter count: %2$d</string>
+    <string name="brain_identity_unknown_architecture">architecture unknown</string>
+    <string name="brain_identity_digest">File size: %1$d B • SHA-256 %2$s</string>
+    <string name="brain_identity_error">Brain inspection failed: %1$s</string>
+    <string name="brain_identity_unchanged">The installed model was not changed.</string>
 </resources>

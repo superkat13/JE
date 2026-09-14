@@ -1,13 +1,18 @@
 package com.pineapple.sageos2.brain
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.util.Log
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
+import com.pineapple.sageos2.R
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import java.util.Locale
 
@@ -17,6 +22,9 @@ class BrainModelImportActivity : Activity() {
     private lateinit var progressText: TextView
     private lateinit var progress: ProgressBar
     private lateinit var choose: Button
+    private lateinit var inspect: Button
+    private lateinit var copyIdentity: Button
+    private var identityReport: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -44,9 +52,25 @@ class BrainModelImportActivity : Activity() {
             text = "Choose GGUF model"
             setOnClickListener { chooseModel() }
         }
+        inspect = Button(this).apply {
+            text = getString(R.string.brain_identity_inspect)
+            setOnClickListener { inspectInstalledBrain() }
+        }
+        copyIdentity = Button(this).apply {
+            text = getString(R.string.brain_identity_copy)
+            isEnabled = false
+            setOnClickListener {
+                val report = identityReport ?: return@setOnClickListener
+                val clipboard = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                clipboard.setPrimaryClip(ClipData.newPlainText("Sage Brain identity report", report))
+                Toast.makeText(this@BrainModelImportActivity, R.string.brain_identity_copied, Toast.LENGTH_SHORT).show()
+            }
+        }
         root.addView(status)
         root.addView(progressText)
         root.addView(progress, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(18)))
+        root.addView(inspect)
+        root.addView(copyIdentity)
         root.addView(choose)
         root.addView(Button(this).apply {
             text = "Back to Sage"
@@ -119,6 +143,42 @@ class BrainModelImportActivity : Activity() {
             else -> "No Sage Brain model is installed yet."
         }
         progressText.text = metadata?.sha256?.let { "SHA-256 ${it.take(12)}…" }.orEmpty()
+    }
+
+    private fun inspectInstalledBrain() {
+        inspect.isEnabled = false
+        copyIdentity.isEnabled = false
+        identityReport = null
+        status.text = getString(R.string.brain_identity_reading)
+        progressText.text = getString(R.string.brain_identity_wait)
+        Thread({
+            runCatching { BrainIdentityInspector.inspect(store.modelFile()) }
+                .onSuccess { result ->
+                    val report = result.report()
+                    // This tag emits only model metadata, and only after the owner taps Inspect.
+                    Log.i("SageBrainIdentity", "BEGIN")
+                    report.chunked(1000).forEachIndexed { index, chunk ->
+                        Log.i("SageBrainIdentity", "PART ${index + 1}: $chunk")
+                    }
+                    Log.i("SageBrainIdentity", "END")
+                    runOnUiThread {
+                        identityReport = report
+                        copyIdentity.isEnabled = true
+                        inspect.isEnabled = true
+                        status.text = getString(R.string.brain_identity_summary,
+                            result.metadata["general.architecture"] ?: getString(R.string.brain_identity_unknown_architecture),
+                            result.parameterCount)
+                        progressText.text = getString(R.string.brain_identity_digest, result.sizeBytes, result.sha256)
+                    }
+                }
+                .onFailure { error ->
+                    runOnUiThread {
+                        inspect.isEnabled = true
+                        status.text = getString(R.string.brain_identity_error, error.message ?: error.javaClass.simpleName)
+                        progressText.text = getString(R.string.brain_identity_unchanged)
+                    }
+                }
+        }, "sage-brain-identity").start()
     }
 
     private fun humanBytes(bytes: Long): String {

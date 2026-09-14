@@ -7,7 +7,13 @@ Installed model path: `files/brain/sage-brain.gguf`
 
 ## Result and evidence boundary
 
-The exact inherited Brain cannot yet be identified from the repository or the host. The GGUF is deliberately owner data in the private files directory of the installed package, not a Git object or an APK asset. No Android device is currently visible to ADB, and no copy of `sage-brain.gguf` exists under `/home/kat`. Therefore every model-identity field below remains **UNKNOWN** rather than being inferred from a filename, an old recommendation, or an issue comment.
+The exact inherited Brain cannot yet be identified from the repository or the host. The GGUF is deliberately owner data in the private files directory of the installed package, not a Git object or an APK asset. At the 2026-09-10 audit no Android device was visible to ADB, and no copy of `sage-brain.gguf` exists under `/home/kat`. Therefore every model-identity field below remains **UNKNOWN** rather than being inferred from a filename, an old recommendation, or an issue comment.
+
+### Live tablet preflight, 2026-09-13
+
+The VASOUN L10_T05 is now ADB-authorized. Its installed Sage package is still versionCode 205 / versionName 2.0.0. The installed public APK has SHA-256 `9e2f30be52f1a1a15fd4a422b57695a8c727c212879c910002c2820199b5261e`, exactly the documented candidate-205 artifact. `apksigner` verifies the Android 13 signer as `e2e3e2cabd3372d6073643b35dc94b5fb62e32c200f9e236d4b9f1e403f61b6e`, with the documented legacy signer for API 24–32. The installed app reports Brain READY and says a GGUF exists in private storage, but its 205 model screen has no saved import name/size/hash and no embedded metadata display.
+
+Android denies `run-as` because this is a non-debuggable release package, and direct shell access to `/data/user/0/com.pineapple.sagecommander.stable` is denied. The model remains **unidentified**; the APK's own hash is not the GGUF hash. No model bytes were copied, changed, or benchmarked. A read-only owner-triggered identity action has been added to the existing version-206 recovery source. It parses metadata and tensor descriptors in place and hashes the same open file descriptor on a worker thread. It must pass signed in-place update gates before it can be used on this installation; the installed 205 cannot expose these facts through ADB alone.
 
 This is a hard benchmark gate: no alternative-model benchmark and no model replacement is authorized until the installed file has been read non-destructively and used as the baseline.
 
@@ -62,6 +68,8 @@ size:    exact bytes
 sha256:  exact lowercase digest
 header:  GGUF metadata plus tensor descriptors, no tensor payload required
 ```
+
+For the current 206 recovery source, open **Settings → Advanced → Local replies & device access → Open local Brain model**, then tap **Inspect installed Brain (read-only)**. The action runs on a worker thread, shows byte size and SHA-256, enables **Copy Brain identity report**, and emits numbered `SageBrainIdentity` logcat parts only after the tap. Capture those parts over authorized ADB, reconstruct them in order between `BEGIN` and `END`, and compare the report against the host inspector's field meanings. The report summarizes tokenizer arrays by count, encoded-item digest, and preview; it does not emit tensor payload or owner conversation data. Do not tap **Choose GGUF model** during this audit.
 
 ## Replacement and benchmark gate
 

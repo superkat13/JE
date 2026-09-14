@@ -63,6 +63,8 @@ Every slice needs an absent-permission path, an exactly-once rule for consequent
 
 ## Verification ladder before any APK handoff
 
+The connected L10_T05 currently runs signed candidate 205. Its release sandbox denies `run-as`, and its model screen has no embedded GGUF report. The read-only identity action is now in the existing 206 source, but no model identity can be claimed until a signed, lineage-verified in-place 206 candidate is approved and the owner taps **Inspect installed Brain (read-only)**. That report must be captured before any model recommendation, replacement, or comparative benchmark. The 205 APK hash and signer are already verified; the GGUF hash remains unknown.
+
 1. Focused unit tests for each repaired seam.
 2. Full unit tests and instrumentation-compilation checks.
 3. Release lint and clean arm64 build.

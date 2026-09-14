@@ -8,9 +8,13 @@ Audited SageOS 2 candidate: `acf3b03bd77d8d97a573ae2f22f875921f75e8ad`
 
 The implementation commit and independent build hashes are reported by the final handoff after verification; a commit cannot contain its own final hash.
 
+Live preflight on 2026-09-13: the connected L10_T05 still has signed candidate 205, and the APK hash and signing lineage match the earlier documented artifact. Android's non-debuggable app sandbox prevents ADB from reading its private GGUF; the installed 205 model screen confirms presence but exposes no exact identity. The current Brain remains **UNKNOWN**. The existing 206 recovery line now includes a read-only, owner-triggered on-device identity report, pending signed CI verification and safe in-place update. No new version or model replacement was made, and no owner records were intentionally edited.
+
+Local verification of the added identity report on 2026-09-13: 152/152 JVM tests passed across 36 suites, including a real pinned llama.cpp vocabulary GGUF; the bounded host GGUF/static recovery checks passed 9/9; release lint passed with 0 errors and the same 78 existing warnings; unsigned arm64 release assembly passed for the unchanged package/versionCode 206. The local unsigned APK SHA-256 is `cb6547c544ff0ada0cc90e46ba7234f614846463f23d0ad07a5fd7a5c4e7df91`. This is a build check, not a signed device artifact or permission to install it.
+
 ## Brain decision
 
-The installed `files/brain/sage-brain.gguf` is not in Git, in the APK, or anywhere under `/home/kat`, and no Android device is attached. Its family, embedded name, architecture, parameters, quantization, trained context, tokenizer, chat template, file size, digest, and provenance therefore remain **UNKNOWN**. No repository label or historical recommendation has been treated as metadata.
+The installed `files/brain/sage-brain.gguf` is not in Git, in the APK, or anywhere under `/home/kat`. At the original 2026-09-10 checkpoint no Android device was attached; the now-connected tablet denies ADB shell access to the non-debuggable app's private file. Its family, embedded name, architecture, parameters, quantization, trained context, tokenizer, chat template, file size, digest, and provenance therefore remain **UNKNOWN**. No repository label or historical recommendation has been treated as metadata.
 
 A read-only bounded GGUF v2/v3 inspector now reports those fields, tensor-type distribution, summed tensor parameters, alignment/data offset, complete metadata, and optional full-file SHA-256. It was checked against synthetic malformed/bounds fixtures and a real llama.cpp vocabulary GGUF. Exact compatibility is gated against llama.cpp commit `d73c1d6b22a2d3ecc74c2c9cde354015ee72e862`, the revision built into SageOS 2.
 
