@@ -98,7 +98,8 @@ jobs:
           grep -F 'class BrainModelImportActivity' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelImportActivity.kt
           grep -F 'data object ImportBrainModel' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'FastCommand.ImportBrainModel -> importBrainModel()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
-          grep -F '"import brain model"' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'fastCommands.parse(normalized) != null' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'value == "import brain model"' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'com.pineapple.sageos2.brain.BrainModelImportActivity' sageos2/app/src/main/AndroidManifest.xml
       - name: Verify structured tools Forge and safe recovery
         run: |
@@ -143,7 +144,7 @@ jobs:
           grep -F 'diagnosticReportProvider = { diagnosticReport() }' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
           grep -F 'data object ShareDiagnosticReport' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
-          grep -F '"share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F '"share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'text = "Copy diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
           grep -F 'text = "Share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
       - name: Verify twin context and Owner Apps
