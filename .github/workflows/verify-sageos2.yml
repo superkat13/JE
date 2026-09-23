@@ -219,6 +219,18 @@ jobs:
           rm -rf /tmp/sage1333
           bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
           python3 sage_tests/test_normal_tablet_v1_33_3.py /tmp/sage1333
+
+          # Prove SageOS 2 migration reads the persistence names that the last-good
+          # 1.33.3 source actually wrote. This guards owner identity/data continuity.
+          grep -RFn '"sage_core"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"owner_instructions"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"sage_owner_apps"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"entries"' /tmp/sage1333/app/src/main/java/com/pineapple/sage | grep -F 'SageOwner'
+          grep -RFn '"memory_items"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"wake_profiles_v1"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"sage_autonomy_jobs_v1"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"active_job"' /tmp/sage1333/app/src/main/java
+
           python3 -m compileall -q sage_forge
           python3 -m unittest discover -v sage_forge/tests
 
