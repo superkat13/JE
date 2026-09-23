@@ -3,6 +3,7 @@ package com.pineapple.sageos2.brain
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -136,6 +137,35 @@ class LocalNativeBrainEngineTest {
         assertTrue(result!!.exceptionOrNull()?.message.orEmpty().contains("no measured tokens"))
     }
 
+    @Test fun advancingPrefillTelemetryIsForwardedAsProgress() {
+        val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
+        val bridge = SlowPrefillBridge()
+        val engine = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
+        val observed = CopyOnWriteArrayList<BrainProgress>()
+        val latch = CountDownLatch(1)
+        var result: Result<BrainResponse>? = null
+
+        engine.start(
+            BrainRequest(
+                turnId = 90L,
+                prompt = "context-heavy owner request",
+                twinContextText = "virtual twin context",
+                onProgress = { observed += it }
+            )
+        ) {
+            result = it
+            latch.countDown()
+        }
+
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        assertEquals("done", result!!.getOrThrow().text)
+        val prefillUpdates = observed.filter {
+            it.stage == BrainProgressStage.READING_CONTEXT &&
+                (it.telemetry?.promptPrefillMs ?: -1L) >= 0L
+        }
+        assertTrue("expected repeated native prefill progress", prefillUpdates.size >= 2)
+    }
+
     @Test fun failedModelLoadCanBeRetriedWithoutRestartingSage() {
         val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
         val bridge = FakeBridge().apply { loadSucceeds = false }
@@ -161,6 +191,30 @@ class LocalNativeBrainEngineTest {
         assertTrue(second.await(2, TimeUnit.SECONDS))
         assertEquals("ok", secondResult!!.getOrThrow().text)
         assertEquals(2, bridge.loadCalls)
+    }
+
+    private class SlowPrefillBridge : NativeBrainBridge {
+        @Volatile private var startedAtNs = 0L
+        override fun loadModel(path: String) = true
+        override fun generate(
+            requestId: Long,
+            systemPrompt: String,
+            userPrompt: String,
+            maxTokens: Int,
+            deterministic: Boolean
+        ): String {
+            startedAtNs = System.nanoTime()
+            Thread.sleep(900L)
+            return "done"
+        }
+        override fun cancel(requestId: Long) = Unit
+        override fun stage() = if (startedAtNs == 0L) "prompt_tokenization" else "prompt_prefill"
+        override fun promptPrefillDurationMs(): Long {
+            val start = startedAtNs
+            return if (start == 0L) -1L else (System.nanoTime() - start) / 1_000_000L
+        }
+        override fun generatedTokenCount() = 3
+        override fun lastError() = ""
     }
 
     private class FakeBridge : NativeBrainBridge {
