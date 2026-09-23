@@ -208,6 +208,18 @@ jobs:
         run: |
           manifest=sageos2/app/src/main/AndroidManifest.xml
           for component in com.pineapple.sageos2.SageLaunchActivity com.pineapple.sageos2.SageHomeActivity com.pineapple.sageos2.MainActivity com.pineapple.sageos2.brain.BrainModelImportActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
+      - name: Run A1 recovery and historical continuity gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python3 -m compileall -q sage_tests
+          python3 sage_tests/test_sageos2_recovery_contract.py
+          python3 sage_tests/test_autonomy_self_repair_v1_29.py
+          rm -rf /tmp/sage1333
+          bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
+          python3 sage_tests/test_normal_tablet_v1_33_3.py /tmp/sage1333
+
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
