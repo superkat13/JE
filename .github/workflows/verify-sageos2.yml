@@ -219,6 +219,8 @@ jobs:
           rm -rf /tmp/sage1333
           bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
           python3 sage_tests/test_normal_tablet_v1_33_3.py /tmp/sage1333
+          python3 -m compileall -q sage_forge
+          python3 -m unittest discover -v sage_forge/tests
 
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
