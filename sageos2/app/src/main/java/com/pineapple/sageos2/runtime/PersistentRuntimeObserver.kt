@@ -23,7 +23,14 @@ class PersistentRuntimeObserver(private val traces: SharedPreferencesTraceStore)
     override fun onBrainProgress(progress: BrainProgress) = traces.record(
         "brain_progress",
         progress.stage.name,
-        turnId = progress.turnId
+        turnId = progress.turnId,
+        metadata = buildMap {
+            progress.telemetry?.nativeStage?.let { put("native_stage", it) }
+            progress.telemetry?.promptTokens?.let { put("prompt_tokens", it.toString()) }
+            progress.telemetry?.generatedTokens?.let { put("generated_tokens", it.toString()) }
+            progress.telemetry?.promptPrefillMs?.let { put("prefill_ms", it.toString()) }
+            progress.telemetry?.firstTokenMs?.let { put("first_token_ms", it.toString()) }
+        }
     )
     override fun onTextResponse(turnId: Long, text: String) = traces.record("text_response", "response emitted", turnId, metadata = mapOf("chars" to text.length.toString()))
 }
