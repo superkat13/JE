@@ -389,7 +389,23 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             llama_memory_clear(llama_get_memory(g_context), true);
             return to_java_string(env, "");
         }
-        prompt_offset += static_cast<size_t>(kPromptPrefillChunkTokens);
+        const auto prefill_progress_at = std::chrono::steady_clock::now();
+        const auto prefill_progress_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                prefill_progress_at - generation_start
+        ).count();
+        g_last_prompt_prefill_duration_ms.store(
+                std::max<long long>(0, prefill_progress_ms), std::memory_order_release
+        );
+        const size_t prefilled_tokens =
+                prompt_offset + static_cast<size_t>(kPromptPrefillChunkTokens);
+        if (prefill_progress_ms > 0) {
+            g_last_prompt_tokens_per_second.store(
+                    static_cast<float>(prefilled_tokens) * 1000.0f
+                            / static_cast<float>(prefill_progress_ms),
+                    std::memory_order_release
+            );
+        }
+        prompt_offset = prefilled_tokens;
     }
 
     const size_t final_prompt_tokens = prompt_tokens.size() - prompt_offset;
