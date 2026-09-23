@@ -114,15 +114,20 @@ class LocalNativeBrainEngine(
                 val requestedTokens = (request.maxOutputTokens ?: maxTokens).coerceIn(1, maxTokens)
                 val lastReported = AtomicReference(BrainProgressStage.READING_CONTEXT)
                 val lastReportedTokens = AtomicLong(-1L)
+                val lastReportedPrefillMs = AtomicLong(-1L)
                 val progressMonitor = progressExecutor.scheduleAtFixedRate({
                     if (!cancelled.get() && !completionSent.get()) {
                         val telemetry = telemetry()
                         nativeProgressStage(telemetry?.nativeStage.orEmpty())?.let { stage ->
                             val generatedTokens = telemetry?.generatedTokens?.toLong() ?: -1L
+                            val prefillMs = telemetry?.promptPrefillMs ?: -1L
                             val stageChanged = lastReported.getAndSet(stage) != stage
                             val tokenCountChanged = generatedTokens >= 0L &&
                                 lastReportedTokens.getAndSet(generatedTokens) != generatedTokens
-                            if (stageChanged || tokenCountChanged) {
+                            val prefillAdvanced = stage == BrainProgressStage.READING_CONTEXT &&
+                                prefillMs >= 0L &&
+                                lastReportedPrefillMs.getAndSet(prefillMs) != prefillMs
+                            if (stageChanged || tokenCountChanged || prefillAdvanced) {
                                 reportProgress(request, stage, telemetry)
                             }
                         }
