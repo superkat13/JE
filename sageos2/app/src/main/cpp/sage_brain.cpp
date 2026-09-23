@@ -35,6 +35,10 @@ bool g_backend_initialized = false;
 // The inherited GGUF identity must be read from the installed file before model-specific tuning.
 constexpr int kContextTokens = 2048;
 constexpr int kMaximumResponseTokens = 24;
+// Keep prompt decode batches at or below n_ubatch. Candidate 206 could hand the entire
+// formatted Sage context to llama_decode even when it exceeded n_batch=512, which trips
+// llama.cpp's hard n_tokens <= n_batch assertion and kills the Android process.
+constexpr int kPromptPrefillChunkTokens = 256;
 
 const char * stage_name(int stage) {
     switch (stage) {
@@ -350,9 +354,48 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
 
     g_last_stage.store(5, std::memory_order_release);
     llama_memory_clear(llama_get_memory(g_context), true);
+    g_cancel_requested.store(false, std::memory_order_release);
+
+    // llama.cpp requires each decode batch to stay within context_params.n_batch. Sage's
+    // structured identity/memory prompt can legitimately exceed that even though the whole turn
+    // still fits n_ctx. Prefill in bounded chunks and leave the final chunk for the existing
+    // decode/sample loop so generation semantics stay unchanged.
+    size_t prompt_offset = 0U;
+    while (prompt_tokens.size() - prompt_offset
+            > static_cast<size_t>(kPromptPrefillChunkTokens)) {
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            g_last_stage.store(9, std::memory_order_release);
+            llama_memory_clear(llama_get_memory(g_context), true);
+            set_error("Brain request cancelled during prompt prefill");
+            return to_java_string(env, "");
+        }
+
+        llama_batch prefill_batch = llama_batch_get_one(
+                prompt_tokens.data() + prompt_offset,
+                kPromptPrefillChunkTokens
+        );
+        const int prefill_result = llama_decode(g_context, prefill_batch);
+        if (prefill_result != 0) {
+            if (prefill_result == 2
+                    && g_cancel_requested.load(std::memory_order_acquire)) {
+                g_last_stage.store(9, std::memory_order_release);
+                set_error("Brain request cancelled during prompt prefill");
+            } else {
+                set_error(
+                        "llama_decode failed during prompt prefill with code "
+                                + std::to_string(prefill_result)
+                );
+            }
+            llama_memory_clear(llama_get_memory(g_context), true);
+            return to_java_string(env, "");
+        }
+        prompt_offset += static_cast<size_t>(kPromptPrefillChunkTokens);
+    }
+
+    const size_t final_prompt_tokens = prompt_tokens.size() - prompt_offset;
     llama_batch batch = llama_batch_get_one(
-            prompt_tokens.data(),
-            static_cast<int32_t>(prompt_tokens.size())
+            prompt_tokens.data() + prompt_offset,
+            static_cast<int32_t>(final_prompt_tokens)
     );
 
     llama_sampler * sampler;
@@ -366,7 +409,6 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
     }
 
-    g_cancel_requested.store(false, std::memory_order_release);
     bool cancelled = false;
     bool prompt_prefilled = false;
     auto generation_only_start = generation_start;
