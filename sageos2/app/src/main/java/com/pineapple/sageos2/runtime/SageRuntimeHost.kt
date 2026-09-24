@@ -4,6 +4,8 @@ import android.content.Context
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.speech.SpeechRecognizer
+import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
@@ -222,6 +224,12 @@ class SageRuntimeHost private constructor(context: Context) {
         val runtimeSnapshot = snapshot()
         val brainHealth = brainStatus()
         val wakeHealth = wakeStatus()
+        val commandSpeechReady = SageSpeechBackendState.sherpaReady(appContext)
+        val androidSpeechFallback = SpeechRecognizer.isRecognitionAvailable(appContext)
+        val commandSpeechDetail = buildString {
+            append(SageSpeechBackendState.readinessDetail(appContext))
+            if (!commandSpeechReady) append("; Android fallback=").append(androidSpeechFallback)
+        }
         val capabilityMap = capabilityStatus().states.mapKeys { it.key.name }.mapValues { it.value.name }
         val mode = modes.current()
         val apps = ownerApps.snapshot()
@@ -262,6 +270,8 @@ class SageRuntimeHost private constructor(context: Context) {
                 wakeReady = wakeHealth.ready,
                 wakeEngine = wakeHealth.engine,
                 wakeDetail = wakeHealth.detail,
+                commandSpeechReady = commandSpeechReady,
+                commandSpeechDetail = commandSpeechDetail,
                 capabilities = capabilityMap,
                 sageCoreRevision = core.current().revision,
                 profileId = mode.profileId,
