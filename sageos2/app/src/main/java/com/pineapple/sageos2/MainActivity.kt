@@ -33,6 +33,7 @@ import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.pineapple.sage.SageSherpaRecognitionService
 import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sage.SageVoiceService
 import com.pineapple.sageos2.appearance.SageAppearanceMode
@@ -550,9 +551,10 @@ open class MainActivity : Activity() {
         val wake = host.wakeStatus()
         val localSpeechReady = SageSpeechBackendState.sherpaReady(this)
         val localSpeechDetail = if (localSpeechReady) {
-            "READY"
+            "READY • " + SageSherpaRecognitionService.runtimeDetail()
         } else {
             SageSpeechBackendState.readinessDetail(this) +
+                "; " + SageSherpaRecognitionService.runtimeDetail() +
                 "; Android fallback=" + SpeechRecognizer.isRecognitionAvailable(this)
         }
         content.addView(info("Brain", if (brain.ready) "READY" else brain.detail))
