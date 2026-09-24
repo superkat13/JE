@@ -75,7 +75,10 @@ class SageRuntimeHost private constructor(context: Context) {
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
 
-    private val legacyMigrationReport = LegacySageMigration(
+    @Volatile private var legacyMigrationReport = runLegacyMigration()
+    @Volatile private var legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
+
+    private fun runLegacyMigration() = LegacySageMigration(
         appContext,
         core = core,
         memory = memory,
@@ -84,7 +87,7 @@ class SageRuntimeHost private constructor(context: Context) {
         tasks = tasks
     ).runIfNeeded()
 
-    private val legacyPersonalityMigrationReport = LegacyPersonalityContinuityMigration(
+    private fun runLegacyPersonalityMigration() = LegacyPersonalityContinuityMigration(
         appContext,
         memory = memory
     ).runIfNeeded()
@@ -174,6 +177,8 @@ class SageRuntimeHost private constructor(context: Context) {
     }
 
     private fun runSelfCareCheck() {
+        legacyMigrationReport = runLegacyMigration()
+        legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
         val brainHealth = brainStatus()
         val wakeHealth = wakeStatus()
         val findings = selfCare.reconcile(
