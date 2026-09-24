@@ -37,6 +37,14 @@ class FastCommandParserTest {
         assertEquals(FastCommand.TapLabel("continue"), parser.parse("press Continue"))
         assertEquals(FastCommand.Tap(420f, 815f), parser.parse("tap 420, 815"))
     }
+    @Test fun parsesNotificationSummaryAndMediaControls() {
+        assertEquals(FastCommand.ReadNotifications, parser.parse("read notifications"))
+        assertEquals(FastCommand.ReadNotifications, parser.parse("what are my notifications"))
+        assertEquals(FastCommand.Media(MediaAction.PLAY), parser.parse("play music"))
+        assertEquals(FastCommand.Media(MediaAction.PAUSE), parser.parse("pause media"))
+        assertEquals(FastCommand.Media(MediaAction.NEXT), parser.parse("next track"))
+        assertEquals(FastCommand.Media(MediaAction.PREVIOUS), parser.parse("previous song"))
+    }
     @Test fun parsesDiagnosticShareWithoutBrain() {
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share diagnostic report"))
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share Sage diagnostic report"))
