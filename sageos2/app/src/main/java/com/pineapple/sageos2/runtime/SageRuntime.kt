@@ -115,7 +115,11 @@ class SageRuntime(
                 fastActionJob = fastActions.start(FastActionRequest(effect.turnId, effect.command)) { result ->
                     result.fold(
                         onSuccess = { submit(SageEvent.ResponseReady(it.turnId, it.text, it.allowFollowUp)) },
-                        onFailure = { submit(SageEvent.BrainFailed(effect.turnId, "fast action: ${it.message ?: it::class.simpleName}")) }
+                        onFailure = {
+                            val detail = it.message?.trim().orEmpty().ifBlank { "That device action did not complete." }
+                            observer.onDiagnostic("fast action failed: turn=${effect.turnId} detail=$detail")
+                            submit(SageEvent.ResponseReady(effect.turnId, detail, allowFollowUp = false))
+                        }
                     )
                 }
             }
