@@ -85,4 +85,17 @@ public final class SageSpeechBackendState {
                 && sherpaNativePresent(context)
                 && sherpaModelPresent(context);
     }
+
+    public static String readinessDetail(Context context) {
+        boolean api = sherpaJavaApiPresent(context);
+        boolean nativeReady = sherpaNativePresent(context);
+        boolean model = sherpaModelPresent(context);
+        if (api && nativeReady && model) {
+            return "local sherpa command speech ready";
+        }
+        return "local sherpa command speech unavailable"
+                + " [java_api=" + api
+                + ",native=" + nativeReady
+                + ",model=" + model + "]";
+    }
 }
