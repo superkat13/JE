@@ -89,7 +89,7 @@ class BrainPromptBudgetTest {
         val context = listOf(
             "# WHO I AM\nSage " + "i".repeat(700),
             "# ME\nSelf " + "s".repeat(700),
-            "# WHAT WE'VE BEEN DOING\nProject: Pineapple Face Studio = private face-swap app " + "p".repeat(900),
+            "# WHAT WE'VE BEEN DOING\nProject: Recovered Face Project = private face-swap app " + "p".repeat(900),
             "# THINGS I REMEMBER\nOther memory " + "m".repeat(900),
             "# RECENT CONVERSATION\nRecent " + "r".repeat(900)
         ).joinToString("\n\n")
@@ -97,7 +97,7 @@ class BrainPromptBudgetTest {
         val fitted = BrainPromptBudget.fitSystemContext(context, "What is the name of our face-swap app?", 1_600)
 
         assertTrue(fitted.contains("# WHAT WE'VE BEEN DOING"))
-        assertTrue(fitted.contains("Pineapple Face Studio"))
+        assertTrue(fitted.contains("Recovered Face Project"))
     }
 
     @Test fun currentOwnerPromptIsNeverChangedByTheBudgeter() {
