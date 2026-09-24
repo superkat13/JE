@@ -41,10 +41,12 @@ class LegacySageMigration(
 
     @Synchronized
     fun runIfNeeded(nowMs: Long = System.currentTimeMillis()): LegacyMigrationReport {
-        if (marker.getBoolean(KEY_COMPLETE, false)) {
-            return LegacyMigrationReport(alreadyCompleted = true)
-        }
+        val alreadyCompleted = marker.getBoolean(KEY_COMPLETE, false)
+        val source = sourcePresence()
 
+        // SageOS 2 had early builds that could mark migration complete before every durable
+        // store was actually represented. The import functions below are idempotent, so always
+        // reconcile legacy state on startup instead of trusting a stale completion bit forever.
         val errors = mutableListOf<String>()
         var coreImported = false
         var memoriesImported = 0
@@ -73,14 +75,34 @@ class LegacySageMigration(
         }
 
         return LegacyMigrationReport(
-            alreadyCompleted = false,
+            alreadyCompleted = alreadyCompleted,
             completed = completed,
             coreImported = coreImported,
             memoriesImported = memoriesImported,
             ownerAppsImported = appsImported,
             wakeProfilesImported = wakeImported,
             recoverableTasksImported = recoverableTasksImported,
+            legacyCorePresent = source.core,
+            legacyMemoryPresent = source.memory,
+            legacyOwnerAppsPresent = source.ownerApps,
+            legacyWakePresent = source.wake,
+            legacyAutonomyPresent = source.autonomy,
             errors = errors
+        )
+    }
+
+    private fun sourcePresence(): LegacySourcePresence {
+        val legacyCore = appContext.getSharedPreferences(LEGACY_CORE_PREFS, Context.MODE_PRIVATE)
+        val legacyState = appContext.getSharedPreferences(LEGACY_STATE_PREFS, Context.MODE_PRIVATE)
+        val legacyApps = appContext.getSharedPreferences(LEGACY_OWNER_APPS_PREFS, Context.MODE_PRIVATE)
+        val legacyAutonomy = appContext.getSharedPreferences(LEGACY_AUTONOMY_PREFS, Context.MODE_PRIVATE)
+        return LegacySourcePresence(
+            core = legacyCore.getString(LEGACY_CORE_TEXT, "").orEmpty().isNotBlank(),
+            memory = legacyState.getStringSet(LEGACY_MEMORY_ITEMS, emptySet()).orEmpty().isNotEmpty(),
+            ownerApps = legacyApps.getString(LEGACY_OWNER_APPS_KEY, "").orEmpty().isNotBlank(),
+            wake = legacyState.getStringSet(LEGACY_WAKE_PROFILES, emptySet()).orEmpty().isNotEmpty() ||
+                legacyState.getStringSet(LEGACY_WAKE_ALIASES, emptySet()).orEmpty().isNotEmpty(),
+            autonomy = legacyAutonomy.getString(LEGACY_AUTONOMY_ACTIVE, "").orEmpty().isNotBlank()
         )
     }
 
@@ -287,6 +309,14 @@ class LegacySageMigration(
     }
 }
 
+data class LegacySourcePresence(
+    val core: Boolean = false,
+    val memory: Boolean = false,
+    val ownerApps: Boolean = false,
+    val wake: Boolean = false,
+    val autonomy: Boolean = false
+)
+
 data class LegacyMigrationReport(
     val alreadyCompleted: Boolean = false,
     val completed: Boolean = alreadyCompleted,
@@ -295,6 +325,11 @@ data class LegacyMigrationReport(
     val ownerAppsImported: Int = 0,
     val wakeProfilesImported: Int = 0,
     val recoverableTasksImported: Int = 0,
+    val legacyCorePresent: Boolean = false,
+    val legacyMemoryPresent: Boolean = false,
+    val legacyOwnerAppsPresent: Boolean = false,
+    val legacyWakePresent: Boolean = false,
+    val legacyAutonomyPresent: Boolean = false,
     val errors: List<String> = emptyList()
 ) {
     fun summary(): String = buildString {
@@ -304,6 +339,11 @@ data class LegacyMigrationReport(
         append(" apps=").append(ownerAppsImported)
         append(" wake=").append(wakeProfilesImported)
         append(" tasks=").append(recoverableTasksImported)
+        append(" source[core=").append(legacyCorePresent)
+        append(",memory=").append(legacyMemoryPresent)
+        append(",apps=").append(legacyOwnerAppsPresent)
+        append(",wake=").append(legacyWakePresent)
+        append(",autonomy=").append(legacyAutonomyPresent).append(']')
         if (errors.isNotEmpty()) append(" errors=").append(errors.joinToString(" | "))
     }
 }

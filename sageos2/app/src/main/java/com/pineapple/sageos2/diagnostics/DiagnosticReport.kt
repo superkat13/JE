@@ -27,6 +27,7 @@ data class DiagnosticReportSnapshot(
     val modeId: String?,
     val ownerAppsRevision: Long,
     val ownerAppsCount: Int,
+    val continuityMigration: String = "",
     val recoverableTasks: List<DiagnosticTaskSummary>,
     val chickenTonightScopeStatus: String,
     val traces: List<TraceEvent>,
@@ -61,6 +62,9 @@ object DiagnosticReportRenderer {
         appendLine("Profile: ${oneLine(snapshot.profileId)}")
         appendLine("Mode: ${oneLine(snapshot.modeId ?: "normal")}")
         appendLine("Owner Apps: ${snapshot.ownerAppsCount} • revision ${snapshot.ownerAppsRevision}")
+        if (snapshot.continuityMigration.isNotBlank()) {
+            appendLine("Continuity migration: ${oneLine(snapshot.continuityMigration)}")
+        }
         appendLine("Chicken Tonight scope: ${oneLine(snapshot.chickenTonightScopeStatus)}")
         appendLine()
         appendLine("Active / recoverable tasks")

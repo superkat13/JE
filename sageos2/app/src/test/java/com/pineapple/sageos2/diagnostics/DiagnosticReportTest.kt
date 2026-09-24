@@ -28,6 +28,7 @@ class DiagnosticReportTest {
                 modeId = null,
                 ownerAppsRevision = 3L,
                 ownerAppsCount = 4,
+                continuityMigration = "legacy migration already complete; core=true source[core=true,memory=true,apps=true,wake=true,autonomy=true]",
                 recoverableTasks = listOf(DiagnosticTaskSummary("task-1", "Recovered turn", "WAITING", "Continue safely")),
                 chickenTonightScopeStatus = "READY",
                 traces = listOf(TraceEvent("trace-1", 1200L, 9L, "brain", "generation completed", TraceLevel.INFO)),
@@ -42,6 +43,8 @@ class DiagnosticReportTest {
         assertTrue(report.contains("SageOS 2 diagnostic report"))
         assertTrue(report.contains("Brain: ready"))
         assertTrue(report.contains("SAGEOS_ROOT_BROKER: UNAVAILABLE"))
+        assertTrue(report.contains("Continuity migration: legacy migration already complete"))
+        assertTrue(report.contains("source[core=true,memory=true,apps=true,wake=true,autonomy=true]"))
         assertTrue(report.contains("Chicken Tonight scope: READY"))
         assertTrue(report.contains("generation completed"))
         assertTrue(report.contains("Brain native stage: complete"))

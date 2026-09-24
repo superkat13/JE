@@ -34,46 +34,40 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     @Volatile private var wakeCallback: ((WakeHit) -> Unit)? = null
     @Volatile private var lastReady = false
     @Volatile private var lastDetail = "remote wake process not started"
+    @Volatile private var reconnectAttempts = 0
+    @Volatile private var recoveryPaused = false
+    private var reconnectRunnable: Runnable? = null
 
     private val connection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
             binding = false
             bound = true
             remote = service?.let(::Messenger)
-            lastReady = true
-            lastDetail = "remote wake process connected"
+            lastReady = false
+            lastDetail = "remote wake process connected; waiting for native wake readiness"
             sendConfiguration()
             if (desiredRunning) sendStart()
         }
 
-        override fun onServiceDisconnected(name: ComponentName?) {
-            remote = null
-            bound = false
-            binding = false
-            lastReady = false
-            lastDetail = "remote wake process disconnected"
-        }
+        override fun onServiceDisconnected(name: ComponentName?) =
+            handleRemoteFailure("remote wake process disconnected")
 
         override fun onBindingDied(name: ComponentName?) {
-            remote = null
-            bound = false
-            binding = false
-            lastReady = false
-            lastDetail = "remote wake process died"
             runCatching { appContext.unbindService(this) }
+            handleRemoteFailure("remote wake process died")
         }
 
-        override fun onNullBinding(name: ComponentName?) {
-            remote = null
-            bound = false
-            binding = false
-            lastReady = false
-            lastDetail = "remote wake service returned no binder"
-        }
+        override fun onNullBinding(name: ComponentName?) =
+            handleRemoteFailure("remote wake service returned no binder")
     }
 
     override fun configure(profiles: List<WakeProfile>) {
+        val changed = this.profiles != profiles
         this.profiles = profiles
+        if (changed && recoveryPaused) {
+            recoveryPaused = false
+            reconnectAttempts = 0
+        }
         if (bound) main.post { sendConfiguration() }
     }
 
@@ -90,7 +84,10 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     override fun stop() {
         desiredRunning = false
         wakeCallback = null
-        main.post { send(RemoteWakeProtocol.MSG_STOP) }
+        main.post {
+            cancelReconnect()
+            send(RemoteWakeProtocol.MSG_STOP)
+        }
     }
 
     override fun health(): WakeWordHealth {
@@ -108,16 +105,24 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         desiredRunning = false
         wakeCallback = null
         main.post {
+            cancelReconnect()
             send(RemoteWakeProtocol.MSG_CLOSE)
             if (bound || binding) runCatching { appContext.unbindService(connection) }
             bound = false
             binding = false
             remote = null
+            reconnectAttempts = 0
+            recoveryPaused = false
             runCatching { appContext.stopService(remoteServiceIntent()) }
         }
     }
 
     private fun ensureRemoteProcess() {
+        if (recoveryPaused) {
+            lastReady = false
+            lastDetail = "remote wake automatic recovery paused after $reconnectAttempts failed attempts"
+            return
+        }
         if (bound) {
             sendConfiguration()
             sendStart()
@@ -133,14 +138,49 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
             val ok = appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
             if (!ok) {
                 binding = false
-                lastReady = false
-                lastDetail = "Android refused to bind remote wake service"
+                handleRemoteFailure("Android refused to bind remote wake service")
             }
         } catch (t: Throwable) {
             binding = false
-            lastReady = false
-            lastDetail = "remote wake start failed: ${t.message ?: t::class.java.simpleName}"
+            handleRemoteFailure("remote wake start failed: ${t.message ?: t::class.java.simpleName}")
         }
+    }
+
+    private fun handleRemoteFailure(detail: String) {
+        remote = null
+        bound = false
+        binding = false
+        lastReady = false
+        lastDetail = detail
+        if (!desiredRunning) return
+        scheduleReconnect(detail)
+    }
+
+    private fun scheduleReconnect(reason: String) {
+        if (!desiredRunning || recoveryPaused || reconnectRunnable != null) return
+        val nextAttempt = reconnectAttempts + 1
+        val delay = WakeReconnectPolicy.delayForAttempt(nextAttempt)
+        if (delay == null) {
+            recoveryPaused = true
+            lastReady = false
+            lastDetail = "$reason; automatic recovery paused after $reconnectAttempts failed attempts"
+            return
+        }
+        reconnectAttempts = nextAttempt
+        lastDetail = "$reason; wake recovery attempt $nextAttempt/${WakeReconnectPolicy.MAX_ATTEMPTS} in ${delay}ms"
+        val runnable = Runnable {
+            reconnectRunnable = null
+            if (!desiredRunning || recoveryPaused || bound || binding) return@Runnable
+            runCatching { appContext.stopService(remoteServiceIntent()) }
+            ensureRemoteProcess()
+        }
+        reconnectRunnable = runnable
+        main.postDelayed(runnable, delay)
+    }
+
+    private fun cancelReconnect() {
+        reconnectRunnable?.let(main::removeCallbacks)
+        reconnectRunnable = null
     }
 
     private fun remoteServiceIntent(): Intent = Intent().setComponent(
@@ -167,10 +207,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
                 replyTo = callbackMessenger
             })
         } catch (e: RemoteException) {
-            remote = null
-            bound = false
-            lastReady = false
-            lastDetail = "remote wake IPC failed: ${e.message ?: "binder disconnected"}"
+            handleRemoteFailure("remote wake IPC failed: ${e.message ?: "binder disconnected"}")
         }
     }
 
@@ -188,8 +225,25 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
                 return true
             }
             RemoteWakeProtocol.MSG_STATUS -> {
-                lastReady = message.data.getBoolean(RemoteWakeProtocol.KEY_READY)
-                lastDetail = message.data.getString(RemoteWakeProtocol.KEY_DETAIL).orEmpty().ifBlank { "remote wake status updated" }
+                val ready = message.data.getBoolean(RemoteWakeProtocol.KEY_READY)
+                val detail = message.data.getString(RemoteWakeProtocol.KEY_DETAIL).orEmpty()
+                    .ifBlank { "remote wake status updated" }
+                lastReady = ready
+                lastDetail = detail
+                if (ready) {
+                    reconnectAttempts = 0
+                    recoveryPaused = false
+                    cancelReconnect()
+                } else if (desiredRunning) {
+                    if (bound || binding) {
+                        runCatching { appContext.unbindService(connection) }
+                        runCatching { appContext.stopService(remoteServiceIntent()) }
+                        remote = null
+                        bound = false
+                        binding = false
+                    }
+                    scheduleReconnect(detail)
+                }
                 return true
             }
         }
