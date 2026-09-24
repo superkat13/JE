@@ -10,7 +10,7 @@ import java.util.concurrent.atomic.AtomicReference
 
 class LocalNativeBrainEngine(
     private val modelPath: String,
-    private val maxTokens: Int = 24,
+    private val maxTokens: Int = 48,
     private val bridge: NativeBrainBridge = JniNativeBrainBridge(),
     private val libraryLoader: () -> Unit = { System.loadLibrary("sage-brain") }
 ) : BrainEngine {
