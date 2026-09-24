@@ -22,6 +22,8 @@ class DiagnosticReportTest {
                 wakeReady = true,
                 wakeEngine = "Sherpa",
                 wakeDetail = "offline wake ready",
+                commandSpeechReady = true,
+                commandSpeechDetail = "local sherpa command speech ready",
                 capabilities = mapOf("SAGEOS_ROOT_BROKER" to "UNAVAILABLE", "FORGE" to "ACTIVE"),
                 sageCoreRevision = 7L,
                 profileId = "sage",
@@ -43,6 +45,8 @@ class DiagnosticReportTest {
         assertTrue(report.contains("SageOS 2 diagnostic report"))
         assertTrue(report.contains("Brain: ready"))
         assertTrue(report.contains("SAGEOS_ROOT_BROKER: UNAVAILABLE"))
+        assertTrue(report.contains("Command speech: ready"))
+        assertTrue(report.contains("local sherpa command speech ready"))
         assertTrue(report.contains("Continuity migration: legacy migration already complete"))
         assertTrue(report.contains("source[core=true,memory=true,apps=true,wake=true,autonomy=true]"))
         assertTrue(report.contains("Chicken Tonight scope: READY"))
