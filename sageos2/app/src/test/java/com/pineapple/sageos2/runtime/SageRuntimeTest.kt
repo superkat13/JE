@@ -117,6 +117,17 @@ class SageRuntimeTest {
         assertEquals(1, f.fast.requests.size); assertEquals(0, f.brain.requests.size)
     }
 
+    @Test fun fastActionFailureReturnsExactDeviceReasonWithoutStartingBrain() {
+        val f = Fixture()
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("take a screenshot"))
+        f.fast.failLast("Accessibility control is not active")
+
+        assertEquals("Accessibility control is not active", f.observer.textResponses.single().second)
+        assertTrue(f.brain.requests.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
     @Test fun familiarSageHelpRepliesImmediatelyWithoutStartingGguf() {
         val responder = object : SagePersonalResponder {
             override fun resolve(rawText: String) = SagePersonalResolution.Reply("Just talk to me normally.")
@@ -283,7 +294,26 @@ class SageRuntimeTest {
         }
     }
 
-    private class FakeFastActions:FastActionEngine{val requests=mutableListOf<FastActionRequest>();override fun start(request:FastActionRequest,callback:(Result<FastActionResponse>)->Unit):FastActionJob{requests+=request;return object:FastActionJob{override val turnId=request.turnId;override fun cancel()=Unit}}}
+    private class FakeFastActions : FastActionEngine {
+        val requests = mutableListOf<FastActionRequest>()
+        private var lastCallback: ((Result<FastActionResponse>) -> Unit)? = null
+        override fun start(
+            request: FastActionRequest,
+            callback: (Result<FastActionResponse>) -> Unit
+        ): FastActionJob {
+            requests += request
+            lastCallback = callback
+            return object : FastActionJob {
+                override val turnId = request.turnId
+                override fun cancel() = Unit
+            }
+        }
+        fun failLast(detail: String) {
+            val callback = lastCallback ?: error("no fast action callback")
+            lastCallback = null
+            callback(Result.failure(IllegalStateException(detail)))
+        }
+    }
     private class FakeWorkflows:WorkflowEngine{val launched=mutableListOf<String>();override fun launch(turnId:Long,workflowId:String){launched+=workflowId}}
     private class FakeScheduler:RuntimeScheduler{override fun schedule(delayMs:Long,task:()->Unit)=object:ScheduledHandle{override fun cancel()=Unit}}
     private class ManualScheduler : RuntimeScheduler {
