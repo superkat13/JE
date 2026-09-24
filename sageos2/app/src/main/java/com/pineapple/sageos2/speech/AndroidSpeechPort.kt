@@ -257,8 +257,12 @@ class AndroidSpeechPort(
         }
         recognitionSession += 1
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
-        if (text == null) listener?.onRecognitionError(capturedTurnId, capturedGeneration, SpeechRecognizer.ERROR_NO_MATCH)
-        else listener?.onTranscriptFinal(capturedTurnId, capturedGeneration, text)
+        if (text == null) {
+            listener?.onRecognitionError(capturedTurnId, capturedGeneration, SpeechRecognizer.ERROR_NO_MATCH)
+        } else {
+            listener?.onSpeechDiagnostic("command recognizer final backend=$recognizerBackend chars=0")
+            listener?.onTranscriptFinal(capturedTurnId, capturedGeneration, text)
+        }
     }
 
     private fun handleRecognitionError(
@@ -298,8 +302,12 @@ class AndroidSpeechPort(
             handleResults(session, capturedTurnId, capturedGeneration, results)
         override fun onError(error: Int) =
             handleRecognitionError(session, capturedTurnId, capturedGeneration, error)
-        override fun onReadyForSpeech(params: Bundle?) = Unit
-        override fun onBeginningOfSpeech() = Unit
+        override fun onReadyForSpeech(params: Bundle?) {
+            listener?.onSpeechDiagnostic("command recognizer ready backend=$recognizerBackend")
+        }
+        override fun onBeginningOfSpeech() {
+            listener?.onSpeechDiagnostic("command recognizer speech began backend=$recognizerBackend")
+        }
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit
         override fun onEndOfSpeech() = Unit
