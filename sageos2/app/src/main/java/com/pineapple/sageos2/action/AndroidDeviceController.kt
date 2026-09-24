@@ -8,8 +8,10 @@ import android.graphics.Path
 import android.media.AudioManager
 import android.os.Build
 import android.provider.AlarmClock
+import android.view.KeyEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.pineapple.sage.SageAccessibilityService
+import com.pineapple.sage.SageNotificationListener
 import com.pineapple.sageos2.apps.EmptyOwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppResolver
@@ -33,6 +35,8 @@ class AndroidDeviceController(
         is FastCommand.SetTimer -> setTimer(command.seconds)
         is FastCommand.SetAlarm -> setAlarm(command.hour24, command.minute)
         FastCommand.TakeScreenshot -> takeScreenshot()
+        FastCommand.ReadNotifications -> readNotifications()
+        is FastCommand.Media -> media(command.action)
         is FastCommand.TapLabel -> tapLabel(command.label)
         is FastCommand.Scroll -> scroll(command.direction)
         is FastCommand.Tap -> tap(command.x, command.y)
@@ -105,6 +109,47 @@ class AndroidDeviceController(
         return global(AccessibilityService.GLOBAL_ACTION_TAKE_SCREENSHOT, "Screenshot")
     }
 
+    private fun readNotifications(): DeviceControlResult {
+        val listener = SageNotificationListener.activeInstance()
+            ?: return DeviceControlResult(false, "Notification access is not active")
+        val items = listener.snapshot(8)
+        if (items.isEmpty()) return DeviceControlResult(true, "You have no active notifications I can read.")
+        val pm = context.packageManager
+        val lines = items.map { item ->
+            val app = runCatching {
+                val info = pm.getApplicationInfo(item.packageName, 0)
+                pm.getApplicationLabel(info).toString()
+            }.getOrDefault(item.packageName.substringAfterLast('.'))
+            val title = item.title.replace(Regex("\\s+"), " ").trim().take(120)
+            val text = item.text.replace(Regex("\\s+"), " ").trim().take(240)
+            buildString {
+                append(app)
+                if (title.isNotEmpty()) append(": ").append(title)
+                if (text.isNotEmpty() && text != title) {
+                    if (title.isEmpty()) append(": ") else append(" — ")
+                    append(text)
+                }
+            }
+        }
+        return DeviceControlResult(true, "Notifications:\n" + lines.joinToString("\n") { "- $it" })
+    }
+
+    private fun media(action: MediaAction): DeviceControlResult {
+        val audio = context.getSystemService(AudioManager::class.java)
+        val keyCode = when (action) {
+            MediaAction.PLAY -> KeyEvent.KEYCODE_MEDIA_PLAY
+            MediaAction.PAUSE -> KeyEvent.KEYCODE_MEDIA_PAUSE
+            MediaAction.NEXT -> KeyEvent.KEYCODE_MEDIA_NEXT
+            MediaAction.PREVIOUS -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+        }
+        return runCatching {
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, keyCode))
+            audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, keyCode))
+            DeviceControlResult(true, "Media ${action.name.lowercase()}")
+        }.getOrElse { error ->
+            DeviceControlResult(false, "Media control failed: ${error.message ?: error.javaClass.simpleName}")
+        }
+    }
     private fun tapLabel(label: String): DeviceControlResult {
         val service = SageAccessibilityService.activeInstance()
             ?: return DeviceControlResult(false, "Accessibility control is not active")
