@@ -23,7 +23,8 @@ class SelfCareManagerTest {
         )
 
         assertEquals(setOf("core_empty", "wake_not_ready"), findings.map { it.code }.toSet())
-        assertTrue(store.get("selfcare:core_empty")!!.nextStep.contains("instead of fabricating"))
+        assertTrue(store.get("selfcare:core_empty")!!.nextStep.contains("Restore owner continuity"))
+        assertTrue(store.get("selfcare:core_empty")!!.nextStep.contains("never fabricate"))
         assertEquals(TaskState.WAITING, store.get("selfcare:wake_not_ready")!!.state)
     }
 
