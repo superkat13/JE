@@ -1,6 +1,7 @@
 package com.pineapple.sageos2.identity
 
 import com.pineapple.sageos2.apps.OwnerAppSnapshot
+import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.ConversationHistorySnapshot
 import com.pineapple.sageos2.memory.ConversationSpeaker
 import com.pineapple.sageos2.memory.TwinMemoryRecord
@@ -10,7 +11,7 @@ import java.util.Locale
 
 class TwinContextRenderer(
     private val maxMemories: Int = 64,
-    private val maxHistoryEntries: Int = 24
+    private val maxHistoryEntries: Int = 12
 ) {
     init { require(maxMemories >= 0); require(maxHistoryEntries >= 0) }
 
@@ -74,21 +75,25 @@ class TwinContextRenderer(
         }
         appendSection("WHAT WE'VE BEEN DOING", continuityLines)
 
-        val appLines = ownerApps.apps
-            .filter { it.enabled }
-            .sortedBy { it.displayName.lowercase() }
-            .map { app ->
-                buildString {
-                    append(app.displayName)
-                    if (app.aliases.isNotEmpty()) append(" (also: ${app.aliases.joinToString()})")
-                    if (app.purpose.isNotBlank()) append(" — ${app.purpose}")
-                    if (includeOperationalDetails) {
-                        append(" [${app.packageName}]")
-                        if (app.startupProcedure.isNotBlank()) append("; how we use it: ${app.startupProcedure}")
+        val requestTokens = searchableTokens(currentRequest)
+        val includeApps = includeOperationalDetails || wantsAppContext(ownerApps, requestTokens)
+        if (includeApps) {
+            val appLines = ownerApps.apps
+                .filter { it.enabled }
+                .sortedBy { it.displayName.lowercase() }
+                .map { app ->
+                    buildString {
+                        append(app.displayName)
+                        if (app.aliases.isNotEmpty()) append(" (also: ${app.aliases.joinToString()})")
+                        if (app.purpose.isNotBlank()) append(" — ${app.purpose}")
+                        if (includeOperationalDetails) {
+                            append(" [${app.packageName}]")
+                            if (app.startupProcedure.isNotBlank()) append("; how we use it: ${app.startupProcedure}")
+                        }
                     }
                 }
-            }
-        appendSection("APPS I KNOW", appLines)
+            appendSection("APPS I KNOW", appLines)
+        }
 
         if (mode.profileId != "sage" || mode.modeId != null) {
             appendSection(
@@ -97,7 +102,6 @@ class TwinContextRenderer(
             )
         }
 
-        val requestTokens = searchableTokens(currentRequest)
         val active = memory.records.filter { it.active }
             .sortedWith(
                 compareByDescending<TwinMemoryRecord> { relevanceScore(it, requestTokens) }
@@ -107,7 +111,7 @@ class TwinContextRenderer(
             .take(maxMemories)
         appendSection("THINGS I REMEMBER", active.map { it.value })
 
-        val recent = history.entries.takeLast(maxHistoryEntries)
+        val recent = compactConversation(history.entries).takeLast(maxHistoryEntries)
         appendSection(
             "RECENT CONVERSATION",
             recent.map { entry ->
@@ -139,6 +143,45 @@ class TwinContextRenderer(
         return if (markerIndex < 0) notes.trim() else notes.substring(0, markerIndex).trim()
     }
 
+    private fun wantsAppContext(ownerApps: OwnerAppSnapshot, requestTokens: Set<String>): Boolean {
+        if (requestTokens.any { it in APP_REQUEST_TOKENS }) return true
+        return ownerApps.apps.any { app ->
+            val appTokens = searchableTokens(
+                buildString {
+                    append(app.displayName)
+                    append(' ')
+                    append(app.aliases.joinToString(" "))
+                    append(' ')
+                    append(app.purpose)
+                }
+            )
+            appTokens.any { it in requestTokens }
+        }
+    }
+
+    private fun compactConversation(entries: List<ConversationEntry>): List<ConversationEntry> {
+        val compacted = mutableListOf<ConversationEntry>()
+        entries.forEach { entry ->
+            if (entry.speaker == ConversationSpeaker.SAGE && isRuntimeFailureCopy(entry.text)) {
+                return@forEach
+            }
+            val previous = compacted.lastOrNull()
+            val sameAsPrevious = previous != null &&
+                previous.speaker == entry.speaker &&
+                normalizeConversationText(previous.text) == normalizeConversationText(entry.text)
+            if (sameAsPrevious) compacted[compacted.lastIndex] = entry else compacted += entry
+        }
+        return compacted
+    }
+
+    private fun isRuntimeFailureCopy(text: String): Boolean {
+        val normalized = normalizeConversationText(text)
+        return RUNTIME_FAILURE_PREFIXES.any { normalized.startsWith(it) }
+    }
+
+    private fun normalizeConversationText(value: String): String =
+        value.lowercase(Locale.US).trim().replace(Regex("\\s+"), " ")
+
     private fun relevanceScore(record: TwinMemoryRecord, requestTokens: Set<String>): Int {
         if (requestTokens.isEmpty()) return 0
         val memoryTokens = searchableTokens(record.key + " " + record.value)
@@ -155,6 +198,13 @@ class TwinContextRenderer(
         private const val LEGACY_OWNER_CORE_MARKER = "Imported Sage 1.33.3 owner instructions"
         // Matches the last-good Sage Core contribution limit; the complete source remains stored.
         private const val MAX_LEGACY_OWNER_CORE_PROMPT_CHARACTERS = 2_400
+        private val APP_REQUEST_TOKENS = setOf("app", "apps", "application", "applications")
+        private val RUNTIME_FAILURE_PREFIXES = listOf(
+            "i was taking too long, so i stopped this turn",
+            "i couldn't finish that reply, but i'm still here",
+            "i couldn't finish getting ready to answer",
+            "i hit a brain problem, but i'm still here"
+        )
         private val SEARCHABLE_TOKEN = Regex("[a-z0-9]+")
     }
 }

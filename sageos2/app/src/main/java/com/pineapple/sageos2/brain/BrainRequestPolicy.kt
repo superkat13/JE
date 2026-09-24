@@ -1,9 +1,12 @@
 package com.pineapple.sageos2.brain
 
 /**
- * Keeps each local turn inside limits already exercised by the inherited Sage tablet Brain.
- * Ordinary conversation is Sage plus twin context only. Engineering context is added only for
- * a turn that is actually using a tool or resuming recoverable work.
+ * Keeps each local turn inside limits exercised by the inherited Sage tablet Brain.
+ * Candidate 208 measured prompt prefill at about 7.75 tokens/second on the L10_T05, so the
+ * historical 3,600-4,800 character ceilings are preserved only as an upper compatibility bound
+ * in BrainPromptBudget. Runtime profiles use smaller working sets so Sage can reach a first token
+ * before the absolute turn watchdog while still keeping identity and relevant continuity.
+ * Engineering context is added only for a turn that actually needs it.
  */
 object BrainRequestPolicy {
     const val SELF_CHECK_PROMPT = "Reply with exactly: Brain online."
@@ -55,7 +58,7 @@ object BrainRequestPolicy {
         if (conversationalCue.containsMatchIn(cleaned) || wantsTaskContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-                combinedCharacterBudget = 4_800,
+                combinedCharacterBudget = 2_000,
                 outputTokens = 24,
                 deterministic = false,
                 includeTaskContext = wantsTaskContext,
@@ -66,7 +69,7 @@ object BrainRequestPolicy {
         if (wantsToolContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-                combinedCharacterBudget = 3_900,
+                combinedCharacterBudget = 2_000,
                 outputTokens = 20,
                 deterministic = false,
                 includeToolContext = true
@@ -75,7 +78,7 @@ object BrainRequestPolicy {
 
         return Profile(
             systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-            combinedCharacterBudget = 3_600,
+            combinedCharacterBudget = 1_600,
             outputTokens = 16,
             deterministic = true
         )
