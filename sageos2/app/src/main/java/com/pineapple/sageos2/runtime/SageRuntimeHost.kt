@@ -2,6 +2,8 @@ package com.pineapple.sageos2.runtime
 
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
@@ -27,6 +29,8 @@ import com.pineapple.sageos2.learning.SharedPreferencesLearnedPhraseStore
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
+import com.pineapple.sageos2.maintenance.SelfCareManager
+import com.pineapple.sageos2.maintenance.SelfCareSnapshot
 import com.pineapple.sageos2.migration.LegacyPersonalityContinuityMigration
 import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
@@ -115,6 +119,16 @@ class SageRuntimeHost private constructor(context: Context) {
     private val fastActions = AndroidFastActionEngine(controller)
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
     private val personalCommands = SagePersonalCommandEngine(memory, learnedPhrases, modes)
+    private val selfCare = SelfCareManager(tasks)
+    private val selfCareHandler = Handler(Looper.getMainLooper())
+    private val selfCareRunnable = object : Runnable {
+        override fun run() {
+            if (!started.get()) return
+            runCatching { runSelfCareCheck() }
+                .onFailure { traces.record("self_care", "check failed: ${it.message ?: it::class.java.simpleName}") }
+            selfCareHandler.postDelayed(this, SELF_CARE_INTERVAL_MS)
+        }
+    }
 
     val runtime = SageRuntime(
         coordinator = SageTurnCoordinator(com.pineapple.sageos2.core.SageCommandRouter(personalCommands)),
@@ -152,7 +166,30 @@ class SageRuntimeHost private constructor(context: Context) {
                 traces.record("recovery", "recoverable task=${task.taskId} next=${task.nextStep}")
             }
             runtime.start()
+            selfCareHandler.removeCallbacks(selfCareRunnable)
+            selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
         }
+    }
+
+    private fun runSelfCareCheck() {
+        val brainHealth = brainStatus()
+        val wakeHealth = wakeStatus()
+        val findings = selfCare.reconcile(
+            SelfCareSnapshot(
+                brainReady = brainHealth.ready,
+                brainDetail = brainHealth.detail,
+                wakeReady = wakeHealth.ready,
+                wakeDetail = wakeHealth.detail,
+                coreRevision = core.current().revision,
+                legacyCorePresent = legacyMigrationReport.legacyCorePresent,
+                migrationErrors = legacyMigrationReport.errors
+            )
+        )
+        traces.record(
+            "self_care",
+            if (findings.isEmpty()) "healthy; no unresolved self-care findings"
+            else "findings=${findings.joinToString(",") { it.code }}"
+        )
     }
 
     fun submitText(text: String) { start(); runtime.submit(SageEvent.TextSubmitted(text)) }
@@ -256,6 +293,8 @@ class SageRuntimeHost private constructor(context: Context) {
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }
 
     companion object {
+        private const val SELF_CARE_INITIAL_DELAY_MS = 8_000L
+        private const val SELF_CARE_INTERVAL_MS = 5L * 60L * 1000L
         @Volatile private var instance: SageRuntimeHost? = null
         fun get(context: Context): SageRuntimeHost = instance ?: synchronized(this) {
             instance ?: SageRuntimeHost(context).also { instance = it }
