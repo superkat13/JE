@@ -16,6 +16,8 @@ import com.pineapple.sageos2.brain.LocalNativeBrainEngine
 import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.capability.Capability
 import com.pineapple.sageos2.capability.CapabilityStatus
+import com.pineapple.sageos2.continuity.OwnerContinuityImporter
+import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
@@ -75,6 +77,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val rootBroker = SocketRootBrokerClient()
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
+    private val ownerContinuityImporter = OwnerContinuityImporter(appContext, core, memory)
 
     @Volatile private var legacyMigrationReport = runLegacyMigration()
     @Volatile private var legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
@@ -209,6 +212,17 @@ class SageRuntimeHost private constructor(context: Context) {
     fun capabilityStatus() = capabilities.snapshot()
     fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
+
+    fun importOwnerContinuity(raw: String): OwnerContinuityImportResult {
+        val result = ownerContinuityImporter.import(raw)
+        traces.record(
+            "owner_continuity",
+            "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
+        )
+        runCatching { runSelfCareCheck() }
+            .onFailure { traces.record("self_care", "post-import check failed: ${it.message ?: it::class.java.simpleName}") }
+        return result
+    }
 
     fun forgetLearnedPhrase(phrase: String): Boolean {
         val normalized = SharedPreferencesLearnedPhraseStore.normalize(phrase)
