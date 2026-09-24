@@ -231,6 +231,7 @@ class SageRuntimeHost private constructor(context: Context) {
                 modeId = mode.modeId,
                 ownerAppsRevision = apps.revision,
                 ownerAppsCount = apps.apps.size,
+                continuityMigration = legacyMigrationReport.summary(),
                 recoverableTasks = recoverableTasks().map { task ->
                     DiagnosticTaskSummary(task.taskId, task.title, task.state.name, task.nextStep)
                 },
