@@ -309,6 +309,8 @@ class SageRuntime(
 
     private fun checkpointTurnStarted(turnId: Long, ownerPrompt: String) {
         val store = taskContinuity ?: return
+        val id = runtimeTaskId(turnId)
+        TaskRecoveryManager(store).supersedeOlderRuntimeTasks(id)
         val cleanPrompt = ownerPrompt.replace(Regex("\\s+"), " ").trim().take(4_000)
         store.upsert(
             TaskCheckpoint(
