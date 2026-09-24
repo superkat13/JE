@@ -39,6 +39,10 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private static final long COOLDOWN_MS = 60_000L;
     private static volatile long unhealthyUntilMs;
     private static volatile String lastFailure = "";
+    private static final Object RECOGNIZER_LOCK = new Object();
+    private static volatile OnlineRecognizer sharedRecognizer;
+    private static volatile boolean recognizerWarming;
+    private static volatile long lastReadyLatencyMs = -1L;
 
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile Thread worker;
@@ -48,6 +52,45 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     public static ComponentName primaryComponent(Context context) {
         return available(context)
                 ? new ComponentName(context, SageSherpaRecognitionService.class) : null;
+    }
+
+    /**
+     * Load the command recognizer before the owner needs it. The verified model is large enough on
+     * the L10_T05 that constructing it on the first Talk press can consume most of an utterance.
+     * Keeping one recognizer in-process lets each turn create only a cheap stream.
+     */
+    public static void prewarm(Context context) {
+        if (context == null || !available(context) || sharedRecognizer != null || recognizerWarming) return;
+        Context app = context.getApplicationContext();
+        synchronized (RECOGNIZER_LOCK) {
+            if (sharedRecognizer != null || recognizerWarming) return;
+            recognizerWarming = true;
+        }
+        new Thread(() -> {
+            long started = System.currentTimeMillis();
+            try {
+                obtainRecognizer(app);
+                lastReadyLatencyMs = System.currentTimeMillis() - started;
+                lastFailure = "";
+            } catch (Throwable problem) {
+                markUnhealthy("prewarm:" + safeProblem(problem));
+            } finally {
+                recognizerWarming = false;
+            }
+        }, "SageSherpaPrewarm").start();
+    }
+
+    public static boolean recognizerWarm() {
+        return sharedRecognizer != null;
+    }
+
+    public static String runtimeDetail() {
+        if (sharedRecognizer != null) {
+            return "recognizer warm" + (lastReadyLatencyMs >= 0L ? " in " + lastReadyLatencyMs + "ms" : "");
+        }
+        if (recognizerWarming) return "recognizer warming";
+        if (!lastFailure.isEmpty()) return "recognizer not warm: " + lastFailure;
+        return "recognizer not warm";
     }
 
     public static boolean available(Context context) {
@@ -105,14 +148,13 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private void runRecognition(Callback callback) {
         OnlineRecognizer recognizer = null;
         OnlineStream stream = null;
-        long started = System.currentTimeMillis();
         try {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED)
                 throw new SecurityException("RECORD_AUDIO was revoked before worker start");
             if (!SageSpeechBackendState.sherpaReady(this))
                 throw new IllegalStateException("verified sherpa engine/model became unavailable");
-            recognizer = buildRecognizer();
+            recognizer = obtainRecognizer(this);
             stream = recognizer.createStream("");
             AudioRecord audio = createMicrophone();
             microphone = audio;
@@ -122,6 +164,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             if (audio.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                 throw new IllegalStateException("microphone did not enter recording state");
 
+            long started = System.currentTimeMillis();
             Bundle ready = new Bundle();
             ready.putString("sage_recognizer_backend", "sherpa-onnx");
             emitReady(callback, ready);
@@ -185,14 +228,25 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         } finally {
             stopMicrophone();
             if (stream != null) try { stream.release(); } catch (Throwable ignored) { }
-            if (recognizer != null) try { recognizer.release(); } catch (Throwable ignored) { }
             if (activeCallback == callback) activeCallback = null;
             worker = null;
         }
     }
 
-    private OnlineRecognizer buildRecognizer() {
-        File dir = SageSpeechBackendState.modelDirectory(this);
+    private static OnlineRecognizer obtainRecognizer(Context context) {
+        OnlineRecognizer existing = sharedRecognizer;
+        if (existing != null) return existing;
+        synchronized (RECOGNIZER_LOCK) {
+            existing = sharedRecognizer;
+            if (existing != null) return existing;
+            OnlineRecognizer built = buildRecognizer(context);
+            sharedRecognizer = built;
+            return built;
+        }
+    }
+
+    private static OnlineRecognizer buildRecognizer(Context context) {
+        File dir = SageSpeechBackendState.modelDirectory(context);
         OnlineModelConfig model = OnlineRecognizerKt.getModelConfig(10);
         if (model == null) model = new OnlineModelConfig();
         OnlineTransducerModelConfig transducer = model.getTransducer();
