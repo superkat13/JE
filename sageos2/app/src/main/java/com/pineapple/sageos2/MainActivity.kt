@@ -79,6 +79,28 @@ open class MainActivity : Activity() {
     private var currentPanel = Panel.CHAT
     private val uiHandler = Handler(Looper.getMainLooper())
     private var pulseFrame = 0
+    private var pendingTalkStart = false
+    private var talkWarmupStartedAtMs = 0L
+    private val talkWarmupPoll = object : Runnable {
+        override fun run() {
+            if (!pendingTalkStart) return
+            val localReady = SageSpeechBackendState.sherpaReady(this@MainActivity)
+            val warm = SageSherpaRecognitionService.recognizerWarm()
+            val expired = System.currentTimeMillis() - talkWarmupStartedAtMs >= TALK_WARMUP_MAX_MS
+            if (!localReady || warm || expired) {
+                pendingTalkStart = false
+                host.pushToTalk()
+                renderLiveState()
+            } else {
+                status.text = "Getting voice ready"
+                chatActivity?.apply {
+                    text = "I'm getting my ears ready"
+                    visibility = View.VISIBLE
+                }
+                uiHandler.postDelayed(this, TALK_WARMUP_POLL_MS)
+            }
+        }
+    }
     private val pulse = object : Runnable {
         override fun run() {
             if (currentPanel != Panel.CHAT || chatActivity?.visibility != View.VISIBLE) return
@@ -136,6 +158,8 @@ open class MainActivity : Activity() {
     }
 
     override fun onStop() {
+        pendingTalkStart = false
+        uiHandler.removeCallbacks(talkWarmupPoll)
         uiHandler.removeCallbacks(pulse)
         host.removeListener(listener)
         super.onStop()
@@ -210,6 +234,10 @@ open class MainActivity : Activity() {
     }
 
     private fun showPanel(panel: Panel) {
+        if (panel != Panel.CHAT && pendingTalkStart) {
+            pendingTalkStart = false
+            uiHandler.removeCallbacks(talkWarmupPoll)
+        }
         currentPanel = panel
         conversation = null
         chatScroll = null
@@ -296,10 +324,7 @@ open class MainActivity : Activity() {
             text = "Talk"
             contentDescription = "Talk to Sage"
             styleChatButton(primary = false)
-            setOnClickListener {
-                host.pushToTalk()
-                renderLiveState()
-            }
+            setOnClickListener { beginTalk() }
         }, LinearLayout.LayoutParams(0, dp(48), 1f).apply { marginEnd = dp(8) })
         controls.addView(Button(this).apply {
             text = "Send"
@@ -1054,6 +1079,26 @@ open class MainActivity : Activity() {
                 uiHandler.postDelayed(pulse, 550L)
             }
         }
+    }
+
+    private fun beginTalk() {
+        if (pendingTalkStart) return
+        val localReady = SageSpeechBackendState.sherpaReady(this)
+        if (localReady && !SageSherpaRecognitionService.recognizerWarm()) {
+            pendingTalkStart = true
+            talkWarmupStartedAtMs = System.currentTimeMillis()
+            SageSherpaRecognitionService.prewarm(this)
+            status.text = "Getting voice ready"
+            chatActivity?.apply {
+                text = "I'm getting my ears ready"
+                visibility = View.VISIBLE
+            }
+            uiHandler.removeCallbacks(talkWarmupPoll)
+            uiHandler.post(talkWarmupPoll)
+            return
+        }
+        host.pushToTalk()
+        renderLiveState()
     }
 
     private fun submitChatInput() {
