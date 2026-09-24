@@ -239,8 +239,10 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         synchronized (RECOGNIZER_LOCK) {
             existing = sharedRecognizer;
             if (existing != null) return existing;
+            long started = System.currentTimeMillis();
             OnlineRecognizer built = buildRecognizer(context);
             sharedRecognizer = built;
+            lastReadyLatencyMs = System.currentTimeMillis() - started;
             return built;
         }
     }
