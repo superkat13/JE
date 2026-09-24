@@ -2,6 +2,7 @@ package com.pineapple.sage
 
 import android.accessibilityservice.AccessibilityService
 import android.app.Activity
+import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.Service
@@ -33,7 +34,52 @@ class SageAccessibilityService : AccessibilityService() {
     }
 }
 
-class SageNotificationListener : NotificationListenerService()
+data class SageNotificationSummary(
+    val packageName: String,
+    val title: String,
+    val text: String,
+    val postedAtMs: Long
+)
+
+class SageNotificationListener : NotificationListenerService() {
+    override fun onListenerConnected() {
+        super.onListenerConnected()
+        current = WeakReference(this)
+    }
+
+    override fun onListenerDisconnected() {
+        if (current?.get() === this) current = null
+        super.onListenerDisconnected()
+    }
+
+    override fun onDestroy() {
+        if (current?.get() === this) current = null
+        super.onDestroy()
+    }
+
+    fun snapshot(limit: Int = 8): List<SageNotificationSummary> = runCatching {
+        activeNotifications.orEmpty()
+            .asSequence()
+            .filter { it.packageName != packageName }
+            .sortedByDescending { it.postTime }
+            .take(limit.coerceIn(1, 20))
+            .map { item ->
+                val extras = item.notification.extras
+                SageNotificationSummary(
+                    packageName = item.packageName.orEmpty(),
+                    title = extras.getCharSequence(Notification.EXTRA_TITLE)?.toString().orEmpty().trim(),
+                    text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString().orEmpty().trim(),
+                    postedAtMs = item.postTime
+                )
+            }
+            .toList()
+    }.getOrDefault(emptyList())
+
+    companion object {
+        @Volatile private var current: WeakReference<SageNotificationListener>? = null
+        fun activeInstance(): SageNotificationListener? = current?.get()
+    }
+}
 
 class SageBootReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {

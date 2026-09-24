@@ -72,10 +72,8 @@ class SageCommandRouterTest {
         listOf(
             "Close YouTube",
             "Set timer for ten minutes",
-            "Set alarm for 7 AM",
-            "Take screenshot",
-            "Turn on Wi-Fi",
-            "Tap Submit"
+            "Set alarm for seven",
+            "Turn on Wi-Fi"
         ).forEach { request ->
             val decision = router.route(request)
             assertEquals(request, SageRoute.DEEP_REASONING, decision.route)
@@ -92,6 +90,13 @@ class SageCommandRouterTest {
             "show recents",
             "show notifications",
             "quick settings",
+            "set a timer for 10 minutes",
+            "set alarm for 7:30 pm",
+            "take screenshot",
+            "read notifications",
+            "pause music",
+            "next track",
+            "tap Submit",
             "scroll down",
             "swipe left",
             "tap 420, 815",

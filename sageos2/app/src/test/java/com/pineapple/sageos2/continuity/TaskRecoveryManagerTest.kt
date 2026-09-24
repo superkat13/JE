@@ -44,6 +44,31 @@ class TaskRecoveryManagerTest {
     }
 
     @Test
+    fun newerOwnerTurnSupersedesOldRecoveredRuntimeTurnsWithoutDeletingThem() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:1", "Old question", TaskState.WAITING, "Recovered old turn.", "Continue safely.", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND)
+        ))
+        store.upsert(TaskCheckpoint(
+            "workflow:one", "Workflow", TaskState.WAITING, "waiting", "next", 20
+        ))
+
+        val superseded = TaskRecoveryManager(store).supersedeOlderRuntimeTasks(
+            keepTaskId = "runtime:turn:2",
+            nowMs = 50
+        )
+
+        assertEquals(1, superseded.size)
+        val old = store.get("runtime:turn:1")!!
+        assertEquals(TaskState.COMPLETED, old.state)
+        assertEquals("true", old.metadata["superseded"])
+        assertEquals("runtime:turn:2", old.metadata["supersededBy"])
+        assertEquals(TaskState.WAITING, store.get("workflow:one")!!.state)
+        assertTrue(store.recent(10).any { it.taskId == "runtime:turn:1" })
+    }
+
+    @Test
     fun contextMakesRecoveredWorkVisibleButNotAnExecutionTrigger() {
         val text = TaskContinuityContextRenderer.render(
             listOf(

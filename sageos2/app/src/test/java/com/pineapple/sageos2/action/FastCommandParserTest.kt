@@ -24,6 +24,27 @@ class FastCommandParserTest {
         assertEquals(FastCommand.Volume(VolumeDirection.UP), parser.parse("volume up"))
         assertEquals(FastCommand.Volume(VolumeDirection.MUTE), parser.parse("mute"))
     }
+    @Test fun parsesTimersAlarmsAndScreenshot() {
+        assertEquals(FastCommand.SetTimer(600), parser.parse("set a timer for 10 minutes"))
+        assertEquals(FastCommand.SetTimer(30), parser.parse("timer for 30 seconds"))
+        assertEquals(FastCommand.SetAlarm(7, 0), parser.parse("set an alarm for 7 am"))
+        assertEquals(FastCommand.SetAlarm(19, 30), parser.parse("set alarm for 7:30 pm"))
+        assertEquals(FastCommand.TakeScreenshot, parser.parse("take a screenshot"))
+    }
+
+    @Test fun parsesSemanticTapWithoutCapturingCoordinateTap() {
+        assertEquals(FastCommand.TapLabel("submit"), parser.parse("tap Submit"))
+        assertEquals(FastCommand.TapLabel("continue"), parser.parse("press Continue"))
+        assertEquals(FastCommand.Tap(420f, 815f), parser.parse("tap 420, 815"))
+    }
+    @Test fun parsesNotificationSummaryAndMediaControls() {
+        assertEquals(FastCommand.ReadNotifications, parser.parse("read notifications"))
+        assertEquals(FastCommand.ReadNotifications, parser.parse("what are my notifications"))
+        assertEquals(FastCommand.Media(MediaAction.PLAY), parser.parse("play music"))
+        assertEquals(FastCommand.Media(MediaAction.PAUSE), parser.parse("pause media"))
+        assertEquals(FastCommand.Media(MediaAction.NEXT), parser.parse("next track"))
+        assertEquals(FastCommand.Media(MediaAction.PREVIOUS), parser.parse("previous song"))
+    }
     @Test fun parsesDiagnosticShareWithoutBrain() {
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share diagnostic report"))
         assertEquals(FastCommand.ShareDiagnosticReport, parser.parse("share Sage diagnostic report"))

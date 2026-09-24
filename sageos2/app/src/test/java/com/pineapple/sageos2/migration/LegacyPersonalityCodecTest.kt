@@ -14,6 +14,18 @@ class LegacyPersonalityCodecTest {
     }
 
     @Test
+    fun reportShowsWhetherLegacyPersonalitySourceStillExists() {
+        val report = LegacyPersonalityMigrationReport(
+            alreadyCompleted = true,
+            completed = true,
+            personalityRepliesImported = 0,
+            legacyRepliesPresent = true
+        )
+        assertEquals(true, report.legacyRepliesPresent)
+        assertEquals(true, report.summary().contains("source_replies=true"))
+    }
+
+    @Test
     fun rejectsMalformedPersonalityReply() {
         assertNull(LegacyPersonalityCodec.parse("not-a-pair"))
         assertNull(LegacyPersonalityCodec.parse("."))

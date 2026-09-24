@@ -20,6 +20,7 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.speech.SpeechRecognizer
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
@@ -32,6 +33,7 @@ import android.widget.SeekBar
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sage.SageVoiceService
 import com.pineapple.sageos2.appearance.SageAppearanceMode
 import com.pineapple.sageos2.appearance.SageAppearancePreferences
@@ -495,8 +497,16 @@ open class MainActivity : Activity() {
         content.addView(sectionTitle("Local replies & device access"))
         val brain = host.brainStatus()
         val wake = host.wakeStatus()
+        val localSpeechReady = SageSpeechBackendState.sherpaReady(this)
+        val localSpeechDetail = if (localSpeechReady) {
+            "READY"
+        } else {
+            SageSpeechBackendState.readinessDetail(this) +
+                "; Android fallback=" + SpeechRecognizer.isRecognitionAvailable(this)
+        }
         content.addView(info("Brain", if (brain.ready) "READY" else brain.detail))
         content.addView(info("Offline wake", if (wake.ready) "READY" else wake.detail))
+        content.addView(info("Local command speech", localSpeechDetail))
         content.addView(info("Runtime state", host.snapshot().state.toString()))
         content.addView(Button(this).apply {
             text = "Open local Brain model"

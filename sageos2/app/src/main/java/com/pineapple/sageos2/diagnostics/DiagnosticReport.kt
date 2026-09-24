@@ -21,6 +21,8 @@ data class DiagnosticReportSnapshot(
     val wakeReady: Boolean,
     val wakeEngine: String,
     val wakeDetail: String,
+    val commandSpeechReady: Boolean = false,
+    val commandSpeechDetail: String = "",
     val capabilities: Map<String, String>,
     val sageCoreRevision: Long,
     val profileId: String,
@@ -52,6 +54,9 @@ object DiagnosticReportRenderer {
             appendLine("Brain $name: ${oneLine(value)}")
         }
         appendLine("Wake: ${if (snapshot.wakeReady) "ready" else "not ready"} • ${oneLine(snapshot.wakeEngine)} • ${oneLine(snapshot.wakeDetail)}")
+        if (snapshot.commandSpeechDetail.isNotBlank()) {
+            appendLine("Command speech: ${if (snapshot.commandSpeechReady) "ready" else "fallback"} • ${oneLine(snapshot.commandSpeechDetail)}")
+        }
         appendLine()
         appendLine("Capabilities")
         if (snapshot.capabilities.isEmpty()) appendLine("(none reported)")
