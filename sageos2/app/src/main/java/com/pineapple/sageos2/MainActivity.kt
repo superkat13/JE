@@ -489,7 +489,58 @@ open class MainActivity : Activity() {
                 Toast.makeText(this@MainActivity, "Sage Core copied", Toast.LENGTH_SHORT).show()
             }
         })
+        form.addView(Button(this).apply {
+            text = "Restore owner continuity"
+            isAllCaps = false
+            setOnClickListener { showOwnerContinuityImport() }
+        })
         body.addView(scroll(form))
+    }
+
+    private fun showOwnerContinuityImport() {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), 0, dp(18), 0)
+        }
+        form.addView(TextView(this).apply {
+            text = "Paste an owner-reviewed Sage continuity package. Import only adds or merges identity, projects, and memories. It does not delete existing history, and repeated imports of the same package are ignored."
+            textSize = 14f
+            setPadding(0, dp(4), 0, dp(10))
+        })
+        val payload = editor("Owner continuity package (JSON)", "", 14)
+        form.addView(payload)
+
+        AlertDialog.Builder(this)
+            .setTitle("Restore owner continuity")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Import", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val raw = payload.text.toString().trim()
+                        if (raw.isEmpty()) {
+                            Toast.makeText(this, "Paste the continuity package first", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        runCatching { host.importOwnerContinuity(raw) }
+                            .onSuccess { result ->
+                                Toast.makeText(this, result.summary(), Toast.LENGTH_LONG).show()
+                                dialog.dismiss()
+                                showPanel(Panel.CORE)
+                            }
+                            .onFailure { error ->
+                                Toast.makeText(
+                                    this,
+                                    "Continuity import rejected: ${error.message ?: error::class.java.simpleName}",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                    }
+                }
+                dialog.show()
+            }
     }
 
     private fun showHealth() {
