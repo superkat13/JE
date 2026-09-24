@@ -64,7 +64,7 @@ class FastCommandParser {
             val seconds = amount.toLong() * multiplier.toLong()
             if (seconds in 1..86_400) return FastCommand.SetTimer(seconds.toInt())
         }
-        Regex("set (?:an )?alarm for (\\d{1,2})(?::(\\d{2}))? ?(am|pm)").matchEntire(value)?.let {
+        Regex("set (?:an )?alarm for (\\d{1,2})(?:[: ](\\d{2}))? ?(am|pm)").matchEntire(value)?.let {
             val rawHour = it.groupValues[1].toIntOrNull() ?: return@let
             val minute = it.groupValues[2].takeIf(String::isNotEmpty)?.toIntOrNull() ?: 0
             if (rawHour in 1..12 && minute in 0..59) {
