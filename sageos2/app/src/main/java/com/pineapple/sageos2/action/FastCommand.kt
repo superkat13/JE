@@ -12,6 +12,8 @@ sealed interface FastCommand {
     data class SetTimer(val seconds: Int) : FastCommand
     data class SetAlarm(val hour24: Int, val minute: Int) : FastCommand
     data object TakeScreenshot : FastCommand
+    data object ReadNotifications : FastCommand
+    data class Media(val action: MediaAction) : FastCommand
     data class TapLabel(val label: String) : FastCommand
     data class Scroll(val direction: Direction) : FastCommand
     data class Tap(val x: Float, val y: Float) : FastCommand
@@ -21,6 +23,7 @@ sealed interface FastCommand {
 
 enum class Direction { UP, DOWN, LEFT, RIGHT }
 enum class VolumeDirection { UP, DOWN, MUTE, UNMUTE }
+enum class MediaAction { PLAY, PAUSE, NEXT, PREVIOUS }
 
 class FastCommandParser {
     fun parse(raw: String): FastCommand? {
@@ -40,6 +43,15 @@ class FastCommandParser {
         }
         if (value == "take screenshot" || value == "take a screenshot" || value == "screenshot") {
             return FastCommand.TakeScreenshot
+        }
+        if (value == "read notifications" || value == "what are my notifications" || value == "notification summary") {
+            return FastCommand.ReadNotifications
+        }
+        when (value) {
+            "play music", "resume music", "resume media" -> return FastCommand.Media(MediaAction.PLAY)
+            "pause music", "pause media" -> return FastCommand.Media(MediaAction.PAUSE)
+            "next track", "skip track", "skip song" -> return FastCommand.Media(MediaAction.NEXT)
+            "previous track", "previous song", "go back a track" -> return FastCommand.Media(MediaAction.PREVIOUS)
         }
         Regex("(?:set )?(?:a )?timer for (\\d+) (seconds?|secs?|minutes?|mins?|hours?|hrs?)").matchEntire(value)?.let {
             val amount = it.groupValues[1].toIntOrNull() ?: return@let
