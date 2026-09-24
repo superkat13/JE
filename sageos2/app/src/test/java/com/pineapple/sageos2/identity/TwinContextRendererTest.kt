@@ -24,7 +24,14 @@ class TwinContextRendererTest {
         val memory = TwinMemorySnapshot(1, listOf(TwinMemoryRecord("m1", TwinMemorySubject.OWNER, "style", "direct", TwinMemorySource.EXPLICIT_OWNER, 1.0, 1, 1)))
         val history = ConversationHistorySnapshot(1, listOf(ConversationEntry("c1", 1, ConversationSpeaker.OWNER, ConversationInput.TEXT, "keep moving", 1)))
         val apps = OwnerAppSnapshot(1, listOf(OwnerAppRecord("com.example.browser", "Firefox", listOf("browser"), "web")))
-        val rendered = TwinContextRenderer().render(core, memory, history, apps, SageModeSnapshot("sage_glitch", "red_queen"))
+        val rendered = TwinContextRenderer().render(
+            core,
+            memory,
+            history,
+            apps,
+            SageModeSnapshot("sage_glitch", "red_queen"),
+            currentRequest = "What apps do you know?"
+        )
 
         assertTrue(rendered.contains("# WHO I AM"))
         assertTrue(rendered.contains("virtual twin"))
@@ -70,6 +77,7 @@ class TwinContextRendererTest {
             apps,
             SageModeSnapshot()
         )
+        assertFalse(ordinary.contains("Firefox"))
         assertFalse(ordinary.contains("com.example.browser"))
         assertFalse(ordinary.contains("root.exec"))
         assertFalse(ordinary.contains("broker unavailable"))
@@ -87,6 +95,50 @@ class TwinContextRendererTest {
         assertTrue(operational.contains("root.exec"))
         assertTrue(operational.contains("broker unavailable"))
         assertTrue(operational.contains("tap private profile"))
+    }
+
+    @Test fun directlyMentionedAppIsAvailableWithoutDumpingOperationalDetails() {
+        val apps = OwnerAppSnapshot(
+            1,
+            listOf(OwnerAppRecord("org.mozilla.firefox", "Firefox", listOf("browser"), "web"))
+        )
+        val rendered = TwinContextRenderer().render(
+            EmptySageCoreProvider.current(),
+            TwinMemorySnapshot(0, emptyList()),
+            ConversationHistorySnapshot(0, emptyList()),
+            apps,
+            SageModeSnapshot(),
+            currentRequest = "What do you know about Firefox?"
+        )
+
+        assertTrue(rendered.contains("Firefox"))
+        assertTrue(rendered.contains("browser"))
+        assertFalse(rendered.contains("org.mozilla.firefox"))
+    }
+
+    @Test fun runtimeFailureCopyAndRetrySpamAreNotFedBackToTheBrain() {
+        val failure = "I was taking too long, so I stopped this turn instead of leaving chat stuck. Your message is saved—try it once more."
+        val history = ConversationHistorySnapshot(
+            1,
+            listOf(
+                ConversationEntry("o1", 1, ConversationSpeaker.OWNER, ConversationInput.TEXT, "Who are you?", 1),
+                ConversationEntry("s1", 1, ConversationSpeaker.SAGE, ConversationInput.TEXT, failure, 2),
+                ConversationEntry("o2", 2, ConversationSpeaker.OWNER, ConversationInput.TEXT, "Who are you?", 3),
+                ConversationEntry("s2", 2, ConversationSpeaker.SAGE, ConversationInput.TEXT, failure, 4),
+                ConversationEntry("o3", 3, ConversationSpeaker.OWNER, ConversationInput.TEXT, "Who are you?", 5)
+            )
+        )
+        val rendered = TwinContextRenderer().render(
+            EmptySageCoreProvider.current(),
+            TwinMemorySnapshot(0, emptyList()),
+            history,
+            OwnerAppSnapshot(0, emptyList()),
+            SageModeSnapshot(),
+            currentRequest = "Who are you?"
+        )
+
+        assertFalse(rendered.contains("taking too long"))
+        assertEquals(1, Regex("Owner: Who are you\\?").findAll(rendered).count())
     }
 
     @Test fun migratedOwnerCoreIsEarlyExplicitAndNotDuplicatedAsANote() {
