@@ -25,9 +25,12 @@ class LegacyPersonalityContinuityMigration(
 
     @Synchronized
     fun runIfNeeded(nowMs: Long = System.currentTimeMillis()): LegacyPersonalityMigrationReport {
-        if (marker.getBoolean(KEY_COMPLETE, false)) {
-            return LegacyPersonalityMigrationReport(alreadyCompleted = true)
-        }
+        val alreadyCompleted = marker.getBoolean(KEY_COMPLETE, false)
+        val legacyState = appContext.getSharedPreferences(LEGACY_STATE_PREFS, Context.MODE_PRIVATE)
+        val legacyRepliesPresent = legacyState
+            .getStringSet(LEGACY_EASTER_EGGS, emptySet())
+            .orEmpty()
+            .isNotEmpty()
 
         val primary = appContext.getSharedPreferences(PRIMARY_MIGRATION_PREFS, Context.MODE_PRIVATE)
         if (!primary.getBoolean(PRIMARY_KEY_COMPLETE, false)) {
@@ -56,10 +59,11 @@ class LegacyPersonalityContinuityMigration(
         }
 
         return LegacyPersonalityMigrationReport(
-            alreadyCompleted = false,
+            alreadyCompleted = alreadyCompleted,
             completed = completed,
             temporaryContextDeactivated = temporaryContextDeactivated,
             personalityRepliesImported = personalityRepliesImported,
+            legacyRepliesPresent = legacyRepliesPresent,
             errors = errors
         )
     }
@@ -126,12 +130,14 @@ data class LegacyPersonalityMigrationReport(
     val completed: Boolean = alreadyCompleted,
     val temporaryContextDeactivated: Int = 0,
     val personalityRepliesImported: Int = 0,
+    val legacyRepliesPresent: Boolean = false,
     val errors: List<String> = emptyList()
 ) {
     fun summary(): String = buildString {
         append(if (alreadyCompleted) "legacy personality migration already complete" else if (completed) "legacy personality migration complete" else "legacy personality migration incomplete")
         append("; temp_context_deactivated=").append(temporaryContextDeactivated)
         append(" personality_replies=").append(personalityRepliesImported)
+        append(" source_replies=").append(legacyRepliesPresent)
         if (errors.isNotEmpty()) append(" errors=").append(errors.joinToString(" | "))
     }
 }
