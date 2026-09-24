@@ -202,7 +202,7 @@ class OwnerContinuityImporter(
     private fun sha256(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))
         return buildString(digest.size * 2) {
-            digest.forEach { byte -> append(String.format(Locale.US, "%02x", byte)) }
+            digest.forEach { byte -> append(String.format(Locale.US, "%02x", byte.toInt() and 0xff)) }
         }
     }
 
