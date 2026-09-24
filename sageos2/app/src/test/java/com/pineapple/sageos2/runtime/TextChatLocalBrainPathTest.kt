@@ -61,7 +61,7 @@ class TextChatLocalBrainPathTest {
         assertFalse(bridge.systemPrompt.contains("ACTIVE / RECOVERABLE TASKS"))
         assertFalse(bridge.systemPrompt.contains("OWNER: Can you hear me?"))
         assertTrue(bridge.systemPrompt.length + bridge.userPrompt.length <= 3_600)
-        assertEquals(16, bridge.maxTokens)
+        assertEquals(40, bridge.maxTokens)
         assertTrue(bridge.deterministic)
         assertTrue(observer.progress.any { it.stage == BrainProgressStage.READING_CONTEXT })
     }
