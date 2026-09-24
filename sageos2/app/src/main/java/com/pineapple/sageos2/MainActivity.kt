@@ -1503,6 +1503,8 @@ open class MainActivity : Activity() {
     companion object {
         private const val REQUEST_RUNTIME = 220
         private const val REQUEST_BACKGROUND = 221
+        private const val TALK_WARMUP_POLL_MS = 250L
+        private const val TALK_WARMUP_MAX_MS = 20_000L
         private val COLOR_BACKGROUND = Color.rgb(14, 17, 22)
         private val COLOR_SURFACE = Color.rgb(27, 32, 39)
         private val COLOR_BORDER = Color.rgb(53, 62, 70)
