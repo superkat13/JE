@@ -49,6 +49,10 @@ class SherpaWakeWordEngine(
 
     override fun start(generation: Long, onWake: (WakeHit) -> Unit) {
         stop()
+        val previous = worker
+        require(previous == null || !previous.isAlive) {
+            "previous wake worker is still stopping"
+        }
         val entries = compiledEntries()
         require(entries.isNotEmpty()) { "no compiled wake phrases are configured" }
         require(appContext.checkSelfPermission(Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) {
@@ -129,17 +133,30 @@ class SherpaWakeWordEngine(
     override fun stop() {
         running = false
         session.incrementAndGet()
+        val priorWorker = worker
         val record = synchronized(lock) { audioRecord.also { audioRecord = null } }
         runCatching { record?.stop() }
         runCatching { record?.release() }
-        worker = null
+
+        // Candidate 210 proved that the isolated wake process could die while the cockpit survived.
+        // Do not reuse the native KeywordSpotter until the prior reader/decoder thread has actually
+        // left it. Releasing AudioRecord unblocks read(); the bounded join prevents overlapping
+        // native access during rapid WAKE_ONLY state transitions.
+        if (priorWorker != null && priorWorker !== Thread.currentThread()) {
+            runCatching { priorWorker.join(STOP_JOIN_MS) }
+            if (priorWorker.isAlive) {
+                lastProblem = "previous wake worker did not stop within ${STOP_JOIN_MS}ms"
+            }
+        }
     }
 
     override fun close() {
         stop()
         synchronized(lock) {
-            runCatching { spotter?.release() }
-            spotter = null
+            if (worker?.isAlive != true) {
+                runCatching { spotter?.release() }
+                spotter = null
+            }
         }
     }
 
@@ -191,6 +208,7 @@ class SherpaWakeWordEngine(
         private const val MODEL_DIR = "sherpa-kws"
         private const val SAMPLE_RATE = 16_000
         private const val SAMPLES_PER_CHUNK = 1_600
+        private const val STOP_JOIN_MS = 1_500L
         private const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
         private const val FORMAT = AudioFormat.ENCODING_PCM_16BIT
     }
