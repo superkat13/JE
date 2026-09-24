@@ -141,6 +141,7 @@ object BrainPromptBudget {
         "WHO I AM" -> 7
         "OWNER CORE" -> 10
         "WHAT MATTERS TO US", "ME" -> 6
+        "WHAT WE'VE BEEN DOING" -> 9
         "THINGS I REMEMBER", "RECENT CONVERSATION" -> 8
         "ACTIVE / RECOVERABLE TASKS" -> 7
         "SAGE TOOL CONTRACT" -> 10
@@ -182,6 +183,7 @@ object BrainPromptBudget {
         "OWNER CORE",
         "WHAT MATTERS TO US",
         "ME",
+        "WHAT WE'VE BEEN DOING",
         "THINGS I REMEMBER",
         "ACTIVE / RECOVERABLE TASKS"
     )

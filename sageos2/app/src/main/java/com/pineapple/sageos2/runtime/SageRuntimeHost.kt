@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.speech.SpeechRecognizer
+import com.pineapple.sage.SageSherpaRecognitionService
 import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
@@ -15,6 +16,8 @@ import com.pineapple.sageos2.brain.LocalNativeBrainEngine
 import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.capability.Capability
 import com.pineapple.sageos2.capability.CapabilityStatus
+import com.pineapple.sageos2.continuity.OwnerContinuityImporter
+import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
@@ -74,6 +77,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val rootBroker = SocketRootBrokerClient()
     val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
+    private val ownerContinuityImporter = OwnerContinuityImporter(appContext, core, memory)
 
     @Volatile private var legacyMigrationReport = runLegacyMigration()
     @Volatile private var legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
@@ -170,6 +174,7 @@ class SageRuntimeHost private constructor(context: Context) {
             recovered.forEach { task ->
                 traces.record("recovery", "recoverable task=${task.taskId} next=${task.nextStep}")
             }
+            SageSherpaRecognitionService.prewarm(appContext)
             runtime.start()
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
@@ -208,6 +213,17 @@ class SageRuntimeHost private constructor(context: Context) {
     fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
 
+    fun importOwnerContinuity(raw: String): OwnerContinuityImportResult {
+        val result = ownerContinuityImporter.import(raw)
+        traces.record(
+            "owner_continuity",
+            "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
+        )
+        runCatching { runSelfCareCheck() }
+            .onFailure { traces.record("self_care", "post-import check failed: ${it.message ?: it::class.java.simpleName}") }
+        return result
+    }
+
     fun forgetLearnedPhrase(phrase: String): Boolean {
         val normalized = SharedPreferencesLearnedPhraseStore.normalize(phrase)
         val removed = learnedPhrases.remove(phrase)
@@ -233,6 +249,7 @@ class SageRuntimeHost private constructor(context: Context) {
         val androidSpeechFallback = SpeechRecognizer.isRecognitionAvailable(appContext)
         val commandSpeechDetail = buildString {
             append(SageSpeechBackendState.readinessDetail(appContext))
+            append("; ").append(SageSherpaRecognitionService.runtimeDetail())
             if (!commandSpeechReady) append("; Android fallback=").append(androidSpeechFallback)
         }
         val capabilityMap = capabilityStatus().states.mapKeys { it.key.name }.mapValues { it.value.name }

@@ -135,6 +135,18 @@ jobs:
           grep -F 'data class TaskCheckpoint' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskContinuity.kt
           grep -F 'class SharedPreferencesTraceStore' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/SharedPreferencesTraceStore.kt
           grep -F 'class PersistentRuntimeObserver' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/PersistentRuntimeObserver.kt
+      - name: Verify post-210 physical acceptance repairs
+        run: |
+          set -euo pipefail
+          grep -F 'class OwnerContinuityImporter' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/OwnerContinuityImport.kt
+          grep -F 'Restore owner continuity' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'SageSherpaRecognitionService.prewarm(appContext)' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'long started = System.currentTimeMillis();' sageos2/app/src/main/java/com/pineapple/sage/SageSherpaRecognitionService.java
+          grep -F 'priorWorker.join(STOP_JOIN_MS)' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
+          grep -F 'fast action failed:' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'assertEquals(40, ordinary.outputTokens)' sageos2/app/src/test/java/com/pineapple/sageos2/brain/BrainRequestPolicyTest.kt
+          grep -F 'fastActionFailureReturnsExactDeviceReasonWithoutStartingBrain' sageos2/app/src/test/java/com/pineapple/sageos2/runtime/SageRuntimeTest.kt
+          grep -F 'mergeAddsReviewedContinuityWithoutDeletingExistingState' sageos2/app/src/test/java/com/pineapple/sageos2/continuity/OwnerContinuityMergerTest.kt
       - name: Verify diagnostic report escape hatch
         run: |
           set -euo pipefail

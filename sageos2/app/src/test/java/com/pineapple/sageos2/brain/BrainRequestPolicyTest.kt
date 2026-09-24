@@ -21,7 +21,7 @@ class BrainRequestPolicyTest {
     @Test fun ordinaryChatCarriesNoEngineeringContracts() {
         val ordinary = BrainRequestPolicy.forPrompt("Can you hear me?")
         assertEquals(1_600, ordinary.combinedCharacterBudget)
-        assertEquals(16, ordinary.outputTokens)
+        assertEquals(40, ordinary.outputTokens)
         assertTrue(ordinary.deterministic)
         assertTrue(ordinary.includeTwinContext)
         assertFalse(ordinary.includeToolContext)
@@ -30,7 +30,7 @@ class BrainRequestPolicyTest {
 
         val personal = BrainRequestPolicy.forPrompt("Do you remember what I said earlier?")
         assertEquals(2_000, personal.combinedCharacterBudget)
-        assertEquals(24, personal.outputTokens)
+        assertEquals(48, personal.outputTokens)
         assertFalse(personal.deterministic)
         assertFalse(personal.includeToolContext)
         assertFalse(personal.includeTaskContext)

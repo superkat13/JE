@@ -43,7 +43,7 @@ object SelfCarePolicy {
             val next = if (snapshot.legacyCorePresent) {
                 "Reconcile the legacy Core into the current store. If reconciliation still fails, inspect migration evidence; do not invent replacement identity data."
             } else {
-                "Keep Sage identity continuity intact and wait for an owner-approved continuity source instead of fabricating a Core."
+                "Keep Sage identity continuity intact. Import an owner-reviewed package from Advanced → Identity & continuity → Restore owner continuity; never fabricate a Core."
             }
             add(SelfCareFinding("core_empty", "Sage Core continuity needs attention", sourceNote, next, "high"))
         }

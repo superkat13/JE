@@ -59,7 +59,7 @@ object BrainRequestPolicy {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = 2_000,
-                outputTokens = 24,
+                outputTokens = 48,
                 deterministic = false,
                 includeTaskContext = wantsTaskContext,
                 includeToolContext = wantsToolContext
@@ -70,7 +70,7 @@ object BrainRequestPolicy {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = 2_000,
-                outputTokens = 20,
+                outputTokens = 32,
                 deterministic = false,
                 includeToolContext = true
             )
@@ -79,7 +79,7 @@ object BrainRequestPolicy {
         return Profile(
             systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
             combinedCharacterBudget = 1_600,
-            outputTokens = 16,
+            outputTokens = 40,
             deterministic = true
         )
     }
