@@ -83,6 +83,7 @@ class SherpaWakeWordEngine(
             audioRecord = record
         }
         record.startRecording()
+        lastProblem = null
         val thread = Thread({ process(currentSession, generation, record, stream, kws, entries, onWake) }, "sage-wake-kws").apply {
             isDaemon = true
         }
@@ -118,7 +119,9 @@ class SherpaWakeWordEngine(
                 }
             }
         } catch (t: Throwable) {
-            lastProblem = t.message ?: t::class.simpleName
+            if (running && session.get() == currentSession) {
+                lastProblem = t.message ?: t::class.simpleName
+            }
         } finally {
             runCatching { record.stop() }
             runCatching { record.release() }
