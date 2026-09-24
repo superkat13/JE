@@ -1,6 +1,32 @@
 package com.pineapple.sageos2.continuity
 
 class TaskRecoveryManager(private val store: TaskContinuityStore) {
+    fun supersedeOlderRuntimeTasks(
+        keepTaskId: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): List<TaskCheckpoint> {
+        val superseded = mutableListOf<TaskCheckpoint>()
+        store.active().forEach { task ->
+            if (task.taskId == keepTaskId) return@forEach
+            if (task.metadata["kind"] != RUNTIME_TURN_KIND) return@forEach
+            if (task.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return@forEach
+            val updated = task.copy(
+                state = TaskState.COMPLETED,
+                summary = "Superseded by a newer owner turn. ${task.summary}".trim(),
+                nextStep = "",
+                updatedAtMs = nowMs,
+                metadata = task.metadata + mapOf(
+                    "superseded" to "true",
+                    "supersededAtMs" to nowMs.toString(),
+                    "supersededBy" to keepTaskId
+                )
+            )
+            store.upsert(updated)
+            superseded += updated
+        }
+        return superseded
+    }
+
     fun recoverInterruptedRuntimeTasks(nowMs: Long = System.currentTimeMillis()): List<TaskCheckpoint> {
         val recovered = mutableListOf<TaskCheckpoint>()
         store.active().forEach { task ->
