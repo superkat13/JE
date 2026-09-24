@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.speech.SpeechRecognizer
+import com.pineapple.sage.SageSherpaRecognitionService
 import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sageos2.action.AndroidDeviceController
 import com.pineapple.sageos2.action.AndroidFastActionEngine
@@ -170,6 +171,7 @@ class SageRuntimeHost private constructor(context: Context) {
             recovered.forEach { task ->
                 traces.record("recovery", "recoverable task=${task.taskId} next=${task.nextStep}")
             }
+            SageSherpaRecognitionService.prewarm(appContext)
             runtime.start()
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
@@ -233,6 +235,7 @@ class SageRuntimeHost private constructor(context: Context) {
         val androidSpeechFallback = SpeechRecognizer.isRecognitionAvailable(appContext)
         val commandSpeechDetail = buildString {
             append(SageSpeechBackendState.readinessDetail(appContext))
+            append("; ").append(SageSherpaRecognitionService.runtimeDetail())
             if (!commandSpeechReady) append("; Android fallback=").append(androidSpeechFallback)
         }
         val capabilityMap = capabilityStatus().states.mapKeys { it.key.name }.mapValues { it.value.name }
