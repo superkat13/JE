@@ -10,6 +10,7 @@ internal object RemoteWakeProtocol {
     const val MSG_CLOSE = 4
     const val MSG_WAKE_HIT = 100
     const val MSG_STATUS = 101
+    const val MSG_ACKNOWLEDGED = 102
 
     const val KEY_PROFILES = "profiles"
     const val KEY_GENERATION = "generation"

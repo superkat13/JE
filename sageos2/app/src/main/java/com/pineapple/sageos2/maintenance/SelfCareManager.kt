@@ -86,7 +86,7 @@ class SelfCareManager(private val tasks: TaskContinuityStore) {
                     summary = finding.summary,
                     nextStep = finding.nextStep,
                     updatedAtMs = nowMs,
-                    metadata = (prior?.metadata.orEmpty() + mapOf(
+                    metadata = ((prior?.metadata.orEmpty() - "cleared") + mapOf(
                         "kind" to KIND,
                         "code" to finding.code,
                         "severity" to finding.severity

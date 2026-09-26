@@ -11,7 +11,7 @@ android {
         applicationId = "com.pineapple.sagecommander.stable"
         minSdk = 26
         targetSdk = 35
-        versionCode = 211
+        versionCode = 212
         versionName = "2.0.0"
 
         testInstrumentationRunner = "android.app.Instrumentation"
@@ -43,4 +43,5 @@ android {
 dependencies {
     implementation(files("libs/sherpa-onnx-1.13.7.aar"))
     testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
 }

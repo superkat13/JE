@@ -4,6 +4,9 @@ on:
   push:
     branches: [sageos-2]
     paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml']
+  pull_request:
+    branches: [sageos-2]
+    paths: ['sageos2/**', '.github/workflows/verify-sageos2.yml']
   workflow_dispatch:
 
 jobs:
@@ -248,6 +251,33 @@ jobs:
 
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
+      - name: Summarize unit and Android service test results
+        if: always()
+        run: |
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path('sageos2/app/build/test-results').glob('**/TEST-*.xml'))
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          for path in reports:
+              root = ET.parse(path).getroot()
+              for key in totals:
+                  totals[key] += int(root.get(key, '0'))
+              if any(name in path.name for name in ('RemoteWake', 'WakeRecovery', 'OwnerContinuity')):
+                  print(path.name, dict(root.attrib))
+          print('TEST TOTALS:', totals)
+          if not reports:
+              raise SystemExit('No JUnit XML reports found')
+          if totals['failures'] or totals['errors']:
+              raise SystemExit('Test failures present')
+          PYTEST
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageos2-test-reports
+          path: sageos2/app/build/test-results/
+          if-no-files-found: error
       - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
         run: |
           set -euo pipefail
