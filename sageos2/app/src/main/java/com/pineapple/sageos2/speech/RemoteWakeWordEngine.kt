@@ -14,6 +14,7 @@ import android.os.Looper
 import android.os.Message
 import android.os.Messenger
 import android.os.RemoteException
+import android.os.SystemClock
 
 /**
  * Main-process wake client. It deliberately contains no Sherpa/ONNX types and does not resolve
@@ -23,7 +24,10 @@ import android.os.RemoteException
 class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
-    private val callbackMessenger = Messenger(Handler(Looper.getMainLooper(), ::handleRemoteMessage))
+    private var callbackMessenger: Messenger? = null
+    private var connectionEpoch = 0L
+    private var healthTimeout: Runnable? = null
+    private val recovery = WakeRecoveryBudget()
 
     @Volatile private var profiles: List<WakeProfile> = SharedPreferencesWakeProfileStore.defaults()
     @Volatile private var remote: Messenger? = null
@@ -34,40 +38,43 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     @Volatile private var wakeCallback: ((WakeHit) -> Unit)? = null
     @Volatile private var lastReady = false
     @Volatile private var lastDetail = "remote wake process not started"
-    @Volatile private var reconnectAttempts = 0
-    @Volatile private var recoveryPaused = false
     private var reconnectRunnable: Runnable? = null
 
-    private val connection = object : ServiceConnection {
+    private var connection: ServiceConnection? = null
+
+    private fun newConnection(epoch: Long): ServiceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+            if (epoch != connectionEpoch) return
             binding = false
             bound = true
             remote = service?.let(::Messenger)
+            if (remote == null) {
+                handleRemoteFailure("remote wake service returned no binder")
+                return
+            }
             lastReady = false
-            lastDetail = "remote wake process connected; waiting for native wake readiness"
+            lastDetail = "remote wake process connected; waiting for audio readiness"
             sendConfiguration()
             if (desiredRunning) sendStart()
         }
 
-        override fun onServiceDisconnected(name: ComponentName?) =
-            handleRemoteFailure("remote wake process disconnected")
-
-        override fun onBindingDied(name: ComponentName?) {
-            runCatching { appContext.unbindService(this) }
-            handleRemoteFailure("remote wake process died")
+        override fun onServiceDisconnected(name: ComponentName?) {
+            if (epoch == connectionEpoch) handleRemoteFailure("remote wake process disconnected")
         }
 
-        override fun onNullBinding(name: ComponentName?) =
-            handleRemoteFailure("remote wake service returned no binder")
+        override fun onBindingDied(name: ComponentName?) {
+            if (epoch == connectionEpoch) handleRemoteFailure("remote wake process died")
+        }
+
+        override fun onNullBinding(name: ComponentName?) {
+            if (epoch == connectionEpoch) handleRemoteFailure("remote wake service returned no binder")
+        }
     }
 
     override fun configure(profiles: List<WakeProfile>) {
         val changed = this.profiles != profiles
         this.profiles = profiles
-        if (changed && recoveryPaused) {
-            recoveryPaused = false
-            reconnectAttempts = 0
-        }
+        if (changed) main.post { recovery.reset() }
         if (bound) main.post { sendConfiguration() }
     }
 
@@ -86,6 +93,10 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         wakeCallback = null
         main.post {
             cancelReconnect()
+            cancelHealthTimeout()
+            recovery.interrupted()
+            lastReady = false
+            lastDetail = "wake listening intentionally stopped"
             send(RemoteWakeProtocol.MSG_STOP)
         }
     }
@@ -98,7 +109,8 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
             profile.phrases.count { profile.compiledTokensFor(it) != null }
         }
         if (compiledCount == 0) return WakeWordHealth(false, ENGINE, "no wake phrases have compiled BPE tokens")
-        return WakeWordHealth(lastReady || !desiredRunning, ENGINE, lastDetail)
+        val evidence = recovery.lastFailure.takeIf { it.isNotBlank() }?.let { "; last failure: $it" }.orEmpty()
+        return WakeWordHealth((lastReady || !desiredRunning) && !recovery.paused, ENGINE, lastDetail + evidence)
     }
 
     override fun close() {
@@ -107,35 +119,47 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         main.post {
             cancelReconnect()
             send(RemoteWakeProtocol.MSG_CLOSE)
-            if (bound || binding) runCatching { appContext.unbindService(connection) }
+            if (bound || binding) runCatching { connection?.let(appContext::unbindService) }
             bound = false
             binding = false
             remote = null
-            reconnectAttempts = 0
-            recoveryPaused = false
+            cancelHealthTimeout()
+            connectionEpoch++
+            recovery.reset()
             runCatching { appContext.stopService(remoteServiceIntent()) }
         }
     }
 
     private fun ensureRemoteProcess() {
-        if (recoveryPaused) {
+        if (recovery.paused) {
             lastReady = false
-            lastDetail = "remote wake automatic recovery paused after $reconnectAttempts failed attempts"
+            lastDetail = "remote wake automatic recovery paused after ${recovery.attempts} failed attempts"
             return
         }
+        if (!desiredRunning || reconnectRunnable != null) return
         if (bound) {
+            lastReady = false
+            recovery.interrupted()
+            armHealthTimeout(START_TIMEOUT_MS)
             sendConfiguration()
             sendStart()
             return
         }
         if (binding) return
         binding = true
+        val epoch = ++connectionEpoch
+        callbackMessenger = Messenger(Handler(Looper.getMainLooper()) { message ->
+            if (epoch == connectionEpoch) handleRemoteMessage(message) else true
+        })
+        armHealthTimeout(START_TIMEOUT_MS)
         lastDetail = "starting isolated wake process"
         val intent = remoteServiceIntent()
         try {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) appContext.startForegroundService(intent)
             else appContext.startService(intent)
-            val ok = appContext.bindService(intent, connection, Context.BIND_AUTO_CREATE)
+            val newConnection = newConnection(epoch)
+            connection = newConnection
+            val ok = appContext.bindService(intent, newConnection, Context.BIND_AUTO_CREATE)
             if (!ok) {
                 binding = false
                 handleRemoteFailure("Android refused to bind remote wake service")
@@ -147,6 +171,12 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     }
 
     private fun handleRemoteFailure(detail: String) {
+        cancelHealthTimeout()
+        recovery.interrupted()
+        connectionEpoch++
+        if (bound || binding) runCatching { connection?.let(appContext::unbindService) }
+        runCatching { appContext.stopService(remoteServiceIntent()) }
+        connection = null
         remote = null
         bound = false
         binding = false
@@ -157,25 +187,38 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     }
 
     private fun scheduleReconnect(reason: String) {
-        if (!desiredRunning || recoveryPaused || reconnectRunnable != null) return
-        val nextAttempt = reconnectAttempts + 1
-        val delay = WakeReconnectPolicy.delayForAttempt(nextAttempt)
+        if (!desiredRunning || recovery.paused || reconnectRunnable != null) return
+        val delay = recovery.failed(reason)
+        val nextAttempt = recovery.attempts
         if (delay == null) {
-            recoveryPaused = true
             lastReady = false
-            lastDetail = "$reason; automatic recovery paused after $reconnectAttempts failed attempts"
+            lastDetail = "$reason; automatic recovery paused after ${recovery.attempts} failed attempts"
             return
         }
-        reconnectAttempts = nextAttempt
         lastDetail = "$reason; wake recovery attempt $nextAttempt/${WakeReconnectPolicy.MAX_ATTEMPTS} in ${delay}ms"
         val runnable = Runnable {
             reconnectRunnable = null
-            if (!desiredRunning || recoveryPaused || bound || binding) return@Runnable
+            if (!desiredRunning || recovery.paused || bound || binding) return@Runnable
             runCatching { appContext.stopService(remoteServiceIntent()) }
             ensureRemoteProcess()
         }
         reconnectRunnable = runnable
         main.postDelayed(runnable, delay)
+    }
+
+    private fun cancelHealthTimeout() {
+        healthTimeout?.let(main::removeCallbacks)
+        healthTimeout = null
+    }
+
+    private fun armHealthTimeout(delayMs: Long) {
+        cancelHealthTimeout()
+        val timeout = Runnable {
+            healthTimeout = null
+            if (desiredRunning) handleRemoteFailure("wake audio health timed out after ${delayMs}ms")
+        }
+        healthTimeout = timeout
+        main.postDelayed(timeout, delayMs)
     }
 
     private fun cancelReconnect() {
@@ -203,7 +246,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         val target = remote ?: return
         try {
             target.send(Message.obtain(null, what).apply {
-                this.data = data
+                this.data = Bundle(data).apply { putLong(RemoteWakeProtocol.KEY_GENERATION, currentGeneration) }
                 replyTo = callbackMessenger
             })
         } catch (e: RemoteException) {
@@ -220,29 +263,27 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
                 val modeId = message.data.getString(RemoteWakeProtocol.KEY_MODE_ID)?.takeIf { it.isNotBlank() }
                 val acknowledgement = message.data.getString(RemoteWakeProtocol.KEY_ACK).orEmpty().ifBlank { "Yes" }
                 desiredRunning = false
-                wakeCallback?.invoke(WakeHit(generation, profileId, modeId, acknowledgement))
+                cancelHealthTimeout()
+                recovery.interrupted()
+                val callback = wakeCallback
                 wakeCallback = null
+                callback?.invoke(WakeHit(generation, profileId, modeId, acknowledgement))
                 return true
             }
+            RemoteWakeProtocol.MSG_ACKNOWLEDGED -> return true
             RemoteWakeProtocol.MSG_STATUS -> {
+                if (!desiredRunning || recovery.paused ||
+                    message.data.getLong(RemoteWakeProtocol.KEY_GENERATION) != currentGeneration) return true
                 val ready = message.data.getBoolean(RemoteWakeProtocol.KEY_READY)
                 val detail = message.data.getString(RemoteWakeProtocol.KEY_DETAIL).orEmpty()
                     .ifBlank { "remote wake status updated" }
                 lastReady = ready
                 lastDetail = detail
                 if (ready) {
-                    reconnectAttempts = 0
-                    recoveryPaused = false
-                    cancelReconnect()
-                } else if (desiredRunning) {
-                    if (bound || binding) {
-                        runCatching { appContext.unbindService(connection) }
-                        runCatching { appContext.stopService(remoteServiceIntent()) }
-                        remote = null
-                        bound = false
-                        binding = false
-                    }
-                    scheduleReconnect(detail)
+                    recovery.listening(SystemClock.elapsedRealtime())
+                    armHealthTimeout(HEALTH_TIMEOUT_MS)
+                } else {
+                    handleRemoteFailure(detail)
                 }
                 return true
             }
@@ -251,6 +292,8 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
     }
 
     companion object {
+        private const val START_TIMEOUT_MS = 30_000L
+        private const val HEALTH_TIMEOUT_MS = 10_000L
         private const val ENGINE = "sherpa-onnx-kws-remote-1.13.7"
         private const val REMOTE_SERVICE_CLASS = "com.pineapple.sageos2.speech.SageWakeRemoteService"
     }

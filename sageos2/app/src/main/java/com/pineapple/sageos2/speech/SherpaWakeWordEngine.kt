@@ -6,6 +6,7 @@ import android.content.pm.PackageManager
 import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
+import android.os.SystemClock
 import com.k2fsa.sherpa.onnx.FeatureConfig
 import com.k2fsa.sherpa.onnx.KeywordSpotter
 import com.k2fsa.sherpa.onnx.KeywordSpotterConfig
@@ -29,6 +30,20 @@ class SherpaWakeWordEngine(
     @Volatile private var worker: Thread? = null
     @Volatile private var lastProblem: String? = null
     @Volatile private var running = false
+    @Volatile private var lastAudioAtMs = 0L
+
+    fun hasAudioFailure(): Boolean = lastProblem != null
+
+    fun audioHealth(): WakeWordHealth {
+        val problem = lastProblem
+        val age = SystemClock.elapsedRealtime() - lastAudioAtMs
+        return when {
+            problem != null -> WakeWordHealth(false, ENGINE, problem)
+            !running || worker?.isAlive != true -> WakeWordHealth(false, ENGINE, "wake audio worker is not running")
+            lastAudioAtMs == 0L || age > 6_000L -> WakeWordHealth(false, ENGINE, "wake audio has no recent decoded samples")
+            else -> WakeWordHealth(true, ENGINE, "wake listening; audio decode advancing")
+        }
+    }
 
     override fun configure(profiles: List<WakeProfile>) {
         this.profiles = profiles.filter { it.enabled }
@@ -83,6 +98,7 @@ class SherpaWakeWordEngine(
             audioRecord = record
         }
         record.startRecording()
+        lastAudioAtMs = 0L
         lastProblem = null
         val thread = Thread({ process(currentSession, generation, record, stream, kws, entries, onWake) }, "sage-wake-kws").apply {
             isDaemon = true
@@ -104,7 +120,8 @@ class SherpaWakeWordEngine(
         try {
             while (running && session.get() == currentSession) {
                 val count = record.read(shorts, 0, shorts.size)
-                if (count <= 0) continue
+                check(count >= 0) { "wake AudioRecord read failed: $count" }
+                if (count == 0) continue
                 val samples = FloatArray(count) { shorts[it] / 32768.0f }
                 stream.acceptWaveform(samples, SAMPLE_RATE)
                 while (running && session.get() == currentSession && kws.isReady(stream)) {
@@ -117,6 +134,7 @@ class SherpaWakeWordEngine(
                     onWake(WakeHit(generation, profile.id, profile.modeId, profile.acknowledgement))
                     break
                 }
+                lastAudioAtMs = SystemClock.elapsedRealtime()
             }
         } catch (t: Throwable) {
             if (running && session.get() == currentSession) {

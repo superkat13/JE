@@ -11,6 +11,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Message
 import android.os.Messenger
+import android.os.SystemClock
 
 /**
  * Native Sherpa/ONNX wake detection lives in its own process.
@@ -20,6 +21,34 @@ class SageWakeRemoteService : Service() {
     private val engine by lazy { SherpaWakeWordEngine(this) }
     private val incoming = Messenger(Handler(Looper.getMainLooper(), ::handleMessage))
     private var client: Messenger? = null
+    private val main = Handler(Looper.getMainLooper())
+    private var generation = 0L
+    private var monitor: Runnable? = null
+
+    private fun stopMonitoring() {
+        monitor?.let(main::removeCallbacks)
+        monitor = null
+    }
+
+    private fun monitorAudio(activeGeneration: Long) {
+        stopMonitoring()
+        val started = SystemClock.elapsedRealtime()
+        val task = object : Runnable {
+            override fun run() {
+                if (monitor !== this) return
+                val health = engine.audioHealth()
+                if (health.ready) sendStatus(true, health.detail, activeGeneration)
+                else if (engine.hasAudioFailure() || SystemClock.elapsedRealtime() - started >= 8_000L) {
+                    sendStatus(false, health.detail, activeGeneration)
+                    stopMonitoring()
+                    return
+                }
+                main.postDelayed(this, 2_000L)
+            }
+        }
+        monitor = task
+        main.post(task)
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -31,6 +60,7 @@ class SageWakeRemoteService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_NOT_STICKY
 
     override fun onDestroy() {
+        stopMonitoring()
         runCatching { engine.close() }
         client = null
         super.onDestroy()
@@ -38,31 +68,41 @@ class SageWakeRemoteService : Service() {
 
     private fun handleMessage(message: Message): Boolean {
         client = message.replyTo ?: client
+        generation = message.data.getLong(RemoteWakeProtocol.KEY_GENERATION)
         return try {
             when (message.what) {
                 RemoteWakeProtocol.MSG_CONFIGURE -> {
                     val raw = message.data.getString(RemoteWakeProtocol.KEY_PROFILES).orEmpty()
                     engine.configure(RemoteWakeProtocol.decodeProfiles(raw))
-                    sendStatus(true, "remote wake profiles configured")
+                    sendAcknowledgement("remote wake profiles configured")
                 }
                 RemoteWakeProtocol.MSG_START -> {
                     val generation = message.data.getLong(RemoteWakeProtocol.KEY_GENERATION)
-                    engine.start(generation) { hit -> sendWake(hit) }
-                    sendStatus(true, "remote native wake engine started")
+                    stopMonitoring()
+                    engine.start(generation) { hit -> main.post {
+                        if (hit.generation == this.generation) {
+                            stopMonitoring()
+                            sendWake(hit)
+                        }
+                    } }
+                    monitorAudio(generation)
                 }
                 RemoteWakeProtocol.MSG_STOP -> {
+                    stopMonitoring()
                     engine.stop()
-                    sendStatus(true, "remote wake engine stopped")
+                    sendAcknowledgement("remote wake engine stopped")
                 }
                 RemoteWakeProtocol.MSG_CLOSE -> {
+                    stopMonitoring()
                     engine.close()
-                    sendStatus(true, "remote wake engine closed")
+                    sendAcknowledgement("remote wake engine closed")
                     stopSelf()
                 }
                 else -> return false
             }
             true
         } catch (t: Throwable) {
+            stopMonitoring()
             sendStatus(false, "remote wake failure: ${t.message ?: t::class.java.simpleName}")
             true
         }
@@ -81,9 +121,19 @@ class SageWakeRemoteService : Service() {
         }
     }
 
-    private fun sendStatus(ready: Boolean, detail: String) {
+    private fun sendAcknowledgement(detail: String) {
+        val target = client ?: return
+        runCatching {
+            target.send(Message.obtain(null, RemoteWakeProtocol.MSG_ACKNOWLEDGED).apply {
+                data = Bundle().apply { putString(RemoteWakeProtocol.KEY_DETAIL, detail) }
+            })
+        }
+    }
+
+    private fun sendStatus(ready: Boolean, detail: String, statusGeneration: Long = generation) {
         val target = client ?: return
         val data = Bundle().apply {
+            putLong(RemoteWakeProtocol.KEY_GENERATION, statusGeneration)
             putBoolean(RemoteWakeProtocol.KEY_READY, ready)
             putString(RemoteWakeProtocol.KEY_DETAIL, detail)
         }

@@ -4,6 +4,9 @@ on:
   push:
     branches: [sageos-2]
     paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml']
+  pull_request:
+    branches: [sageos-2]
+    paths: ['sageos2/**', '.github/workflows/verify-sageos2.yml']
   workflow_dispatch:
 
 jobs:

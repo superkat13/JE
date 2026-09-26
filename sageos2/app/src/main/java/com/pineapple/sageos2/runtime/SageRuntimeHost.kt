@@ -200,7 +200,8 @@ class SageRuntimeHost private constructor(context: Context) {
         traces.record(
             "self_care",
             if (findings.isEmpty()) "healthy; no unresolved self-care findings"
-            else "findings=${findings.joinToString(",") { it.code }}"
+            else "findings=${findings.joinToString(",") { it.code }}" +
+                if (!wakeHealth.ready) "; wake=${wakeHealth.detail.take(500)}" else ""
         )
     }
 
