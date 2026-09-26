@@ -25,7 +25,7 @@ jobs:
             sageos2/.deps/kws
             sageos2/app/libs/sherpa-onnx-1.13.7.aar
             sageos2/app/src/main/assets/sherpa-kws
-          key: sageos2-kws-v1-1.13.7-2e6ac2577310bfa2
+          key: sageos2-kws-v2-1.13.7-f170013b4716e41b
       - name: Reject removed Shizuku architecture
         run: |
           set -euo pipefail
@@ -52,6 +52,8 @@ jobs:
         run: |
           set -euo pipefail
           bash sageos2/tools/fetch-kws-deps.sh
+          python3 -m pip install sherpa-onnx==1.13.7 numpy==2.2.6
+          python3 sageos2/tools/test-native-kws.py
           test -s sageos2/app/libs/sherpa-onnx-1.13.7.aar
           test -s sageos2/app/src/main/assets/sherpa-kws/encoder.int8.onnx
           test -s sageos2/app/src/main/assets/sherpa-kws/decoder.onnx
