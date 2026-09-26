@@ -1,5 +1,6 @@
 package com.pineapple.sageos2.speech
 
+import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import android.content.ComponentName
 import android.content.Context
 import android.content.ContextWrapper
@@ -111,6 +112,27 @@ class RemoteWakeWordEngineTest {
         }
         assertEquals(1, context.binds)
         assertTrue(engine.health().ready)
+    }
+
+    @Test fun failureIsRecordedBeforePeriodicSelfCareAndSurvivesEngineRecreation() {
+        engine.close(); idle()
+        val trace = SharedPreferencesTraceStore(context)
+        engine = RemoteWakeWordEngine(context) { trace.record("wake_recovery", it) }
+        start()
+        context.status(false); idle()
+        engine.close(); idle()
+        val reopenedTrace = SharedPreferencesTraceStore(context)
+        assertTrue(reopenedTrace.recent(10).any { it.message.contains("fake audio failure") })
+    }
+
+    @Test fun diagnosticStorageFailureDoesNotBreakRecovery() {
+        engine.close(); idle()
+        engine = RemoteWakeWordEngine(context) { throw IllegalStateException("storage unavailable") }
+        context.failStarts = true
+        start()
+        advance(750)
+        assertEquals(2, context.binds)
+        assertFalse(engine.health().ready)
     }
 
     @Test fun oldGenerationCannotMakeNewListeningTurnReady() {

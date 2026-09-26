@@ -122,7 +122,9 @@ class SageRuntimeHost private constructor(context: Context) {
     private val localModel = File(File(appContext.filesDir, "brain"), "sage-brain.gguf")
     private val localBrain = LocalNativeBrainEngine(localModel.absolutePath)
     private val brain = BrainRouterEngine(listOf(localBrain))
-    private val wakeEngine = RemoteWakeWordEngine(appContext)
+    private val wakeEngine = RemoteWakeWordEngine(appContext) { detail ->
+        traces.record("wake_recovery", detail.take(800))
+    }
     private val speech = AndroidSpeechPort(appContext, wakeEngine, wakeProfiles)
     private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
     private val fastActions = AndroidFastActionEngine(controller)

@@ -45,6 +45,18 @@ class SelfCareManagerTest {
         assertEquals("true", task.metadata["cleared"])
     }
 
+    @Test fun recurringFailureDoesNotKeepStaleClearedFlag() {
+        val store = FakeStore()
+        val manager = SelfCareManager(store)
+        manager.reconcile(SelfCareSnapshot(true, "ready", false, "first failure", 2, true), 100L)
+        manager.reconcile(SelfCareSnapshot(true, "ready", true, "ready", 2, true), 200L)
+        manager.reconcile(SelfCareSnapshot(true, "ready", false, "second failure", 2, true), 300L)
+        val task = store.get("selfcare:wake_not_ready")!!
+        assertEquals(TaskState.WAITING, task.state)
+        assertEquals("second failure", task.summary)
+        assertEquals(null, task.metadata["cleared"])
+    }
+
     private class FakeStore : TaskContinuityStore {
         private val values = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { values[checkpoint.taskId] = checkpoint }

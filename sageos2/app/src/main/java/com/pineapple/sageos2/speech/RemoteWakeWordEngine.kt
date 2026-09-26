@@ -21,7 +21,10 @@ import android.os.SystemClock
  * the remote service class, so loading this class cannot initialize native wake code in the Sage
  * cockpit process.
  */
-class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
+class RemoteWakeWordEngine(
+    context: Context,
+    private val onDiagnostic: (String) -> Unit = {}
+) : WakeWordEngine {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private var callbackMessenger: Messenger? = null
@@ -182,6 +185,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         binding = false
         lastReady = false
         lastDetail = detail
+        runCatching { onDiagnostic("wake failure: $detail") }
         if (!desiredRunning) return
         scheduleReconnect(detail)
     }
@@ -193,6 +197,7 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
         if (delay == null) {
             lastReady = false
             lastDetail = "$reason; automatic recovery paused after ${recovery.attempts} failed attempts"
+            runCatching { onDiagnostic(lastDetail) }
             return
         }
         lastDetail = "$reason; wake recovery attempt $nextAttempt/${WakeReconnectPolicy.MAX_ATTEMPTS} in ${delay}ms"
@@ -280,7 +285,11 @@ class RemoteWakeWordEngine(context: Context) : WakeWordEngine {
                 lastReady = ready
                 lastDetail = detail
                 if (ready) {
+                    val previousAttempts = recovery.attempts
                     recovery.listening(SystemClock.elapsedRealtime())
+                    if (previousAttempts > 0 && recovery.attempts == 0) {
+                        runCatching { onDiagnostic("wake recovery confirmed by sustained audio progress") }
+                    }
                     armHealthTimeout(HEALTH_TIMEOUT_MS)
                 } else {
                     handleRemoteFailure(detail)
