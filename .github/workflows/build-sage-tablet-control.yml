@@ -2,7 +2,9 @@ name: Build Sage Tablet Control APK
 
 on:
   workflow_dispatch:
+  # The reconstructed 1.20 build is for legacy branches; SageOS 2 has its own gate.
   pull_request:
+    branches: [main, sage-tablet-control-v1, 'agent/**']
   push:
     branches:
       - sage-tablet-control-v1

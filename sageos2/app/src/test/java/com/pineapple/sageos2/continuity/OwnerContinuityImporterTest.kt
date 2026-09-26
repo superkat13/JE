@@ -10,7 +10,7 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE)
+@Config(sdk = [28, 33], manifest = Config.NONE)
 class OwnerContinuityImporterTest {
     @Test fun importSurvivesStoreRecreationAndDuplicateImportDoesNotRewriteData() {
         val context = RuntimeEnvironment.getApplication()

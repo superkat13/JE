@@ -20,7 +20,7 @@ import org.robolectric.annotation.LooperMode
 import java.time.Duration
 
 @RunWith(RobolectricTestRunner::class)
-@Config(sdk = [28], manifest = Config.NONE)
+@Config(sdk = [28, 33], manifest = Config.NONE)
 @LooperMode(LooperMode.Mode.PAUSED)
 class RemoteWakeWordEngineTest {
     private lateinit var context: WakeContext
@@ -101,6 +101,29 @@ class RemoteWakeWordEngineTest {
         advance(60_000)
         assertEquals(1, context.binds)
         assertTrue(engine.health().detail.contains("intentionally stopped"))
+    }
+
+    @Test fun hourOfSimulatedHealthyAudioDoesNotRestartTheService() {
+        start()
+        repeat(1_800) {
+            context.status(true); idle()
+            advance(2_000)
+        }
+        assertEquals(1, context.binds)
+        assertTrue(engine.health().ready)
+    }
+
+    @Test fun oldGenerationCannotMakeNewListeningTurnReady() {
+        start()
+        engine.stop(); idle()
+        engine.start(2L) {}; idle()
+        val current = context.generation
+        context.generation = 1L
+        context.status(true); idle()
+        assertFalse(engine.health().ready)
+        context.generation = current
+        context.status(true); idle()
+        assertTrue(engine.health().ready)
     }
 
     private class WakeContext(base: Context) : ContextWrapper(base) {
