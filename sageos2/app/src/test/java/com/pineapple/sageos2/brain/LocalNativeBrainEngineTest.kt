@@ -77,7 +77,7 @@ class LocalNativeBrainEngineTest {
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         assertEquals("virtual twin system context", bridge.systemPrompt)
         assertEquals("current user request", bridge.userPrompt)
-        assertEquals(24, bridge.maxTokens)
+        assertEquals(48, bridge.maxTokens)
         assertFalse(bridge.deterministic)
         assertEquals("done", result!!.getOrThrow().text)
     }
