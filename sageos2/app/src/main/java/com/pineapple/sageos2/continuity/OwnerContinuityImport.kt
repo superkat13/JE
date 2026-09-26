@@ -113,12 +113,14 @@ object OwnerContinuityCodec {
                 val key = clean(item.optString("key"), 160)
                 val value = clean(item.optString("value"), 2_000)
                 if (key.isEmpty() || value.isEmpty()) continue
+                val confidence = item.optDouble("confidence", 1.0)
+                require(confidence.isFinite()) { "invalid memory confidence at index $index" }
                 add(
                     OwnerContinuityMemory(
                         subject = subject,
                         key = key,
                         value = value,
-                        confidence = item.optDouble("confidence", 1.0).coerceIn(0.0, 1.0)
+                        confidence = confidence.coerceIn(0.0, 1.0)
                     )
                 )
             }
