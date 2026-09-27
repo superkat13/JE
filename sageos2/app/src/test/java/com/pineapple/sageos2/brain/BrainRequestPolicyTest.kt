@@ -28,12 +28,21 @@ class BrainRequestPolicyTest {
         assertFalse(ordinary.includeTaskContext)
         assertNull(ordinary.expectedLiteral)
 
+        val coldOrdinary = BrainRequestPolicy.forPrompt("Can you hear me?", coldStart = true)
+        assertEquals(900, coldOrdinary.combinedCharacterBudget)
+        assertEquals(40, coldOrdinary.outputTokens)
+        assertTrue(coldOrdinary.includeTwinContext)
+
         val personal = BrainRequestPolicy.forPrompt("Do you remember what I said earlier?")
         assertEquals(2_000, personal.combinedCharacterBudget)
         assertEquals(48, personal.outputTokens)
         assertFalse(personal.deterministic)
         assertFalse(personal.includeToolContext)
         assertFalse(personal.includeTaskContext)
+
+        val coldPersonal = BrainRequestPolicy.forPrompt("Do you remember what I said earlier?", coldStart = true)
+        assertEquals(1_200, coldPersonal.combinedCharacterBudget)
+        assertEquals(48, coldPersonal.outputTokens)
     }
 
     @Test fun actionAndContinuationContextAreOptIn() {
@@ -41,6 +50,7 @@ class BrainRequestPolicyTest {
         assertEquals(2_000, action.combinedCharacterBudget)
         assertTrue(action.includeToolContext)
         assertFalse(action.includeTaskContext)
+        assertEquals(1_200, BrainRequestPolicy.forPrompt("Could you open Firefox for me?", coldStart = true).combinedCharacterBudget)
 
         val diagnosticAction = BrainRequestPolicy.forPrompt("check your root identity")
         assertTrue(diagnosticAction.includeToolContext)
