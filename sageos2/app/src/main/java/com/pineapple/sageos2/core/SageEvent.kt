@@ -8,7 +8,8 @@ sealed interface SageEvent {
         val recognizerGeneration: Long,
         val profileId: String = "sage",
         val modeId: String? = null,
-        val acknowledgement: String = "Yes"
+        val acknowledgement: String = "Yes",
+        val command: String? = null
     ) : SageEvent
     data class WakeAcknowledgementSpoken(val turnId: Long) : SageEvent
     data class TranscriptFinal(val turnId: Long, val recognizerGeneration: Long, val text: String) : SageEvent
