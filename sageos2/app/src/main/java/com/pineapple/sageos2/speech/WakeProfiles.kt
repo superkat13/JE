@@ -42,7 +42,8 @@ data class WakeHit(
     val generation: Long,
     val profileId: String,
     val modeId: String?,
-    val acknowledgement: String
+    val acknowledgement: String,
+    val command: String? = null
 )
 
 interface WakeProfileProvider {
