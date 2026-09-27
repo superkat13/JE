@@ -3,6 +3,7 @@ package com.pineapple.sageos2.speech
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -14,6 +15,22 @@ import org.robolectric.annotation.Config
 class WakePhraseCompilerIntegrationTest {
     private val context get() = RuntimeEnvironment.getApplication()
 
+    // Generated with official sentencepiece 0.2.1 and the checksum-pinned model's
+    // bpe.model (TrainerSpec.UNIGRAM). Do not regenerate from our Kotlin encoder.
+    @Test fun matchesOfficialSentencePieceAcross64WakePhrases() {
+        val compiler = WakePhraseCompiler(context)
+        val fixture = requireNotNull(javaClass.getResourceAsStream("/wake-tokenizer-oracle.tsv"))
+        fixture.bufferedReader().useLines { lines ->
+            var count = 0
+            lines.forEach { line ->
+                val parts = line.split('\t')
+                assertEquals(parts[0], parts[1], compiler.compile(parts[0]))
+                count++
+            }
+            assertEquals(64, count)
+        }
+    }
+
     @Test fun pinnedGigaSpeechBpeMatchesKnownSherpaTokenizations() {
         val compiler = WakePhraseCompiler(context)
 
@@ -21,6 +38,10 @@ class WakePhraseCompilerIntegrationTest {
         assertEquals("▁S AGE ▁G LI T CH", compiler.compile("Sage Glitch"))
         assertEquals("▁HE LL O ▁WORLD", compiler.compile("hello world"))
         assertEquals("▁HE Y ▁S I RI", compiler.compile("hey siri"))
+        assertEquals("▁ L IGHT ▁UP", compiler.compile("light up"))
+        assertEquals(compiler.compile("sage"), compiler.compile("  Ｓａｇｅ  "))
+        assertNull(compiler.compile(""))
+        assertNull(compiler.compile("☃"))
     }
 
     @Test fun customProfileCompilationPersistsForOfflineWakeReuse() {

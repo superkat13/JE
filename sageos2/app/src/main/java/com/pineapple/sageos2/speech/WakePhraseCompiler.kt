@@ -5,8 +5,9 @@ import java.text.Normalizer
 import java.util.Locale
 
 /**
- * Tiny deterministic SentencePiece-BPE encoder for short English wake phrases.
- * The merge table is exported from the exact pinned bpe.model packaged with Sage.
+ * Deterministic SentencePiece unigram encoder for short English wake phrases.
+ * Despite its filename, the pinned bpe.model declares UNIGRAM, not BPE.
+ * Select the highest-scoring complete segmentation; greedy pair merging is incorrect.
  */
 class WakePhraseCompiler(context: Context) {
     private val appContext = context.applicationContext
@@ -14,28 +15,36 @@ class WakePhraseCompiler(context: Context) {
 
     fun compile(rawPhrase: String): String? {
         val normalized = normalizeForKws(rawPhrase) ?: return null
-        val symbols = codePointStrings(normalized).toMutableList()
-        if (symbols.isEmpty()) return null
-
-        while (symbols.size > 1) {
-            var bestIndex = -1
-            var bestScore = Float.NEGATIVE_INFINITY
-            for (index in 0 until symbols.lastIndex) {
-                val merged = symbols[index] + symbols[index + 1]
-                val entry = vocabulary.entries[merged] ?: continue
-                if (entry.type != TYPE_NORMAL) continue
-                if (bestIndex < 0 || entry.score > bestScore) {
-                    bestIndex = index
-                    bestScore = entry.score
+        val symbols = codePointStrings(normalized)
+        val scores = DoubleArray(symbols.size + 1) { Double.NEGATIVE_INFINITY }
+        val previous = IntArray(symbols.size + 1) { -1 }
+        val pieces = arrayOfNulls<String>(symbols.size + 1)
+        scores[0] = 0.0
+        for (start in symbols.indices) {
+            if (!scores[start].isFinite()) continue
+            val candidate = StringBuilder()
+            for (end in start until symbols.size) {
+                candidate.append(symbols[end])
+                if (candidate.length > vocabulary.maxPieceLength) break
+                val piece = candidate.toString()
+                val entry = vocabulary.entries[piece] ?: continue
+                if (entry.type != TYPE_NORMAL || piece !in vocabulary.tokens) continue
+                val score = scores[start] + entry.score
+                if (score > scores[end + 1]) {
+                    scores[end + 1] = score
+                    previous[end + 1] = start
+                    pieces[end + 1] = piece
                 }
             }
-            if (bestIndex < 0) break
-            symbols[bestIndex] = symbols[bestIndex] + symbols[bestIndex + 1]
-            symbols.removeAt(bestIndex + 1)
         }
-
-        if (symbols.any { it !in vocabulary.tokens }) return null
-        return symbols.joinToString(" ")
+        if (previous[symbols.size] < 0) return null
+        val result = mutableListOf<String>()
+        var end = symbols.size
+        while (end > 0) {
+            result += pieces[end] ?: return null
+            end = previous[end]
+        }
+        return result.asReversed().joinToString(" ")
     }
 
     private fun loadVocabulary(): Vocabulary {
@@ -89,7 +98,9 @@ class WakePhraseCompiler(context: Context) {
     }
 
     private data class Entry(val score: Float, val type: Int)
-    private data class Vocabulary(val entries: Map<String, Entry>, val tokens: Set<String>)
+    private data class Vocabulary(val entries: Map<String, Entry>, val tokens: Set<String>) {
+        val maxPieceLength = entries.keys.maxOf { it.length }
+    }
 
     companion object {
         private const val TYPE_NORMAL = 1
