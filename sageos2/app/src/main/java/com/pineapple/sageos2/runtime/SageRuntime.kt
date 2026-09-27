@@ -155,7 +155,12 @@ class SageRuntime(
 
     private fun startBrain(turnId: Long, prompt: String) {
         brainJob?.cancel()
-        val requestProfile = BrainRequestPolicy.forPrompt(prompt)
+        val preRequestHealth = runCatching { brain.health() }.getOrNull()
+        val coldStart = preRequestHealth?.lastLatencyMs == null
+        val requestProfile = BrainRequestPolicy.forPrompt(prompt, coldStart = coldStart)
+        observer.onDiagnostic(
+            "brain request profile: cold=$coldStart budget=${requestProfile.combinedCharacterBudget} output=${requestProfile.outputTokens}"
+        )
         val core = sageCore.current()
         val memory = twinMemory.snapshot()
         val history = conversationHistory.recent(24).withoutOwnerTurn(turnId)
