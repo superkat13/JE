@@ -61,7 +61,7 @@ class SageRuntime(
         require(brainFirstTokenTimeoutMs > 0L)
         require(brainStallTimeoutMs > 0L)
         speech.attach(object : SpeechInputListener {
-            override fun onWakeDetected(hit: WakeHit) = submit(SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement))
+            override fun onWakeDetected(hit: WakeHit) = submit(SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement, hit.command))
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
             override fun onRecognitionError(turnId: Long, generation: Long, code: Int) = submit(SageEvent.RecognitionFailed(turnId, generation, code))
             override fun onSpeechDiagnostic(message: String) = observer.onDiagnostic("speech: $message")
