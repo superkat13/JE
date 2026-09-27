@@ -52,12 +52,14 @@ import com.pineapple.sageos2.mode.SageTone
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
+import com.pineapple.sageos2.speech.WakeProfile
 import com.pineapple.sageos2.workflow.ChickenTonightModule
 import com.pineapple.sageos2.workflow.ChickenTonightScope
 import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 open class MainActivity : Activity() {
     private enum class Panel { CHAT, SETTINGS, MEMORY, APPS, MODES, APPEARANCE, ADVANCED, CORE, HEALTH, TASKS, WORKFLOWS, DIAGNOSTICS }
@@ -847,6 +849,11 @@ open class MainActivity : Activity() {
             })
         }
         content.addView(sectionTitle("Wake names"))
+        content.addView(Button(this).apply {
+            text = "Add wake name"
+            isAllCaps = false
+            setOnClickListener { editWakeProfile(null) }
+        })
         wakeProfiles.profiles().forEach { profile ->
             content.addView(TextView(this).apply {
                 text = buildString {
@@ -860,21 +867,55 @@ open class MainActivity : Activity() {
                 textSize = 15f
                 setPadding(0, dp(10), 0, dp(4))
             })
-            val canWake = profile.phrases.any { profile.compiledTokensFor(it) != null }
+            val compiled = profile.phrases.all { profile.compiledTokensFor(it) != null }
             content.addView(Button(this).apply {
                 text = if (profile.enabled) "Disable ${profile.displayName} wake" else "Enable ${profile.displayName} wake"
-                isEnabled = canWake
                 setOnClickListener {
-                    wakeProfiles.upsert(profile.copy(enabled = !profile.enabled))
-                    host.traces.record("wake", "Owner set profile=${profile.id} enabled=${!profile.enabled}")
-                    showPanel(Panel.MODES)
+                    if (profile.enabled) {
+                        wakeProfiles.upsert(profile.copy(enabled = false))
+                        host.traces.record("wake", "Owner set profile=${profile.id} enabled=false")
+                        showPanel(Panel.MODES)
+                    } else {
+                        runCatching { wakeProfiles.compile(profile.copy(enabled = true)) }
+                            .onSuccess { prepared ->
+                                wakeProfiles.upsert(prepared)
+                                host.traces.record("wake", "Owner compiled and enabled profile=${profile.id}")
+                                showPanel(Panel.MODES)
+                            }
+                            .onFailure { error ->
+                                Toast.makeText(this@MainActivity, error.message ?: "That wake name could not be compiled", Toast.LENGTH_LONG).show()
+                            }
+                    }
                 }
             })
-            if (!canWake) {
+            if (!compiled) {
                 content.addView(TextView(this).apply {
-                    text = "This saved wake name is preserved, but it needs compiled BPE tokens before offline listening can use it."
+                    text = "This wake name will be compiled locally from Sage's offline English wake model when you enable or save it."
                     textSize = 13f
                     setTextColor(COLOR_MUTED)
+                })
+            }
+            content.addView(Button(this).apply {
+                text = "Edit ${profile.displayName}"
+                isAllCaps = false
+                setOnClickListener { editWakeProfile(profile) }
+            })
+            if (profile.id !in setOf("sage", "sage_glitch")) {
+                content.addView(Button(this).apply {
+                    text = "Remove ${profile.displayName}"
+                    isAllCaps = false
+                    setOnClickListener {
+                        confirmForget(
+                            title = "Remove this wake name?",
+                            message = "Sage will stop listening for ${profile.phrases.joinToString()}.",
+                            confirmLabel = "Remove"
+                        ) {
+                            if (host.modes.current().profileId == profile.id) host.modes.activate("sage", null)
+                            wakeProfiles.remove(profile.id)
+                            host.traces.record("wake", "Owner removed profile=${profile.id}")
+                            showPanel(Panel.MODES)
+                        }
+                    }
                 })
             }
             content.addView(Button(this).apply {
@@ -887,6 +928,78 @@ open class MainActivity : Activity() {
             })
         }
         body.addView(scroll(content))
+    }
+
+    private fun editWakeProfile(existing: WakeProfile?) {
+        val form = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(8), dp(18), 0)
+        }
+        val name = editor("Name", existing?.displayName.orEmpty(), 1)
+        val phrases = editor(
+            "Wake phrases • one per line",
+            existing?.phrases?.joinToString("\n").orEmpty(),
+            4
+        )
+        val acknowledgement = editor("What Sage says back", existing?.acknowledgement ?: "Yes", 1)
+        val command = editor(
+            "Optional saved command after she answers",
+            existing?.legacyCommand.orEmpty(),
+            2
+        )
+        listOf(name, phrases, acknowledgement, command).forEach(form::addView)
+
+        AlertDialog.Builder(this)
+            .setTitle(if (existing == null) "Add wake name" else "Edit ${existing.displayName}")
+            .setView(form)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Save", null)
+            .create()
+            .also { dialog ->
+                dialog.setOnShowListener {
+                    dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                        val display = name.text.toString().trim()
+                        val phraseList = phrases.text.toString().lineSequence()
+                            .map { WakeProfile.normalizePhrase(it) }
+                            .filter { it.isNotBlank() }
+                            .distinct()
+                            .toList()
+                        val ack = acknowledgement.text.toString().trim().ifBlank { "Yes" }
+                        if (display.isBlank() || phraseList.isEmpty()) {
+                            Toast.makeText(this, "Give the wake name a label and at least one phrase", Toast.LENGTH_SHORT).show()
+                            return@setOnClickListener
+                        }
+                        val profile = WakeProfile(
+                            id = existing?.id ?: "custom_${UUID.randomUUID()}",
+                            displayName = display,
+                            phrases = phraseList,
+                            compiledPhrases = emptyMap(),
+                            modeId = existing?.modeId,
+                            acknowledgement = ack,
+                            enabled = existing?.enabled ?: true,
+                            legacyCommand = command.text.toString().trim().ifBlank { null }
+                        )
+                        runCatching { wakeProfiles.compile(profile) }
+                            .onSuccess { prepared ->
+                                wakeProfiles.upsert(prepared)
+                                host.traces.record(
+                                    "wake",
+                                    "Owner saved profile=${prepared.id} phrases=${prepared.phrases.size} command=${prepared.legacyCommand != null}"
+                                )
+                                dialog.dismiss()
+                                showPanel(Panel.MODES)
+                            }
+                            .onFailure { error ->
+                                Toast.makeText(
+                                    this,
+                                    error.message ?: "That phrase is not supported by the offline English wake model",
+                                    Toast.LENGTH_LONG
+                                ).show()
+                            }
+                    }
+                }
+                dialog.show()
+            }
     }
 
     private fun showAppearance() {

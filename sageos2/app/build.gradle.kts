@@ -32,6 +32,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
 
+    // Native-model vocabulary tests must read the same merged assets shipped in the APK.
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     externalNativeBuild {
         cmake {
             path = file("src/main/cpp/CMakeLists.txt")

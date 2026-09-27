@@ -51,7 +51,9 @@ interface WakeProfileProvider {
 }
 
 class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider {
-    private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val appContext = context.applicationContext
+    private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+    private val compiler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { WakePhraseCompiler(appContext) }
 
     /** Returns all configured profiles. The physical wake engine separately filters enabled profiles. */
     override fun profiles(): List<WakeProfile> {
@@ -68,6 +70,21 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
         val all = profiles().associateBy { it.id }.toMutableMap()
         all[profile.id] = profile
         replace(all.values.toList())
+    }
+
+    fun compile(profile: WakeProfile): WakeProfile {
+        val compiled = profile.compiledPhrases.toMutableMap()
+        profile.phrases.forEach { phrase ->
+            val key = WakeProfile.normalizePhrase(phrase)
+            if (compiled[key].isNullOrBlank()) {
+                val tokens = BuiltInWakeTokens.forPhrase(phrase) ?: compiler.compile(phrase)
+                require(!tokens.isNullOrBlank()) {
+                    "Wake phrase '$phrase' contains text this offline English wake model cannot compile"
+                }
+                compiled[key] = tokens
+            }
+        }
+        return profile.copy(compiledPhrases = compiled)
     }
 
     fun remove(id: String) {
