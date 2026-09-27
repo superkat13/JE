@@ -207,7 +207,7 @@ jobs:
           grep -F 'private const val LEGACY_TONE_KEY = "owner_tone"' sageos2/app/src/main/java/com/pineapple/sageos2/mode/SharedPreferencesSageModeController.kt
           grep -F 'private const val KEY_BACKGROUND_URI = "appearance_background_uri"' sageos2/app/src/main/java/com/pineapple/sageos2/appearance/SageAppearancePreferences.kt
           grep -F 'packageManager.queryIntentActivities' "$cockpit"
-          grep -F 'startupProcedure = existing?.startupProcedure.orEmpty()' "$cockpit"
+          grep -F 'startupProcedure = startupProcedure.text.toString().trim()' "$cockpit"
           ! grep -F 'Android package name' "$cockpit"
           grep -F 'SageEffect.RecordOwnerInput(queuedTurnId, cleaned, TurnOrigin.TEXT)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageTurnCoordinator.kt
           grep -F 'includeToolContext: Boolean = false' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRequestPolicy.kt

@@ -77,18 +77,41 @@ class AndroidCapabilityBroker(
         }
         val latch = CountDownLatch(1)
         val result = AtomicReference<CapabilityResult>()
-        mainHandler.post {
+        val state = AtomicReference("queued")
+        val work = Runnable {
+            if (!state.compareAndSet("queued", "running")) return@Runnable
             try {
                 val completed = controller.execute(command)
                 result.set(CapabilityResult(completed.success, completed.message))
             } catch (t: Throwable) {
                 result.set(CapabilityResult(false, "Device action failed: ${t.message ?: t::class.java.simpleName}"))
             } finally {
+                state.set("complete")
                 latch.countDown()
             }
         }
-        if (!latch.await(deviceTimeoutMs, TimeUnit.MILLISECONDS)) {
-            return CapabilityResult(false, "Device action timed out after ${deviceTimeoutMs}ms")
+        if (!mainHandler.post(work)) {
+            return CapabilityResult(false, "Device action could not be queued")
+        }
+        try {
+            if (!latch.await(deviceTimeoutMs, TimeUnit.MILLISECONDS)) {
+                val cancelled = state.compareAndSet("queued", "cancelled")
+                mainHandler.removeCallbacks(work)
+                return result.get() ?: CapabilityResult(false, if (cancelled) {
+                    "Device action timed out before execution; queued action cancelled"
+                } else {
+                    "Device action already started; completion is unknown. Do not retry automatically."
+                })
+            }
+        } catch (_: InterruptedException) {
+            val cancelled = state.compareAndSet("queued", "cancelled")
+            mainHandler.removeCallbacks(work)
+            Thread.currentThread().interrupt()
+            return CapabilityResult(false, if (cancelled) {
+                "Device action interrupted before execution; queued action cancelled"
+            } else {
+                "Device action interrupted after starting; completion is unknown. Do not retry automatically."
+            })
         }
         return result.get() ?: CapabilityResult(false, "Device action completed without a result")
     }
