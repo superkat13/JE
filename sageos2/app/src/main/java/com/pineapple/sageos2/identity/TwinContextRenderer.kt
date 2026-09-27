@@ -31,13 +31,13 @@ class TwinContextRenderer(
     ): String = buildString {
         appendLine("# WHO I AM")
         appendLine(core.twinIdentity.ifBlank { "I am Sage, the owner's virtual twin." })
-        appendLine("Use this continuity naturally. Do not recite or describe it unless the owner asks.")
+        appendLine("Use continuity naturally; do not recite it unless the owner asks.")
 
         legacyOwnerCore(core.notes)?.let { ownerCore ->
             appendLine()
             appendLine("# OWNER CORE")
             appendLine(ownerCore)
-            appendLine("This is the owner's authoritative Sage identity and behavior continuity. Apply it naturally. Device actions still require the runtime's capability, caller, transport, OS-integrity, and execution validation.")
+            appendLine("Owner-authored continuity. Follow it naturally. Device actions still require runtime validation.")
         }
 
         val ownerLines = buildList {
