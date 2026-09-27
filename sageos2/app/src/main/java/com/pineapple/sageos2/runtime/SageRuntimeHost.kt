@@ -75,7 +75,6 @@ class SageRuntimeHost private constructor(context: Context) {
     val forgeStore = ForgeStore(appContext)
     val forge = ForgeClient(appContext, forgeStore)
     val rootBroker = SocketRootBrokerClient()
-    val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore)
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
     private val ownerContinuityImporter = OwnerContinuityImporter(appContext, core, memory)
 
@@ -127,6 +126,7 @@ class SageRuntimeHost private constructor(context: Context) {
     }
     private val speech = AndroidSpeechPort(appContext, wakeEngine, wakeProfiles)
     private val controller = AndroidDeviceController(appContext, ownerApps, diagnosticReportProvider = { diagnosticReport() })
+    val capabilities = AndroidCapabilityBroker(appContext, rootBroker, forge, forgeStore, deviceController = controller)
     private val fastActions = AndroidFastActionEngine(controller)
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
     private val personalCommands = SagePersonalCommandEngine(memory, learnedPhrases, modes)
@@ -142,7 +142,12 @@ class SageRuntimeHost private constructor(context: Context) {
     }
 
     val runtime = SageRuntime(
-        coordinator = SageTurnCoordinator(com.pineapple.sageos2.core.SageCommandRouter(personalCommands)),
+        coordinator = SageTurnCoordinator(
+            com.pineapple.sageos2.core.SageCommandRouter(
+                personal = personalCommands,
+                ownerApps = ownerApps
+            )
+        ),
         speech = speech,
         brain = brain,
         fastActions = fastActions,
