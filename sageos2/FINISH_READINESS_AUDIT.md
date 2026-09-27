@@ -69,3 +69,20 @@ is needed. First-turn latency cannot be considered solved merely by caching warm
 prefixes. Core requires authentic content, not code that invents it. The larger
 self-maintaining finish line includes workflow execution and controlled updates;
 this audit keeps those obligations visible rather than silently narrowing the goal.
+
+## Audit repairs and native evidence
+
+The broader audit also found two unfixed migration issues: source-presence and
+completion-marker reads could throw before migration's error handling; paragraph
+merging could duplicate legacy Owner App purpose/startup text on every launch.
+The repair catches and reports malformed source types independently, lets other
+valid imports proceed, preserves the malformed source for recovery, and makes
+exact-block merging idempotent. API 28/33 integration tests cover these cases.
+
+Native Brain CI run 36295007456 passed on commit
+`ae9209c7bf248a6055b3b0a220030650bdf91a3d`: real 48-token generation, cold/cached
+output equivalence, changed system/user context, chunked prefill, oversized input,
+injected decode failure, cancellation, recovery and unload under AddressSanitizer.
+The fixture reused 29/30 prompt tokens (14 ms cold prefill, 2 ms warm); these are
+small host-fixture measurements, NOT predicted VASOUN latency. Full integrated
+results including the migration tests must be recorded after their CI completes.
