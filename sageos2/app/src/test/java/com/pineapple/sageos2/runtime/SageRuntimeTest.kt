@@ -1,6 +1,7 @@
 package com.pineapple.sageos2.runtime
 
 import com.pineapple.sageos2.action.*
+import com.pineapple.sageos2.apps.*
 import com.pineapple.sageos2.brain.*
 import com.pineapple.sageos2.capability.*
 import com.pineapple.sageos2.core.*
@@ -143,6 +144,36 @@ class SageRuntimeTest {
         assertEquals(null, request.mode)
     }
 
+    @Test fun rememberedOwnerAppStartupProcedureReachesBrainWithDeviceTools() {
+        val ownerAppsSnapshot = OwnerAppSnapshot(
+            1,
+            listOf(
+                OwnerAppRecord(
+                    "org.mozilla.firefox",
+                    "Firefox",
+                    aliases = listOf("browser"),
+                    purpose = "web",
+                    startupProcedure = "Open Firefox\nTap Private browsing"
+                )
+            )
+        )
+        val ownerAppsProvider = object : OwnerAppProvider {
+            override fun snapshot() = ownerAppsSnapshot
+        }
+        val coordinator = SageTurnCoordinator(SageCommandRouter(ownerApps = ownerAppsProvider))
+        val f = Fixture(coordinator = coordinator, ownerApps = ownerAppsProvider)
+
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("Open Firefox"))
+
+        assertTrue(f.fast.requests.isEmpty())
+        val request = f.brain.requests.single()
+        assertTrue(request.twinContextText.orEmpty().contains("Firefox"))
+        assertTrue(request.twinContextText.orEmpty().contains("Tap Private browsing"))
+        assertTrue(request.twinContextText.orEmpty().contains("device.open_app"))
+        assertTrue(request.twinContextText.orEmpty().contains("device.tap_label"))
+    }
+
     @Test fun fastDeviceCommandBypassesBrain() {
         val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
         assertEquals(1, f.fast.requests.size); assertEquals(0, f.brain.requests.size)
@@ -274,7 +305,8 @@ class SageRuntimeTest {
         coordinator: SageTurnCoordinator = SageTurnCoordinator(),
         sageCore: SageCoreProvider = EmptySageCoreProvider,
         twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
-        conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider
+        conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
+        ownerApps: OwnerAppProvider = EmptyOwnerAppProvider
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
@@ -288,6 +320,7 @@ class SageRuntimeTest {
             sageCore = sageCore,
             twinMemory = twinMemory,
             conversationHistory = conversationHistory,
+            ownerApps = ownerApps,
             capabilities = capability,
             brainResponseTimeoutMs = brainResponseTimeoutMs
         )
