@@ -53,7 +53,9 @@ class SageOs2RecoveryContractTest(unittest.TestCase):
             "sageos2/app/src/main/java/com/pineapple/sageos2/core/"
             "SageCommandRouter.kt"
         )
-        self.assertIn("fastCommands.parse(normalized) != null", router)
+        self.assertIn("val fastCommand = fastCommands.parse(normalized)", router)
+        self.assertIn("if (fastCommand != null)", router)
+        self.assertIn("fastCommand is FastCommand.OpenApp", router)
         self.assertNotIn("fastPrefixes", router)
 
     def test_brain_prompt_does_not_assume_a_model_family(self) -> None:
