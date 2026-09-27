@@ -262,8 +262,8 @@ class TwinContextRendererTest {
         assertTrue(rendered.contains(marker))
         val fitted = BrainPromptBudget.fitSystemContext(rendered, request)
         assertTrue(
-            fitted.contains(marker),
-            "Default local Brain budget must preserve meaningful imported OWNER CORE instructions instead of spending their quota on renderer boilerplate"
+            "Default local Brain budget must preserve meaningful imported OWNER CORE instructions instead of spending their quota on renderer boilerplate",
+            fitted.contains(marker)
         )
     }
 }
