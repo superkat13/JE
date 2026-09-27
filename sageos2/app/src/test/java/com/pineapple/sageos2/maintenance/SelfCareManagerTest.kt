@@ -57,6 +57,22 @@ class SelfCareManagerTest {
         assertEquals(null, task.metadata["cleared"])
     }
 
+    @Test fun ownerCancelledTaskStaysCancelledWhileFindingRemainsVisible() {
+        val store = FakeStore()
+        val manager = SelfCareManager(store)
+        val failed = SelfCareSnapshot(true, "ready", false, "wake failed", 2, true)
+        manager.reconcile(failed, 100L)
+        val cancelled = store.get("selfcare:wake_not_ready")!!.copy(
+            state = TaskState.CANCELLED, nextStep = "", updatedAtMs = 200L
+        )
+        store.upsert(cancelled)
+        assertEquals(listOf("wake_not_ready"), manager.reconcile(failed, 300L).map { it.code })
+        assertEquals(cancelled, store.get(cancelled.taskId))
+        manager.reconcile(failed.copy(wakeReady = true), 400L)
+        manager.reconcile(failed, 500L)
+        assertEquals(cancelled, store.get(cancelled.taskId))
+    }
+
     private class FakeStore : TaskContinuityStore {
         private val values = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { values[checkpoint.taskId] = checkpoint }

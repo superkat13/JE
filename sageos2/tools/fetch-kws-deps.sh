@@ -10,9 +10,9 @@ AAR_VERSION="1.13.7"
 AAR_NAME="sherpa-onnx-${AAR_VERSION}.aar"
 AAR_SHA="c4ef49e309f24fcee5c106b8a279481aaecaabb078cd37b2cd6e9a62cc8a73c8"
 CHECKSUM_SHA="284637b2b9fec1287aca10315dcc960710c6ec14224fb1dfa9fe427e77eb6c18"
-MODEL_NAME="sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01-mobile.tar.bz2"
-MODEL_SHA="2e6ac2577310bfa2f4b6b5fab0478b868c9d0b2cb2c51b3e13b50581b588864d"
-MARKER="$DEPS/ready-v1"
+MODEL_NAME="sherpa-onnx-kws-zipformer-gigaspeech-3.3M-2024-01-01.tar.bz2"
+MODEL_SHA="f170013b4716e41b62b9bfd809687c207cef798ef9bc6534d524e17af9b6561a"
+MARKER="$DEPS/ready-v2"
 
 mkdir -p "$DEPS" "$LIBS" "$ASSETS"
 
@@ -23,7 +23,8 @@ if [[ -f "$MARKER" ]] \
   && [[ -f "$ASSETS/decoder.onnx" ]] \
   && [[ -f "$ASSETS/joiner.int8.onnx" ]] \
   && [[ -f "$ASSETS/tokens.txt" ]] \
-  && [[ -f "$ASSETS/bpe.model" ]]; then
+  && [[ -f "$ASSETS/bpe.model" ]] \
+  && [[ -f "$DEPS/test_wavs/0.wav" ]]; then
   echo "Pinned Sage KWS dependencies already prepared"
   exit 0
 fi
@@ -57,6 +58,7 @@ cp "$MODEL_DIR/joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx" "$ASSETS/joiner
 cp "$MODEL_DIR/tokens.txt" "$ASSETS/tokens.txt"
 cp "$MODEL_DIR/bpe.model" "$ASSETS/bpe.model"
 cp "$MODEL_DIR/keywords.txt" "$ASSETS/keywords.txt"
+cp -r "$MODEL_DIR/test_wavs" "$DEPS/"
 printf '%s %s\n' "$AAR_SHA" "$MODEL_SHA" > "$MARKER"
 
-echo "Prepared sherpa-onnx $AAR_VERSION and verified English mobile KWS model"
+echo "Prepared sherpa-onnx $AAR_VERSION and verified English standard KWS export"

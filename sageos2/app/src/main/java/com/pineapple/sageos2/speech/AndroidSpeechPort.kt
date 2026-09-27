@@ -260,7 +260,7 @@ class AndroidSpeechPort(
         if (text == null) {
             listener?.onRecognitionError(capturedTurnId, capturedGeneration, SpeechRecognizer.ERROR_NO_MATCH)
         } else {
-            listener?.onSpeechDiagnostic("command recognizer final backend=$recognizerBackend chars=0")
+            listener?.onSpeechDiagnostic("command recognizer final backend=$recognizerBackend nonempty=true")
             listener?.onTranscriptFinal(capturedTurnId, capturedGeneration, text)
         }
     }

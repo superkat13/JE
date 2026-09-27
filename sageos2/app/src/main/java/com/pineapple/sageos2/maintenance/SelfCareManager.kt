@@ -78,6 +78,8 @@ class SelfCareManager(private val tasks: TaskContinuityStore) {
         findings.forEach { finding ->
             val id = taskId(finding.code)
             val prior = tasks.get(id)
+            // Keep the health finding visible, but respect the owner's task cancellation.
+            if (prior?.state == TaskState.CANCELLED) return@forEach
             tasks.upsert(
                 TaskCheckpoint(
                     taskId = id,

@@ -41,13 +41,15 @@ class LegacySageMigration(
 
     @Synchronized
     fun runIfNeeded(nowMs: Long = System.currentTimeMillis()): LegacyMigrationReport {
-        val alreadyCompleted = marker.getBoolean(KEY_COMPLETE, false)
-        val source = sourcePresence()
+        val errors = mutableListOf<String>()
+        val alreadyCompleted = runCatching { marker.getBoolean(KEY_COMPLETE, false) }
+            .onFailure { errors += "marker: ${it.message ?: it::class.simpleName}" }
+            .getOrDefault(false)
+        val source = sourcePresence(errors)
 
         // SageOS 2 had early builds that could mark migration complete before every durable
         // store was actually represented. The import functions below are idempotent, so always
         // reconcile legacy state on startup instead of trusting a stale completion bit forever.
-        val errors = mutableListOf<String>()
         var coreImported = false
         var memoriesImported = 0
         var appsImported = 0
@@ -91,18 +93,21 @@ class LegacySageMigration(
         )
     }
 
-    private fun sourcePresence(): LegacySourcePresence {
+    private fun sourcePresence(errors: MutableList<String>): LegacySourcePresence {
+        fun probe(name: String, read: () -> Boolean): Boolean = runCatching(read)
+            .onFailure { errors += "source_$name: ${it.message ?: it::class.simpleName}" }
+            .getOrDefault(false)
         val legacyCore = appContext.getSharedPreferences(LEGACY_CORE_PREFS, Context.MODE_PRIVATE)
         val legacyState = appContext.getSharedPreferences(LEGACY_STATE_PREFS, Context.MODE_PRIVATE)
         val legacyApps = appContext.getSharedPreferences(LEGACY_OWNER_APPS_PREFS, Context.MODE_PRIVATE)
         val legacyAutonomy = appContext.getSharedPreferences(LEGACY_AUTONOMY_PREFS, Context.MODE_PRIVATE)
         return LegacySourcePresence(
-            core = legacyCore.getString(LEGACY_CORE_TEXT, "").orEmpty().isNotBlank(),
-            memory = legacyState.getStringSet(LEGACY_MEMORY_ITEMS, emptySet()).orEmpty().isNotEmpty(),
-            ownerApps = legacyApps.getString(LEGACY_OWNER_APPS_KEY, "").orEmpty().isNotBlank(),
-            wake = legacyState.getStringSet(LEGACY_WAKE_PROFILES, emptySet()).orEmpty().isNotEmpty() ||
-                legacyState.getStringSet(LEGACY_WAKE_ALIASES, emptySet()).orEmpty().isNotEmpty(),
-            autonomy = legacyAutonomy.getString(LEGACY_AUTONOMY_ACTIVE, "").orEmpty().isNotBlank()
+            core = probe("core") { legacyCore.getString(LEGACY_CORE_TEXT, "").orEmpty().isNotBlank() },
+            memory = probe("memory") { legacyState.getStringSet(LEGACY_MEMORY_ITEMS, emptySet()).orEmpty().isNotEmpty() },
+            ownerApps = probe("owner_apps") { legacyApps.getString(LEGACY_OWNER_APPS_KEY, "").orEmpty().isNotBlank() },
+            wake = probe("wake") { legacyState.getStringSet(LEGACY_WAKE_PROFILES, emptySet()).orEmpty().isNotEmpty() ||
+                legacyState.getStringSet(LEGACY_WAKE_ALIASES, emptySet()).orEmpty().isNotEmpty() },
+            autonomy = probe("autonomy") { legacyAutonomy.getString(LEGACY_AUTONOMY_ACTIVE, "").orEmpty().isNotBlank() }
         )
     }
 
@@ -304,8 +309,12 @@ class LegacySageMigration(
         private fun normalize(value: String): String = value.lowercase(Locale.US).replace(Regex("\\s+"), " ").trim()
         private fun stableId(kind: String, value: String): String =
             UUID.nameUUIDFromBytes("sage1333:$kind:$value".toByteArray(StandardCharsets.UTF_8)).toString()
-        private fun mergeParagraphs(left: String, right: String): String =
-            listOf(left.trim(), right.trim()).filter { it.isNotEmpty() }.distinct().joinToString("\n\n")
+        private fun mergeParagraphs(left: String, right: String): String {
+            val existing = left.trim()
+            val incoming = right.trim()
+            if (incoming.isEmpty() || "\n\n$incoming\n\n" in "\n\n$existing\n\n") return existing
+            return listOf(existing, incoming).filter { it.isNotEmpty() }.joinToString("\n\n")
+        }
     }
 }
 
@@ -333,7 +342,7 @@ data class LegacyMigrationReport(
     val errors: List<String> = emptyList()
 ) {
     fun summary(): String = buildString {
-        append(if (alreadyCompleted) "legacy migration already complete" else if (completed) "legacy migration complete" else "legacy migration incomplete")
+        append(if (!completed) "legacy migration incomplete" else if (alreadyCompleted) "legacy migration already complete" else "legacy migration complete")
         append("; core=").append(coreImported)
         append(" memories=").append(memoriesImported)
         append(" apps=").append(ownerAppsImported)

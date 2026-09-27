@@ -71,5 +71,6 @@ data class BrainTelemetry(
     val promptPrefillMs: Long? = null,
     val firstTokenMs: Long? = null,
     val generationMs: Long? = null,
-    val promptTokensPerSecond: Float? = null
+    val promptTokensPerSecond: Float? = null,
+    val cachedPromptTokens: Int? = null
 )
