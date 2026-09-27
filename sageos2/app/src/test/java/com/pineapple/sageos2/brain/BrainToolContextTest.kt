@@ -20,6 +20,8 @@ class BrainToolContextTest {
         )
         assertTrue(text.contains("Do not emit root.*"))
         assertTrue(text.contains("Do not emit forge.*"))
+        assertTrue(text.contains("device.open_app:"))
+        assertTrue(text.contains("device.tap_label:"))
         assertFalse(text.contains("root.exec:"))
         assertFalse(text.contains("forge.start_job:"))
     }
@@ -36,6 +38,8 @@ class BrainToolContextTest {
         )
         assertTrue(text.contains("root.exec:"))
         assertTrue(text.contains("forge.start_job:"))
+        assertTrue(text.contains("device.open_app:"))
+        assertTrue(text.contains("device.set_alarm:"))
         assertTrue(text.contains("owner_approved=false"))
         assertFalse(text.contains("forge.revoke"))
         assertFalse(text.contains("forge.pair"))
