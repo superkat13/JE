@@ -188,6 +188,7 @@ class LocalNativeBrainEngine(
                                 "generation_ms=${safeLong { bridge.generationDurationMs() }}",
                                 "prefill_ms=${safeLong { bridge.promptPrefillDurationMs() }}",
                                 "prompt_tokens=${safeInt { bridge.promptTokenCount() }}",
+                                "cached_prompt_tokens=${safeInt { bridge.cachedPromptTokenCount() }}",
                                 "prompt_tps=${safeFloat { bridge.promptTokensPerSecond() }}",
                                 "generated_tokens=${safeInt { bridge.generatedTokenCount() }}",
                                 "requested_tokens=$requestedTokens",
@@ -258,6 +259,7 @@ class LocalNativeBrainEngine(
         if (!libraryReady.get()) return null
         return BrainTelemetry(
             nativeStage = safeStage().ifBlank { null },
+            cachedPromptTokens = safeInt { bridge.cachedPromptTokenCount() }.takeIf { it >= 0 },
             promptTokens = safeInt { bridge.promptTokenCount() }.takeIf { it >= 0 },
             generatedTokens = safeInt { bridge.generatedTokenCount() }.takeIf { it >= 0 },
             promptPrefillMs = safeLong { bridge.promptPrefillDurationMs() }.takeIf { it >= 0L },

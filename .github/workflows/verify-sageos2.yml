@@ -10,6 +10,8 @@ on:
   workflow_dispatch:
 
 jobs:
+  native-brain:
+    uses: ./.github/workflows/test-sageos2-native-brain.yml
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 40
@@ -89,7 +91,7 @@ jobs:
           grep -F 'private val brainStallTimeoutMs: Long = 30_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'effective_user_prompt += "\n/no_think";' sageos2/app/src/main/cpp/sage_brain.cpp
           grep -F 'constexpr int kContextTokens = 2048;' sageos2/app/src/main/cpp/sage_brain.cpp
-          grep -F 'constexpr int kMaximumResponseTokens = 24;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'constexpr int kMaximumResponseTokens = 48;' sageos2/app/src/main/cpp/sage_brain.cpp
           grep -F 'const val DEFAULT_COMBINED_CHARACTER_BUDGET = 4_800' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainPromptBudget.kt
           grep -F 'SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"' sageos2/app/src/main/cpp/CMakeLists.txt
           grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
@@ -252,7 +254,7 @@ jobs:
           python3 -m unittest discover -v sage_forge/tests
 
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
-        run: gradle -p sageos2 testDebugUnitTest assembleDebug --stacktrace
+        run: gradle -p sageos2 testDebugUnitTest lintRelease assembleDebug --stacktrace
       - name: Summarize unit and Android service test results
         if: always()
         run: |

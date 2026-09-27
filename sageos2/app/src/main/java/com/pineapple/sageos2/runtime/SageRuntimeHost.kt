@@ -312,6 +312,7 @@ class SageRuntimeHost private constructor(context: Context) {
                 brainEvidence = brainHealth.telemetry?.let { telemetry ->
                     buildMap {
                         telemetry.nativeStage?.let { put("native stage", it) }
+                        telemetry.cachedPromptTokens?.let { put("cached prompt tokens", it.toString()) }
                         telemetry.promptTokens?.let { put("prompt tokens", it.toString()) }
                         telemetry.generatedTokens?.let { put("generated tokens", it.toString()) }
                         telemetry.promptPrefillMs?.let { put("prompt prefill", "$it ms") }

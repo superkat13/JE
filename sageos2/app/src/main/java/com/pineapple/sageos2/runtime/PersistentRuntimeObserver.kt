@@ -26,6 +26,7 @@ class PersistentRuntimeObserver(private val traces: SharedPreferencesTraceStore)
         turnId = progress.turnId,
         metadata = buildMap {
             progress.telemetry?.nativeStage?.let { put("native_stage", it) }
+            progress.telemetry?.cachedPromptTokens?.let { put("cached_prompt_tokens", it.toString()) }
             progress.telemetry?.promptTokens?.let { put("prompt_tokens", it.toString()) }
             progress.telemetry?.generatedTokens?.let { put("generated_tokens", it.toString()) }
             progress.telemetry?.promptPrefillMs?.let { put("prefill_ms", it.toString()) }

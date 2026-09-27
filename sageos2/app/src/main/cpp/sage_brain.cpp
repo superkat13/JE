@@ -30,11 +30,13 @@ std::atomic<int> g_last_generated_token_count{0};
 std::atomic<long long> g_active_request_id{0};
 std::atomic<int> g_last_stage{0};
 std::string g_last_error = "Model not loaded";
+std::vector<llama_token> g_cached_prompt;
+std::atomic<int> g_last_cached_prompt_tokens{0};
 bool g_backend_initialized = false;
 // These family-neutral ceilings preserve the last physically informed tablet configuration.
 // The inherited GGUF identity must be read from the installed file before model-specific tuning.
 constexpr int kContextTokens = 2048;
-constexpr int kMaximumResponseTokens = 24;
+constexpr int kMaximumResponseTokens = 48;
 // Keep prompt decode batches at or below n_ubatch. Candidate 206 could hand the entire
 // formatted Sage context to llama_decode even when it exceeded n_batch=512, which trips
 // llama.cpp's hard n_tokens <= n_batch assertion and kills the Android process.
@@ -62,6 +64,8 @@ void set_error(const std::string & message) {
 }
 
 void release_model_locked() {
+    g_cached_prompt.clear();
+    g_last_cached_prompt_tokens.store(0, std::memory_order_release);
     if (g_context != nullptr) {
         llama_free(g_context);
         g_context = nullptr;
@@ -315,7 +319,20 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     g_last_error.clear();
     g_last_stage.store(4, std::memory_order_release);
     const long long active_request_id = static_cast<long long>(request_id);
+    g_cancel_requested.store(false, std::memory_order_release);
     g_active_request_id.store(active_request_id, std::memory_order_release);
+    g_last_cached_prompt_tokens.store(0, std::memory_order_release);
+    // Every failed/cancelled turn invalidates reusable state and retires its request ID.
+    struct RequestGuard {
+        bool completed = false;
+        ~RequestGuard() {
+            g_active_request_id.store(0, std::memory_order_release);
+            if (!completed) {
+                g_cached_prompt.clear();
+                if (g_context) llama_memory_clear(llama_get_memory(g_context), true);
+            }
+        }
+    } request_guard;
     const auto generation_start = std::chrono::steady_clock::now();
     if (g_model == nullptr || g_context == nullptr) {
         set_error("Sage Brain was asked before its model loaded");
@@ -353,14 +370,29 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     }
 
     g_last_stage.store(5, std::memory_order_release);
-    llama_memory_clear(llama_get_memory(g_context), true);
-    g_cancel_requested.store(false, std::memory_order_release);
+    // Reuse only byte-for-byte token prefixes of the previous successful prompt.
+    // Always replay at least its final token to obtain fresh logits. Recurrent/hybrid
+    // models may not support partial rollback, so they retain the full-prefill path.
+    size_t prompt_offset = 0U;
+    if (!llama_model_is_recurrent(g_model) && !llama_model_is_hybrid(g_model)
+            && !llama_model_is_diffusion(g_model) && !prompt_tokens.empty()) {
+        const size_t limit = std::min(g_cached_prompt.size(), prompt_tokens.size() - 1U);
+        while (prompt_offset < limit && g_cached_prompt[prompt_offset] == prompt_tokens[prompt_offset]) {
+            ++prompt_offset;
+        }
+    }
+    if (prompt_offset == 0U || !llama_memory_seq_rm(
+            llama_get_memory(g_context), 0, static_cast<llama_pos>(prompt_offset), -1)) {
+        llama_memory_clear(llama_get_memory(g_context), true);
+        prompt_offset = 0U;
+    }
+    const size_t reused_prompt_tokens = prompt_offset;
+    g_last_cached_prompt_tokens.store(static_cast<int>(prompt_offset), std::memory_order_release);
 
     // llama.cpp requires each decode batch to stay within context_params.n_batch. Sage's
     // structured identity/memory prompt can legitimately exceed that even though the whole turn
     // still fits n_ctx. Prefill in bounded chunks and leave the final chunk for the existing
     // decode/sample loop so generation semantics stay unchanged.
-    size_t prompt_offset = 0U;
     while (prompt_tokens.size() - prompt_offset
             > static_cast<size_t>(kPromptPrefillChunkTokens)) {
         if (g_cancel_requested.load(std::memory_order_acquire)) {
@@ -400,7 +432,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
                 prompt_offset + static_cast<size_t>(kPromptPrefillChunkTokens);
         if (prefill_progress_ms > 0) {
             g_last_prompt_tokens_per_second.store(
-                    static_cast<float>(prefilled_tokens) * 1000.0f
+                    static_cast<float>(prefilled_tokens - reused_prompt_tokens) * 1000.0f
                             / static_cast<float>(prefill_progress_ms),
                     std::memory_order_release
             );
@@ -426,6 +458,8 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     }
 
     bool cancelled = false;
+    bool decode_failed = false;
+    llama_token token = 0; // Must outlive the batch consumed on the next iteration.
     bool prompt_prefilled = false;
     auto generation_only_start = generation_start;
     int generated_token_count = 0;
@@ -446,7 +480,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             );
             if (prefill_duration > 0) {
                 g_last_prompt_tokens_per_second.store(
-                        static_cast<float>(prompt_tokens.size()) * 1000.0f
+                        static_cast<float>(prompt_tokens.size() - reused_prompt_tokens) * 1000.0f
                                 / static_cast<float>(prefill_duration),
                         std::memory_order_release
                 );
@@ -460,6 +494,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
                 cancelled = true;
                 break;
             }
+            decode_failed = true;
             set_error("llama_decode failed with code " + std::to_string(decode_result));
             break;
         }
@@ -469,7 +504,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             break;
         }
         g_last_stage.store(6, std::memory_order_release);
-        llama_token token = llama_sampler_sample(sampler, g_context, -1);
+        token = llama_sampler_sample(sampler, g_context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
             break;
         }
@@ -516,10 +551,13 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         set_error("Brain request cancelled");
         return to_java_string(env, "");
     }
+    if (decode_failed) return to_java_string(env, "");
     if (output.empty()) {
         set_error("The local model generated no text");
         return to_java_string(env, "");
     }
+    g_cached_prompt = prompt_tokens;
+    request_guard.completed = true;
     g_last_error.clear();
     g_last_stage.store(10, std::memory_order_release);
     g_active_request_id.store(0, std::memory_order_release);
@@ -598,4 +636,10 @@ JNIEXPORT jstring JNICALL
 Java_com_pineapple_sage_SageBrainManager_nativeLastError(JNIEnv * env, jclass) {
     std::lock_guard<std::mutex> lock(g_mutex);
     return to_java_string(env, g_last_error);
+}
+
+extern "C"
+JNIEXPORT jint JNICALL
+Java_com_pineapple_sage_SageBrainManager_nativeLastCachedPromptTokenCount(JNIEnv *, jclass) {
+    return g_last_cached_prompt_tokens.load(std::memory_order_acquire);
 }

@@ -9,6 +9,7 @@ interface NativeBrainBridge {
     fun firstTokenLatencyMs(): Long = -1L
     fun generationDurationMs(): Long = -1L
     fun promptPrefillDurationMs(): Long = -1L
+    fun cachedPromptTokenCount(): Int = -1
     fun promptTokenCount(): Int = -1
     fun generatedTokenCount(): Int = -1
     fun promptTokensPerSecond(): Float = -1f
@@ -26,6 +27,7 @@ class JniNativeBrainBridge(
     override fun firstTokenLatencyMs() = manager.nativeLastFirstTokenLatencyMs()
     override fun generationDurationMs() = manager.nativeLastGenerationDurationMs()
     override fun promptPrefillDurationMs() = manager.nativeLastPromptPrefillDurationMs()
+    override fun cachedPromptTokenCount() = manager.nativeLastCachedPromptTokenCount()
     override fun promptTokenCount() = manager.nativeLastPromptTokenCount()
     override fun generatedTokenCount() = manager.nativeLastGeneratedTokenCount()
     override fun promptTokensPerSecond() = manager.nativeLastPromptTokensPerSecond()

@@ -17,6 +17,7 @@ class SageBrainManager {
     external fun nativeLastFirstTokenLatencyMs(): Long
     external fun nativeLastGenerationDurationMs(): Long
     external fun nativeLastPromptPrefillDurationMs(): Long
+    external fun nativeLastCachedPromptTokenCount(): Int
     external fun nativeLastPromptTokenCount(): Int
     external fun nativeLastGeneratedTokenCount(): Int
     external fun nativeLastPromptTokensPerSecond(): Float
