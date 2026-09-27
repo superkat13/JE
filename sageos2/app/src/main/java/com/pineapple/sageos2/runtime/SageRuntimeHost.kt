@@ -12,6 +12,7 @@ import com.pineapple.sageos2.action.AndroidFastActionEngine
 import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
 import com.pineapple.sageos2.brain.BrainRouterEngine
 import com.pineapple.sageos2.brain.BrainProgress
+import com.pineapple.sageos2.brain.BrainModelStore
 import com.pineapple.sageos2.brain.LocalNativeBrainEngine
 import com.pineapple.sageos2.capability.AndroidCapabilityBroker
 import com.pineapple.sageos2.capability.Capability
@@ -119,7 +120,8 @@ class SageRuntimeHost private constructor(context: Context) {
         }
     }
 
-    private val localModel = File(File(appContext.filesDir, "brain"), "sage-brain.gguf")
+    private val brainModelStore = BrainModelStore(appContext)
+    private val localModel = brainModelStore.modelFile()
     private val localBrain = LocalNativeBrainEngine(localModel.absolutePath)
     private val brain = BrainRouterEngine(listOf(localBrain))
     private val wakeEngine = RemoteWakeWordEngine(appContext) { detail ->
@@ -309,8 +311,8 @@ class SageRuntimeHost private constructor(context: Context) {
                 },
                 chickenTonightScopeStatus = scopeStatus,
                 traces = traces.recent(traceLimit.coerceIn(0, 200)),
-                brainEvidence = brainHealth.telemetry?.let { telemetry ->
-                    buildMap {
+                brainEvidence = buildMap {
+                    brainHealth.telemetry?.let { telemetry ->
                         telemetry.nativeStage?.let { put("native stage", it) }
                         telemetry.cachedPromptTokens?.let { put("cached prompt tokens", it.toString()) }
                         telemetry.promptTokens?.let { put("prompt tokens", it.toString()) }
@@ -320,7 +322,22 @@ class SageRuntimeHost private constructor(context: Context) {
                         telemetry.generationMs?.let { put("generation", "$it ms") }
                         telemetry.promptTokensPerSecond?.let { put("prompt speed", "$it tokens/s") }
                     }
-                }.orEmpty()
+                    val inspected = brainModelStore.inspectionMetadata()
+                    val imported = brainModelStore.metadata()
+                    if (localModel.isFile) put("model file bytes", localModel.length().toString())
+                    (inspected?.sha256 ?: imported?.sha256)?.takeIf { it.isNotBlank() }?.let {
+                        put("model sha256", it)
+                    }
+                    inspected?.architecture?.takeIf { it.isNotBlank() }?.let { put("model architecture", it) }
+                    inspected?.embeddedName?.takeIf { it.isNotBlank() }?.let { put("model embedded name", it) }
+                    inspected?.fileType?.takeIf { it.isNotBlank() }?.let { put("model file type", it) }
+                    inspected?.quantizationVersion?.takeIf { it.isNotBlank() }?.let { put("model quantization version", it) }
+                    inspected?.parameterCount?.takeIf { it >= 0L }?.let { put("model parameters", it.toString()) }
+                    inspected?.inspectedAtMs?.takeIf { it > 0L }?.let { put("model inspected at", it.toString()) }
+                    if (localModel.isFile && inspected == null && imported == null) {
+                        put("model identity", "installed; digest/metadata not yet inspected")
+                    }
+                }
             )
         )
     }
