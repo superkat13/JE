@@ -1,6 +1,7 @@
 package com.pineapple.sageos2.runtime
 
 import com.pineapple.sageos2.action.*
+import com.pineapple.sageos2.apps.*
 import com.pineapple.sageos2.brain.*
 import com.pineapple.sageos2.capability.*
 import com.pineapple.sageos2.core.*
