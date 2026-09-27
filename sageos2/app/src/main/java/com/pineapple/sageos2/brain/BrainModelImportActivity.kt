@@ -154,6 +154,7 @@ class BrainModelImportActivity : Activity() {
         Thread({
             runCatching { BrainIdentityInspector.inspect(store.modelFile()) }
                 .onSuccess { result ->
+                    store.saveInspection(result)
                     val report = result.report()
                     // This tag emits only model metadata, and only after the owner taps Inspect.
                     Log.i("SageBrainIdentity", "BEGIN")
