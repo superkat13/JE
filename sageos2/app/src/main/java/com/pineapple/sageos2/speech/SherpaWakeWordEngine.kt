@@ -22,6 +22,7 @@ class SherpaWakeWordEngine(
     private val keywordThreshold: Float = 0.25f
 ) : WakeWordEngine {
     private val appContext = context.applicationContext
+    private val phraseCompiler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { WakePhraseCompiler(appContext) }
     private val session = AtomicLong(0L)
     private val lock = Any()
     @Volatile private var profiles: List<WakeProfile> = SharedPreferencesWakeProfileStore.defaults()
@@ -209,8 +210,9 @@ class SherpaWakeWordEngine(
     private fun compiledEntries(): List<CompiledWake> = buildList {
         profiles.forEach { profile ->
             profile.phrases.forEach { phrase ->
-                profile.compiledTokensFor(phrase)?.takeIf { it.isNotBlank() }?.let { tokens ->
-                    add(CompiledWake(profile, WakeProfile.normalizePhrase(phrase), tokens))
+                val tokens = profile.compiledTokensFor(phrase) ?: phraseCompiler.compile(phrase)
+                tokens?.takeIf { it.isNotBlank() }?.let {
+                    add(CompiledWake(profile, WakeProfile.normalizePhrase(phrase), it))
                 }
             }
         }
