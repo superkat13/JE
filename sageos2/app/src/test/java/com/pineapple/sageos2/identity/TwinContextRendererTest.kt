@@ -3,6 +3,7 @@ package com.pineapple.sageos2.identity
 import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.apps.OwnerAppSnapshot
 import com.pineapple.sageos2.brain.BrainPromptBudget
+import com.pineapple.sageos2.brain.BrainRequestPolicy
 import com.pineapple.sageos2.memory.*
 import com.pineapple.sageos2.mode.SageModeSnapshot
 import org.junit.Assert.assertEquals
@@ -199,9 +200,9 @@ class TwinContextRendererTest {
         assertFalse(rendered.contains("Clouds are white"))
     }
 
-    @Test fun defaultBrainBudgetPreservesMeaningfulImportedOwnerCoreAfterRendererPreamble() {
+    @Test fun ordinaryRuntimeBudgetPreservesMeaningfulImportedOwnerCoreBeforeRendererBoilerplate() {
         val marker = "OWNER_RULE_MUST_SURVIVE"
-        val ownerCore = "a".repeat(500) + marker + "b".repeat(1_800)
+        val ownerCore = "a".repeat(50) + marker + "b".repeat(2_250)
         val core = EmptySageCoreProvider.current().copy(
             twinIdentity = "Identity " + "i".repeat(800),
             ownerModel = OwnerModel(preferences = listOf("Owner context " + "o".repeat(1_600))),
@@ -260,9 +261,15 @@ class TwinContextRendererTest {
         )
 
         assertTrue(rendered.contains(marker))
-        val fitted = BrainPromptBudget.fitSystemContext(rendered, request)
+        val profile = BrainRequestPolicy.forPrompt(request)
+        assertEquals(1_600, profile.combinedCharacterBudget)
+        val fitted = BrainPromptBudget.fitSystemContext(
+            rendered,
+            request,
+            profile.combinedCharacterBudget
+        )
         assertTrue(
-            "Default local Brain budget must preserve meaningful imported OWNER CORE instructions instead of spending their quota on renderer boilerplate",
+            "Ordinary runtime budget must preserve meaningful imported OWNER CORE instructions before spending their quota on renderer boilerplate",
             fitted.contains(marker)
         )
     }
