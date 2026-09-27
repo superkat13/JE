@@ -27,7 +27,7 @@ jobs:
             sageos2/.deps/kws
             sageos2/app/libs/sherpa-onnx-1.13.7.aar
             sageos2/app/src/main/assets/sherpa-kws
-          key: sageos2-kws-v2-1.13.7-f170013b4716e41b
+          key: sageos2-kws-v3-1.13.7-f170013b4716e41b
       - name: Reject removed Shizuku architecture
         run: |
           set -euo pipefail
@@ -61,6 +61,7 @@ jobs:
           test -s sageos2/app/src/main/assets/sherpa-kws/decoder.onnx
           test -s sageos2/app/src/main/assets/sherpa-kws/joiner.int8.onnx
           test -s sageos2/app/src/main/assets/sherpa-kws/tokens.txt
+          test -s sageos2/app/src/main/assets/sherpa-kws/bpe-vocab.tsv
       - name: Prepare exact pinned llama.cpp for native Brain
         run: |
           set -euo pipefail
