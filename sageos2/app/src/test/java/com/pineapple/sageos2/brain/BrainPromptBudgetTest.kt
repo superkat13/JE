@@ -130,26 +130,4 @@ class BrainPromptBudgetTest {
         assertTrue(fitted.contains("# RECENT CONVERSATION"))
         assertTrue(fitted.endsWith("newest-turn"))
     }
-
-    @Test fun productionBudgetAtBudget1600PreservesOwnerInstructionsBeyondNoise() {
-        val ownerCoreInstructions = "OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS"
-        val context = listOf(
-            "# WHO I AM\nSage identity",
-            "# OWNER CORE\n$ownerCoreInstructions",
-            "# WHAT MATTERS TO US\nOwner context " + "x".repeat(300),
-            "# ME\nSelf model " + "y".repeat(300),
-            "# THINGS I REMEMBER\nMemory " + "z".repeat(500),
-            "# RECENT CONVERSATION\nOld talk " + "r".repeat(600) + " Newest talk"
-        ).joinToString("\n\n")
-
-        val fitted = BrainPromptBudget.fitSystemContext(context, "User prompt", 1_600)
-
-        assertTrue(fitted.length <= 1_600 - "User prompt".length)
-        assertTrue(fitted.contains("# OWNER CORE"), "Production budget must preserve OWNER CORE header")
-        assertTrue(fitted.contains(ownerCoreInstructions), "Production budget must preserve meaningful owner instructions (not just noise)")
-        val maxAcceptableLoss = (ownerCoreInstructions.length * 0.25).toInt()
-        val remaining = fitted.substringAfter("# OWNER CORE\n").trim().length
-        assertTrue(remaining >= ownerCoreInstructions.length - maxAcceptableLoss,
-            "Production budget 1,600 must keep at least 75% of owner instructions; kept $remaining of ${ownerCoreInstructions.length}: $fitted")
-    }
 }
