@@ -37,7 +37,9 @@ class DiagnosticReportTest {
                 brainEvidence = mapOf(
                     "native stage" to "complete",
                     "prompt tokens" to "812",
-                    "first token" to "7100 ms"
+                    "first token" to "7100 ms",
+                    "model sha256" to "abc123",
+                    "model architecture" to "\"qwen2\""
                 )
             )
         )
@@ -54,6 +56,8 @@ class DiagnosticReportTest {
         assertTrue(report.contains("Brain native stage: complete"))
         assertTrue(report.contains("Brain prompt tokens: 812"))
         assertTrue(report.contains("Brain first token: 7100 ms"))
+        assertTrue(report.contains("Brain model sha256: abc123"))
+        assertTrue(report.contains("Brain model architecture: \"qwen2\""))
         assertTrue(report.contains("conversation text"))
         assertFalse(report.contains("authorizationReference"))
         assertFalse(report.contains("ownerPrompt"))
