@@ -23,6 +23,17 @@ data class BrainModelImportResult(
     val destination: File
 )
 
+data class BrainInspectionMetadata(
+    val sha256: String,
+    val sizeBytes: Long,
+    val architecture: String,
+    val embeddedName: String,
+    val fileType: String,
+    val quantizationVersion: String,
+    val parameterCount: Long,
+    val inspectedAtMs: Long
+)
+
 class BrainModelStore(private val context: Context) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
@@ -38,6 +49,36 @@ class BrainModelStore(private val context: Context) {
     }
 
     fun isProvisioned(): Boolean = modelFile().isFile && runCatching { hasGgufMagic(modelFile()) }.getOrDefault(false)
+
+    fun inspectionMetadata(): BrainInspectionMetadata? {
+        val sha = prefs.getString(KEY_INSPECTION_SHA, null)?.takeIf { it.isNotBlank() } ?: return null
+        val size = prefs.getLong(KEY_INSPECTION_SIZE, -1L).takeIf { it >= 0L } ?: return null
+        return BrainInspectionMetadata(
+            sha256 = sha,
+            sizeBytes = size,
+            architecture = prefs.getString(KEY_INSPECTION_ARCH, "").orEmpty(),
+            embeddedName = prefs.getString(KEY_INSPECTION_NAME, "").orEmpty(),
+            fileType = prefs.getString(KEY_INSPECTION_FILE_TYPE, "").orEmpty(),
+            quantizationVersion = prefs.getString(KEY_INSPECTION_QUANT, "").orEmpty(),
+            parameterCount = prefs.getLong(KEY_INSPECTION_PARAMETERS, -1L),
+            inspectedAtMs = prefs.getLong(KEY_INSPECTION_AT, 0L)
+        )
+    }
+
+    fun saveInspection(result: BrainIdentityInspector.Result, nowMs: Long = System.currentTimeMillis()) {
+        require(modelFile().isFile) { "The installed Sage Brain file is missing" }
+        require(modelFile().length() == result.sizeBytes) { "The installed Sage Brain changed after inspection" }
+        prefs.edit()
+            .putString(KEY_INSPECTION_SHA, result.sha256)
+            .putLong(KEY_INSPECTION_SIZE, result.sizeBytes)
+            .putString(KEY_INSPECTION_ARCH, result.metadata["general.architecture"].orEmpty())
+            .putString(KEY_INSPECTION_NAME, result.metadata["general.name"].orEmpty())
+            .putString(KEY_INSPECTION_FILE_TYPE, result.metadata["general.file_type"].orEmpty())
+            .putString(KEY_INSPECTION_QUANT, result.metadata["general.quantization_version"].orEmpty())
+            .putLong(KEY_INSPECTION_PARAMETERS, result.parameterCount)
+            .putLong(KEY_INSPECTION_AT, nowMs)
+            .apply()
+    }
 
     fun import(
         uri: Uri,
@@ -72,6 +113,7 @@ class BrainModelStore(private val context: Context) {
             require(copied > 0L) { "The selected model is empty" }
             require(hasGgufMagic(temp)) { "The selected file does not contain a GGUF model header" }
             moveIntoPlace(temp, destination)
+            clearInspection()
             val metadata = BrainModelMetadata(
                 sourceName = sourceName,
                 sizeBytes = copied,
@@ -126,6 +168,19 @@ class BrainModelStore(private val context: Context) {
         }
     }
 
+    private fun clearInspection() {
+        prefs.edit()
+            .remove(KEY_INSPECTION_SHA)
+            .remove(KEY_INSPECTION_SIZE)
+            .remove(KEY_INSPECTION_ARCH)
+            .remove(KEY_INSPECTION_NAME)
+            .remove(KEY_INSPECTION_FILE_TYPE)
+            .remove(KEY_INSPECTION_QUANT)
+            .remove(KEY_INSPECTION_PARAMETERS)
+            .remove(KEY_INSPECTION_AT)
+            .apply()
+    }
+
     companion object {
         const val MODEL_NAME = "sage-brain.gguf"
         private const val PREFS = "sage_brain_model_v2"
@@ -133,5 +188,13 @@ class BrainModelStore(private val context: Context) {
         private const val KEY_SIZE = "size_bytes"
         private const val KEY_SHA = "sha256"
         private const val KEY_IMPORTED = "imported_at"
+        private const val KEY_INSPECTION_SHA = "inspection_sha256"
+        private const val KEY_INSPECTION_SIZE = "inspection_size_bytes"
+        private const val KEY_INSPECTION_ARCH = "inspection_architecture"
+        private const val KEY_INSPECTION_NAME = "inspection_name"
+        private const val KEY_INSPECTION_FILE_TYPE = "inspection_file_type"
+        private const val KEY_INSPECTION_QUANT = "inspection_quantization_version"
+        private const val KEY_INSPECTION_PARAMETERS = "inspection_parameter_count"
+        private const val KEY_INSPECTION_AT = "inspection_at"
     }
 }
