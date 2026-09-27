@@ -36,8 +36,8 @@ class TwinContextRenderer(
         legacyOwnerCore(core.notes)?.let { ownerCore ->
             appendLine()
             appendLine("# OWNER CORE")
-            appendLine("This is the owner's authoritative Sage identity and behavior continuity. Apply it naturally. Device actions still require the runtime's capability, caller, transport, OS-integrity, and execution validation.")
             appendLine(ownerCore)
+            appendLine("This is the owner's authoritative Sage identity and behavior continuity. Apply it naturally. Device actions still require the runtime's capability, caller, transport, OS-integrity, and execution validation.")
         }
 
         val ownerLines = buildList {
