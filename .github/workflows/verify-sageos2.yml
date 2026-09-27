@@ -135,6 +135,8 @@ jobs:
       - name: Verify offline wake architecture
         run: |
           grep -F 'class SherpaWakeWordEngine' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
+          grep -F 'class WakePhraseCompiler' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakePhraseCompiler.kt
+          test -s sageos2/app/src/main/assets/sherpa-kws/bpe-vocab.tsv
           grep -F '▁S AGE' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
           grep -F '▁S AGE ▁G LI T CH' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
           grep -F 'SAMPLES_PER_CHUNK = 1_600' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
