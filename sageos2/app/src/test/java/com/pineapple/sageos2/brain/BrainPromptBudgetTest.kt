@@ -100,6 +100,26 @@ class BrainPromptBudgetTest {
         assertTrue(fitted.contains("Recovered Face Project"))
     }
 
+    @Test fun compactColdBudgetKeepsIdentityOwnerCoreAndRecentTailRepresented() {
+        val marker = "OWNER_RULE_SURVIVES_COLD_START"
+        val context = listOf(
+            "# WHO I AM\nSage identity " + "i".repeat(500),
+            "# OWNER CORE\n$marker " + "c".repeat(900),
+            "# WHAT MATTERS TO US\nOwner context " + "o".repeat(800),
+            "# ME\nSelf " + "s".repeat(800),
+            "# THINGS I REMEMBER\nMemory " + "m".repeat(900),
+            "# RECENT CONVERSATION\nold " + "r".repeat(900) + " newest-turn"
+        ).joinToString("\n\n")
+
+        val fitted = BrainPromptBudget.fitSystemContext(context, "hello", 900)
+
+        assertTrue(fitted.length <= 900 - "hello".length)
+        assertTrue(fitted.startsWith("# WHO I AM"))
+        assertTrue(fitted.contains("# OWNER CORE"))
+        assertTrue(fitted.contains(marker))
+        assertTrue(fitted.endsWith("newest-turn"))
+    }
+
     @Test fun currentOwnerPromptIsNeverChangedByTheBudgeter() {
         val prompt = "keep every character of this request"
         BrainPromptBudget.fitSystemContext("x".repeat(20_000), prompt, 4_000)

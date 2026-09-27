@@ -36,7 +36,7 @@ object BrainRequestPolicy {
         val includeTaskContext: Boolean = false
     )
 
-    fun forPrompt(prompt: String): Profile {
+    fun forPrompt(prompt: String, coldStart: Boolean = false): Profile {
         val cleaned = prompt.trim().replace(Regex("\\s+"), " ")
         val literal = exactRequest.matchEntire(cleaned)?.groupValues?.get(1)?.let(::unwrapLiteral)
         if (!literal.isNullOrBlank()) {
@@ -58,7 +58,7 @@ object BrainRequestPolicy {
         if (conversationalCue.containsMatchIn(cleaned) || wantsTaskContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-                combinedCharacterBudget = 2_000,
+                combinedCharacterBudget = if (coldStart) 1_200 else 2_000,
                 outputTokens = 48,
                 deterministic = false,
                 includeTaskContext = wantsTaskContext,
@@ -69,7 +69,7 @@ object BrainRequestPolicy {
         if (wantsToolContext) {
             return Profile(
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-                combinedCharacterBudget = 2_000,
+                combinedCharacterBudget = if (coldStart) 1_200 else 2_000,
                 outputTokens = 32,
                 deterministic = false,
                 includeToolContext = true
@@ -78,7 +78,7 @@ object BrainRequestPolicy {
 
         return Profile(
             systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
-            combinedCharacterBudget = 1_600,
+            combinedCharacterBudget = if (coldStart) 900 else 1_600,
             outputTokens = 40,
             deterministic = true
         )

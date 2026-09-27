@@ -38,6 +38,18 @@ class SageRuntimeTest {
         assertEquals("red_queen", com.pineapple.sageos2.mode.DefaultSageModeController.current().modeId)
     }
 
+    @Test fun firstDeepTurnUsesColdBudgetThenSuccessfulTurnUnlocksWarmBudget() {
+        val f = Fixture()
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("tell me something useful"))
+        assertTrue(f.observer.diagnostics.any { it.contains("brain request profile: cold=true budget=900") })
+
+        f.brain.respond(0, "First reply")
+        f.runtime.submit(SageEvent.TextSubmitted("tell me another useful thing"))
+
+        assertTrue(f.observer.diagnostics.any { it.contains("brain request profile: cold=false budget=1600") })
+    }
+
     @Test fun deepBrainReceivesNaturalTwinContextWithoutEngineeringContracts() {
         val f = Fixture(); f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("tell me something useful"))
         assertEquals(1, f.brain.requests.size)
@@ -275,13 +287,15 @@ class SageRuntimeTest {
         override val name="fake"
         val requests=mutableListOf<BrainRequest>()
         private val callbacks=mutableListOf<(Result<BrainResponse>)->Unit>()
-        override fun health()=BrainHealth(true,"ready")
+        private var successfulLatencyMs:Long?=null
+        override fun health()=BrainHealth(true,"ready",lastLatencyMs=successfulLatencyMs)
         override fun start(request:BrainRequest,callback:(Result<BrainResponse>)->Unit):BrainJob {
             requests += request; callbacks += callback
             return object:BrainJob{override val turnId=request.turnId;override fun cancel()=Unit}
         }
         fun respond(index:Int,text:String) {
             val request=requests[index]
+            successfulLatencyMs=1L
             callbacks[index](Result.success(BrainResponse(request.turnId,text,name)))
         }
         fun progress(index:Int,stage:BrainProgressStage,generatedTokens:Int?=null) {
@@ -339,7 +353,9 @@ class SageRuntimeTest {
     }
     private class FakeObserver:RuntimeObserver {
         val textResponses=mutableListOf<Pair<Long,String>>()
+        val diagnostics=mutableListOf<String>()
         override fun onTextResponse(turnId:Long,text:String){textResponses += turnId to text}
+        override fun onDiagnostic(message:String){diagnostics += message}
     }
     private class FakeCapabilityBroker(private val rootActive:Boolean):CapabilityBroker {
         val actions=java.util.Collections.synchronizedList(mutableListOf<DeviceAction>())

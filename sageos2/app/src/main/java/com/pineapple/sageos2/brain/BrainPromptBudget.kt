@@ -11,8 +11,8 @@ object BrainPromptBudget {
     // physically informed, family-neutral ceiling until the installed model is inspected.
     const val DEFAULT_COMBINED_CHARACTER_BUDGET = 4_800
     const val LOCAL_RESPONSE_GUIDE =
-        "Reply in Sage's own voice as the owner's virtual twin. Be natural, direct, and complete. Prefer a short finished reply to a long unfinished reply."
-    private const val MINIMUM_CONTEXT_CHARACTERS = 1_200
+        "You are Sage, the owner's virtual twin. Reply naturally, directly, and completely. Prefer a short finished reply."
+    private const val MINIMUM_CONTEXT_CHARACTERS = 640
     private const val OMISSION = "\n\n[Older context omitted to fit this local turn.]\n\n"
     private const val SECTION_OMISSION = "\n[Section shortened for this local turn.]\n"
     private const val TASK_SECTION = "# ACTIVE / RECOVERABLE TASKS"
