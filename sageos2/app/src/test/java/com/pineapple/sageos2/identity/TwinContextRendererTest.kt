@@ -2,6 +2,8 @@ package com.pineapple.sageos2.identity
 
 import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.apps.OwnerAppSnapshot
+import com.pineapple.sageos2.brain.BrainPromptBudget
+import com.pineapple.sageos2.brain.BrainRequestPolicy
 import com.pineapple.sageos2.memory.*
 import com.pineapple.sageos2.mode.SageModeSnapshot
 import org.junit.Assert.assertEquals
@@ -196,5 +198,79 @@ class TwinContextRendererTest {
 
         assertTrue(rendered.contains("Kat takes coffee with cinnamon"))
         assertFalse(rendered.contains("Clouds are white"))
+    }
+
+    @Test fun ordinaryRuntimeBudgetPreservesMeaningfulImportedOwnerCoreBeforeRendererBoilerplate() {
+        val marker = "OWNER_RULE_MUST_SURVIVE"
+        val ownerCore = "a".repeat(50) + marker + "b".repeat(2_250)
+        val core = EmptySageCoreProvider.current().copy(
+            twinIdentity = "Identity " + "i".repeat(800),
+            ownerModel = OwnerModel(preferences = listOf("Owner context " + "o".repeat(1_600))),
+            sageSelfModel = SageSelfModel(identity = "Self " + "s".repeat(1_600)),
+            sharedContinuity = SharedContinuity(
+                activeProjects = mapOf("SageOS" to "p".repeat(1_600))
+            ),
+            notes = "Imported Sage 1.33.3 owner instructions:\n$ownerCore"
+        )
+        val memory = TwinMemorySnapshot(
+            1,
+            listOf(
+                TwinMemoryRecord(
+                    "stress-memory",
+                    TwinMemorySubject.SHARED,
+                    "continuity",
+                    "Memory " + "m".repeat(3_000),
+                    TwinMemorySource.EXPLICIT_OWNER,
+                    1.0,
+                    1,
+                    1
+                )
+            )
+        )
+        val history = ConversationHistorySnapshot(
+            1,
+            listOf(
+                ConversationEntry(
+                    "stress-history",
+                    1,
+                    ConversationSpeaker.OWNER,
+                    ConversationInput.TEXT,
+                    "History " + "h".repeat(3_000),
+                    1
+                )
+            )
+        )
+        val apps = OwnerAppSnapshot(
+            1,
+            listOf(
+                OwnerAppRecord(
+                    "com.example.owner",
+                    "Owner App",
+                    purpose = "App context " + "a".repeat(800)
+                )
+            )
+        )
+        val request = "What apps do you know?"
+        val rendered = TwinContextRenderer(maxMemories = 1, maxHistoryEntries = 1).render(
+            core,
+            memory,
+            history,
+            apps,
+            SageModeSnapshot("sage_glitch", "red_queen"),
+            currentRequest = request
+        )
+
+        assertTrue(rendered.contains(marker))
+        val profile = BrainRequestPolicy.forPrompt(request)
+        assertEquals(1_600, profile.combinedCharacterBudget)
+        val fitted = BrainPromptBudget.fitSystemContext(
+            rendered,
+            request,
+            profile.combinedCharacterBudget
+        )
+        assertTrue(
+            "Ordinary runtime budget must preserve meaningful imported OWNER CORE instructions before spending their quota on renderer boilerplate",
+            fitted.contains(marker)
+        )
     }
 }
