@@ -131,7 +131,6 @@ class BrainPromptBudgetTest {
         assertTrue(fitted.endsWith("newest-turn"))
     }
 
-
     @Test fun productionBudgetAtBudget1600PreservesOwnerInstructionsBeyondNoise() {
         val ownerCoreInstructions = "OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS_OWNER_INSTRUCTIONS"
         val context = listOf(
