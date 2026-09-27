@@ -86,3 +86,34 @@ injected decode failure, cancellation, recovery and unload under AddressSanitize
 The fixture reused 29/30 prompt tokens (14 ms cold prefill, 2 ms warm); these are
 small host-fixture measurements, NOT predicted VASOUN latency. Full integrated
 results including the migration tests must be recorded after their CI completes.
+
+## Candidate 213 owner-core prompt-budget evidence — 27 September 2026
+
+Candidate 213 baseline repairs were integrated to `sageos-2` before this follow-up.
+A separate test-only proof then reproduced an identity-context defect in the
+ordinary runtime path: `TwinContextRenderer` emitted generic OWNER CORE guidance
+before the imported owner-authored instructions, while `BrainPromptBudget`
+head-clipped the OWNER CORE section inside the ordinary 1,600-character working
+budget.
+
+Test-only PR #35, CI run 177, executed the full verification path. The native Brain
+gate passed. Android/JVM verification reached `testDebugUnitTest`, ran 210 tests,
+and failed exactly one new regression:
+`TwinContextRendererTest.ordinaryRuntimeBudgetPreservesMeaningfulImportedOwnerCoreBeforeRendererBoilerplate`.
+There were no test errors and the failure was the intended OWNER CORE assertion,
+not compilation, environment, or unrelated existing-test failure.
+
+Repair PR #36 changed production behavior only by emitting the imported OWNER CORE
+text before the generic renderer guidance and retained the regression test. CI run
+178 then passed the full path: 210 tests with 0 failures/errors/skips,
+`lintRelease`, `assembleDebug`, historical A1/recovery gates, arm64 Brain/wake
+packaging checks, and the real native Brain inference gate. The repair was squash
+merged as commit `6d738a845be1249ca4e6b6f117e5ccb37f841470`.
+
+This closes the reproduced prompt-ordering defect. It does **not** create or invent
+missing owner Core content. Authentic Core remains unresolved while the physical
+device reports revision 0. It also does not prove VASOUN microphone/background wake
+acceptance or solve the measured cold first-token latency. Those remain release
+dependencies; no new APK should be offered solely because this code-level defect is
+now repaired.
+
