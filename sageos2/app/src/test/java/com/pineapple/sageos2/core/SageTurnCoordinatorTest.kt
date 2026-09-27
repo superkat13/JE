@@ -15,6 +15,28 @@ class SageTurnCoordinatorTest {
         assertEquals(SageRuntimeState.COMMAND_LISTENING, c.snapshot().state)
     }
 
+    @Test fun savedWakeCommandRunsAfterAcknowledgementWithoutOpeningCommandRecognizer() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        val wake = c.handle(
+            SageEvent.WakeDetected(
+                c.snapshot().recognizerGeneration,
+                profileId = "saved",
+                acknowledgement = "Got it",
+                command = "open firefox"
+            )
+        )
+        val turn = c.snapshot().activeTurnId
+        assertTrue(wake.contains(SageEffect.Speak(turn, "Got it")))
+
+        val routed = c.handle(SageEvent.WakeAcknowledgementSpoken(turn))
+
+        assertEquals(SageRuntimeState.THINKING_FAST, c.snapshot().state)
+        assertTrue(routed.contains(SageEffect.RecordOwnerInput(turn, "open firefox", TurnOrigin.VOICE_WAKE)))
+        assertTrue(routed.contains(SageEffect.ExecuteFast(turn, "open firefox")))
+        assertTrue(routed.none { it is SageEffect.SetListeningMode && it.mode == SageListeningMode.COMMAND })
+    }
+
     @Test fun pushToTalkSkipsWakeAcknowledgementAndStartsCommandRecognition() {
         val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
         val effects = c.handle(SageEvent.PushToTalkRequested)
