@@ -23,6 +23,25 @@ class SageRuntimeTest {
         assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, f.runtime.snapshot().state)
     }
 
+    @Test fun savedWakeCommandUsesExistingFastActionPath() {
+        val f = Fixture()
+        f.runtime.start()
+        f.speech.listener!!.onWakeDetected(
+            WakeHit(
+                f.runtime.snapshot().recognizerGeneration,
+                "saved",
+                null,
+                "Got it",
+                "open youtube"
+            )
+        )
+        f.speech.completeLastSpeech()
+
+        assertEquals(1, f.fast.requests.size)
+        assertEquals("open youtube", f.fast.requests.single().command)
+        assertTrue(f.brain.requests.isEmpty())
+    }
+
     @Test fun recognitionErrorReturnsToUsableConversationPath() {
         val f = Fixture(); f.runtime.start()
         f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))

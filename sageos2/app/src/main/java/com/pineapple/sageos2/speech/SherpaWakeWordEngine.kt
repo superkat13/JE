@@ -131,7 +131,7 @@ class SherpaWakeWordEngine(
                     kws.reset(stream)
                     val profile = resolveProfile(detected, entries) ?: continue
                     running = false
-                    onWake(WakeHit(generation, profile.id, profile.modeId, profile.acknowledgement))
+                    onWake(WakeHit(generation, profile.id, profile.modeId, profile.acknowledgement, profile.legacyCommand))
                     break
                 }
                 lastAudioAtMs = SystemClock.elapsedRealtime()

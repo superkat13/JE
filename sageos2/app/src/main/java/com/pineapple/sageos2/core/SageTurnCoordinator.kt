@@ -28,6 +28,7 @@ class SageTurnCoordinator(
     private var recognizerGeneration = 0L
     private var nextTurnId = 1L
     private var followUpAfterSpeech = false
+    private var pendingWakeCommand: String? = null
     private data class PendingTypedInput(val turnId: Long, val text: String)
     private val pendingTypedInputs = ArrayDeque<PendingTypedInput>()
 
@@ -55,6 +56,7 @@ class SageTurnCoordinator(
         if (state != SageRuntimeState.STOPPED && state != SageRuntimeState.ERROR) return emptyList()
         activeTurnId = 0L
         activeTurnOrigin = TurnOrigin.NONE
+        pendingWakeCommand = null
         state = SageRuntimeState.IDLE_WAKE
         return listOf(changeListening(SageListeningMode.WAKE_ONLY))
     }
@@ -64,6 +66,7 @@ class SageTurnCoordinator(
         if (activeTurnId != 0L) effects += SageEffect.CancelTurn(activeTurnId)
         pendingTypedInputs.clear()
         followUpAfterSpeech = false
+        pendingWakeCommand = null
         state = SageRuntimeState.STOPPED
         activeTurnId = 0L
         activeTurnOrigin = TurnOrigin.NONE
@@ -86,6 +89,7 @@ class SageTurnCoordinator(
         if (state != SageRuntimeState.IDLE_WAKE && state != SageRuntimeState.FOLLOW_UP_LISTENING) return listOf(SageEffect.RecordDiagnostic("wake ignored in state $state"))
         activeTurnId = nextTurnId++
         activeTurnOrigin = TurnOrigin.VOICE_WAKE
+        pendingWakeCommand = event.command?.trim()?.takeIf { it.isNotEmpty() }
         state = SageRuntimeState.ACKNOWLEDGING_WAKE
         return listOf(
             changeListening(SageListeningMode.OFF),
@@ -96,6 +100,9 @@ class SageTurnCoordinator(
 
     private fun onWakeAckSpoken(event: SageEvent.WakeAcknowledgementSpoken): List<SageEffect> {
         if (event.turnId != activeTurnId || state != SageRuntimeState.ACKNOWLEDGING_WAKE) return stale("wake acknowledgement")
+        val savedCommand = pendingWakeCommand
+        pendingWakeCommand = null
+        if (savedCommand != null) return dispatch(activeTurnId, savedCommand)
         state = SageRuntimeState.COMMAND_LISTENING
         return listOf(changeListening(SageListeningMode.COMMAND, activeTurnId))
     }

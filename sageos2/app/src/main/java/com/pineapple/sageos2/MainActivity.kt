@@ -854,10 +854,29 @@ open class MainActivity : Activity() {
                     append("\nCall Sage with: ${profile.phrases.joinToString()}")
                     append("\nShe answers: ${profile.acknowledgement}")
                     append("\nTone: ${profile.modeId?.replace('_', ' ') ?: "herself"}")
+                    append("\nWake listening: ${if (profile.enabled) "enabled" else "disabled"}")
+                    profile.legacyCommand?.takeIf { it.isNotBlank() }?.let { append("\nSaved command: ").append(it) }
                 }
                 textSize = 15f
                 setPadding(0, dp(10), 0, dp(4))
             })
+            val canWake = profile.phrases.any { profile.compiledTokensFor(it) != null }
+            content.addView(Button(this).apply {
+                text = if (profile.enabled) "Disable ${profile.displayName} wake" else "Enable ${profile.displayName} wake"
+                isEnabled = canWake
+                setOnClickListener {
+                    wakeProfiles.upsert(profile.copy(enabled = !profile.enabled))
+                    host.traces.record("wake", "Owner set profile=${profile.id} enabled=${!profile.enabled}")
+                    showPanel(Panel.MODES)
+                }
+            })
+            if (!canWake) {
+                content.addView(TextView(this).apply {
+                    text = "This saved wake name is preserved, but it needs compiled BPE tokens before offline listening can use it."
+                    textSize = 13f
+                    setTextColor(COLOR_MUTED)
+                })
+            }
             content.addView(Button(this).apply {
                 text = "Activate ${profile.displayName}"
                 setOnClickListener {
