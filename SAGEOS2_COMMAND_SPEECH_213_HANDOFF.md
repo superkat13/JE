@@ -1,9 +1,10 @@
 # Command-Speech Repair Handoff — SageOS2 build 213
 
-**STATUS: COMPILED AND TESTED. 36/36 host tests pass. Rebased onto 36c6a08, zero conflicts.**
-**COMMITTED as 6c64c32 (+c2c0274 for this doc) on `repair/command-speech-213`. PUSHED, DRAFT PR
-OPEN against `sageos-2`.**
-**STILL NOT RUN ON A DEVICE, and no Android/Gradle build has run (aapt2 is x86-64 only).**
+**STATUS: MERGED AND VERIFIED ON CI. PR #47 merged as `0b691ff`; 266/266 unit tests pass on the
+merged head, and the Android build succeeds in CI including `assembleDebug`.**
+**STILL NOT RUN ON A DEVICE — §5.3's `lastCompletion` check is the one remaining unknown.**
+**Local Gradle is impossible on this machine (no SDK, no NDK, x86-64-only aapt2). CI is the only
+place the Android build runs; see §0.4.**
 **Two real test defects were found and fixed — see §0.1. This is the first real verification
 this repair has ever had.**
 
@@ -201,6 +202,86 @@ gh pr create --draft --base sageos-2 --head repair/command-speech-213 \
 `gh pr edit 47 --body-file <file>` repairs it after the fact. This is worth knowing because §0.2
 prescribes that exact command as the way to finish this work, so anyone repeating it would have
 opened a body-less PR and may not have noticed.
+
+### 0.4 Fourth session — PR #47 merged, and the Android build is finally verified
+
+**PR #47 is MERGED, not open.** It was merged at `2026-09-28T22:40:14Z` as merge commit `0b691ff`
+("Integrate OpenCode verified command speech repair"), and was un-drafted before merging. Confirmed
+with `gh pr view 47` and `git merge-base --is-ancestor 6c64c32 origin/sageos-2`. **The repair is
+already in `sageos-2`.** Anyone reading an older revision of this handoff and planning to "open the
+PR" is working from a stale premise.
+
+`git rebase origin/sageos-2` was still run and was a clean no-op: local `repair/command-speech-213`
+is now `0b691ff`, **0 ahead / 0 behind**. The fetch-refspec trap in §0.2 bit again and is worth
+repeating: `git fetch origin sageos-2` updates only `FETCH_HEAD` and leaves `origin/sageos-2`
+stale. The base had in fact moved `36c6a08 -> 0b691ff`; only the explicit refspec revealed it.
+
+**Brain/identity workstream untouched.** `runtime/BrainProgressTraceGate.kt` and
+`runtime/PersistentRuntimeObserver.kt` are owned by a separate workstream. Those two files were
+touched only by `95f84e8` ("Bound persistent Brain progress traces while preserving live
+updates"); `git diff 36c6a08 ab4b3ec` confirms `repair/command-speech-213` never touched them, and
+nothing in this session modified them.
+
+**The Android build was attempted locally and genuinely cannot run here.** Exact results, because
+the obvious invocation fails for a reason that is not the code's fault:
+
+| Command | Result |
+|---|---|
+| `bash gradlew :sageos2:app:testDebugUnitTest :app:assembleDebug --no-daemon` | **exit 1** — `Configuring project ':app' without an existing directory is not allowed` |
+| `bash gradlew -p sageos2 :app:testDebugUnitTest :app:assembleDebug --no-daemon` | **exit 1** — `SDK location not found` |
+
+Three notes on running Gradle on Termux: `./gradlew` is not executable and its shebang is
+`#!/usr/bin/env bash`, which does not exist here, so it must be invoked as `bash gradlew`; the
+shim downloads Gradle 9.3.1 into `.gradle-local/` on first use; and the first command's failure is
+the vestigial root build (Correction 2 again), which dies at *configuration* time. **There were
+zero test failures locally, because compilation was never reached.** Three independent blockers
+stand between this machine and an Android build, any one of which is fatal:
+
+1. **No Android SDK** — no `ANDROID_HOME`, no `ANDROID_SDK_ROOT`, no `local.properties`, no SDK
+   directory. This is the failure actually observed, and it is the *first* one; §0.1/§0.2 blamed
+   only aapt2, which is the blocker behind it.
+2. **No NDK `28.2.13676358` and no CMake** — `app/build.gradle.kts` sets `ndkVersion` and an
+   `externalNativeBuild { cmake { … } }` block for the sherpa native build.
+3. **aapt2 9.1.1 has no arm64 artifact** — the `linux` binary is `ELF 64-bit … x86-64` and fails
+   here with `Exec format error`; `-linux-arm64` and `-linux-aarch64` are both 404.
+
+**CI did run, and it is green.** `0b691ff` carries two successful workflows:
+
+```
+run 36493762379  "Verify SageOS 2"                          SUCCESS  5m38s
+  :app:compileDebugNavigationResources   <- aapt2 resource processing, impossible locally
+  :app:compileDebugKotlin
+  :app:compileDebugJavaWithJavac        <- SageSherpaRecognitionService against the real AAR
+  :app:compileDebugUnitTestKotlin
+  :app:testDebugUnitTest
+  :app:dexBuilderDebug
+  :app:mergeDebugNativeLibs  :app:packageDebug  :app:assembleDebug
+  BUILD SUCCESSFUL in 4m 52s
+run 36493762988  "Build verified signed SageOS 2 candidate"  SUCCESS  13m17s
+```
+
+Test totals, read from the `sageos2-test-reports` artifact rather than the log summary:
+
+```
+TEST TOTALS: {'tests': 266, 'failures': 0, 'errors': 0, 'skipped': 0}
+  CommandEndpointPolicyTest     21   fail=0 err=0
+  RecognitionSessionGateTest    11   fail=0 err=0
+  CommandRecognizerPolicyTest    4   fail=0 err=0      (21 + 11 + 4 = 36, matches the host run)
+```
+
+The sherpa AAR and the KWS assets were restored from the pinned cache key
+`sageos2-kws-v3-1.13.7-f170013b4716e41b`, so this exercised the real sherpa API rather than a stub.
+CI's own summary step hard-fails on any nonzero `failures`/`errors`, so 0/0 is enforced, not just
+reported.
+
+**This closes the last open gap from §0.2/§5.6.** Resource processing, dexing, native packaging
+and the sherpa API surface are now verified green on the merged code. What remains is only §5.3:
+a real device turn, reading `lastCompletion` from `runtimeDetail()`.
+
+**Housekeeping:** the local Gradle run created `.gradle-local/` (277 MB) and `build/`, neither of
+which was gitignored — a real risk that a later `git add -A` would commit a 277 MB Gradle
+distribution. Both are now ignored, along with `/sageos2/build/` which the same run would create.
+`core` remains untracked and uncommitted throughout.
 
 ---
 
@@ -616,9 +697,10 @@ cd /data/data/com.termux/files/home/sage-work
 # 5. commit, push, open DRAFT PR. Do not merge. Do not build/distribute an APK.
 ```
 
-Step 4 is the one that actually matters. Everything in §0.1 is host-side proof that the code
-compiles and the policy is self-consistent; only a device turn can show whether the endpoint gate
-shortens the failure as §4 predicts.
+**Steps 1-5 are all DONE — see §0.1 through §0.4.** PR #47 is merged as `0b691ff`; CI ran the
+Android build itself and it passed. Steps 1-3 do not need doing on this machine, because they
+cannot be done here at all (§0.4 documents why, and that the missing piece was the SDK, not just
+aapt2). **Step 4 is the only one still open, and it is the one that matters.**
 
 `CommandRecognizerPolicyTest` is included above deliberately: it is the pre-existing test for
 `CommandRecognizerPolicy` and must still pass, proving backend-selection behaviour is unchanged.
@@ -627,10 +709,11 @@ shortens the failure as §4 predicts.
 
 ## 5. Remaining limitations
 
-1. ~~**Nothing is verified.** No compile, no test run, no device run.~~ **SUPERSEDED by §0.1:**
-   everything is compiled and the 36 host tests pass. What is still unverified is the Android
-   integration (§5.6) and the sherpa API surface (§0.1), neither of which is reachable without an
-   Android SDK and the real AAR.
+1. ~~**Nothing is verified.** No compile, no test run, no device run.~~ **SUPERSEDED by §0.1 and
+   then by §0.4.** The code compiles, 36/36 host tests pass, and CI now runs the full Android
+   build on the merged head: **266/266 unit tests, 0 failures, `assembleDebug` successful.** The
+   sherpa API surface and Android integration are no longer unverified. The only thing still
+   unverified is the device turn itself (§5.3, §5.6).
 2. **The decoder-empty question is unexplained.** This change makes the failure fast; it does not
    make the recognizer work. `code=7` proves zero tokens across the whole turn.
 3. **The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a

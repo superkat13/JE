@@ -5,6 +5,9 @@ sage_build_*.*
 __pycache__/
 *.pyc
 .gradle/
+.gradle-local/
+/build/
+/sageos2/build/
 app/build/
 Sage-Commander-*.zip
 Sage-Commander-*/
