@@ -184,6 +184,24 @@ against `sageos-2`. `core` remains untracked and was not committed; the AAR, `sa
 `testDebugUnitTest` can actually run. §5.3's device check — reading `lastCompletion` from
 `runtimeDetail()` — is still the decisive test and still outstanding.
 
+**Correction 6 — the `gh pr create` command in §0.2 is wrong; it needs `--body-file`.** `--body`
+takes *literal text*, not a path. Run as written it published a PR whose entire body was the
+literal 37-character string `SAGEOS2_COMMAND_SPEECH_213_HANDOFF.md`:
+
+```sh
+# wrong -- body becomes the literal filename
+gh pr create --draft --base sageos-2 --head repair/command-speech-213 \
+  --title "..." --body SAGEOS2_COMMAND_SPEECH_213_HANDOFF.md
+
+# right
+gh pr create --draft --base sageos-2 --head repair/command-speech-213 \
+  --title "..." --body-file SAGEOS2_COMMAND_SPEECH_213_HANDOFF.md
+```
+
+`gh pr edit 47 --body-file <file>` repairs it after the fact. This is worth knowing because §0.2
+prescribes that exact command as the way to finish this work, so anyone repeating it would have
+opened a body-less PR and may not have noticed.
+
 ---
 
 ## 0.1 Verified session — 2026-09-28, shell restored
