@@ -6,6 +6,27 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrainPromptBudgetTest {
+    @Test fun growingHistoryAndChangedRequestLengthKeepIdentityPrefixStable() {
+        val stable = listOf(
+            "System guide: Sage answers naturally.",
+            "# WHO I AM\n" + "Sage identity and continuity. ".repeat(30),
+            "# OWNER CORE\nOWNER_RULE " + "Preserve owner instructions. ".repeat(40),
+            "# ME\n" + "Speak directly. ".repeat(20)
+        ).joinToString("\n\n")
+        fun fit(history: String, request: String) = BrainPromptBudget.fitSystemContext(
+            stable + "\n\n# RECENT CONVERSATION\n" + history, request, 1600)
+        val first = fit("Owner: hello\nSage: hello", "How are you?")
+        val second = fit("Owner: hello\nSage: " + "More context. ".repeat(80) + "NEWEST", "Tell me a little more about that")
+        assertEquals(first.substringBefore("# RECENT CONVERSATION"), second.substringBefore("# RECENT CONVERSATION"))
+        assertTrue(second.contains("OWNER_RULE"))
+        assertTrue(second.endsWith("NEWEST"))
+        assertTrue(second.length + "Tell me a little more about that".length <= 1600)
+        val edited = BrainPromptBudget.fitSystemContext(
+            stable.replace("OWNER_RULE", "NEW_OWNER_RULE") + "\n\n# RECENT CONVERSATION\nhello", "How are you?", 1600)
+        assertTrue(edited.contains("NEW_OWNER_RULE"))
+        assertFalse(edited.substringBefore("# RECENT CONVERSATION") == first.substringBefore("# RECENT CONVERSATION"))
+    }
+
     @Test fun defaultBudgetMatchesTheInheritedTabletCeiling() {
         assertEquals(4_800, BrainPromptBudget.DEFAULT_COMBINED_CHARACTER_BUDGET)
         assertTrue(BrainPromptBudget.LOCAL_RESPONSE_GUIDE.contains("short finished reply"))
