@@ -1,7 +1,8 @@
 # Command-Speech Repair Handoff — SageOS2 build 213
 
 **STATUS: COMPILED AND TESTED. 36/36 host tests pass. Rebased onto 36c6a08, zero conflicts.**
-**STILL NOT COMMITTED, NOT PUSHED, NO PR OPENED. NOT RUN ON A DEVICE.**
+**COMMITTED as 6c64c32 on `repair/command-speech-213`. NOT PUSHED, NO PR — blocked on auth.**
+**STILL NOT RUN ON A DEVICE, and no Android/Gradle build has run (aapt2 is x86-64 only).**
 **Two real test defects were found and fixed — see §0.1. This is the first real verification
 this repair has ever had.**
 
@@ -32,6 +33,111 @@ directly still fails with `Error loading shared library libstdc++.so.6` and a ca
 The loader, `libstdc++.so.6`, and `libgcc_s.so.1` all live in `~/.opencode/`, which is why
 `--library-path "$PWD/.opencode"` is what makes the relocation succeed. Do not move or delete that
 directory. No other fix (restart, `pkill -f 'bash -l'`, new session) is needed or useful.
+
+**Corroborating evidence found in the repo root:** an untracked 8.7 MB file named `core`, which is
+an ARM aarch64 ELF core dump whose `file` output reads `from 'tar -xzf
+.../opencode/bin/ripgrep-15.1.0-aa...'`. That is the crashed ripgrep extraction — the direct cause
+of §2's `ripgrep execution failed`, i.e. the `glob`/`grep` tool failures. It is left untracked and
+must never be committed. On Termux there is also no `/usr/bin/env`, so repo scripts that start with
+`#!/usr/bin/env bash` (e.g. `sageos2/tools/fetch-kws-deps.sh`) fail with `bad interpreter` — run
+them as `bash <script>` rather than editing the shebang.
+
+### 0.2 Second verified session — real AAR, real Android jar, committed
+
+§0.1 verified the code against **hand-written stubs**. That gap is now closed: the real
+dependencies are obtainable locally, so the compile is against the genuine API.
+
+**The AAR is fetchable after all.** §0.1 / Correction 3 said the sherpa AAR "is not on this
+machine" and treated restoring it as a prerequisite for CI. It is not a manual drop — the repo
+already pins and checksum-verifies it:
+
+```sh
+cd /data/data/com.termux/files/home/sage-work
+bash sageos2/tools/fetch-kws-deps.sh   # not ./tools/... — no /usr/bin/env on Termux
+```
+
+This pulls `sherpa-onnx-1.13.7.aar` plus the KWS model, verifies both against pinned SHA256s
+(`c4ef49e3…` AAR, `f170013b…` model), and exports the bpe vocab. It succeeded here, and
+`sageos2/app/libs/sherpa-onnx-1.13.7.aar` is now present. It is correctly `.gitignore`d, as is
+`sageos2/.deps/` and `sageos2/app/src/main/assets/sherpa-kws/`, so none of it can leak into a
+commit.
+
+**Use Kotlin 2.1.21, not an older compiler.** The root `build.gradle.kts` pins
+`org.jetbrains.kotlin.android` 2.1.21 and `sageos2` inherits Kotlin through AGP 9.1.1's built-in
+support. Compiling the main source set with Kotlin 1.9.24 produces a false failure:
+
+```
+AndroidSpeechPort.kt:341:13: error: variable 'ERROR_SERVER_DISCONNECTED_COMPAT' must be initialized
+```
+
+That is **pre-existing, correct code** — `ERROR_SERVER_DISCONNECTED_COMPAT` is a `const val`
+declared *after* the `LOCAL_BACKEND_FAILURES` initializer that uses it. Kotlin 1.9.24 rejects that
+forward reference; 2.1.21 accepts it. Confirmed with a 12-line isolated repro, which fails on
+1.9.24 and passes on 2.1.21. Do not "fix" it — it is a toolchain-version artifact, and the real
+build is on 2.x.
+
+**Final verification, all four green, on the committed tree:**
+
+| # | Check | Classpath | Result |
+|---|---|---|---|
+| 1 | 6 speech test/policy files compile | Kotlin 2.1.21 | **exit 0** |
+| 2 | 36 unit tests | JUnit 4.13.2 | **OK (36 tests), 0 failures** |
+| 3 | **All 99 main source files** (97 kt + 2 java) | real API-35 `android.jar` + **real** `classes.jar` from the AAR | **exit 0, 407 classes** |
+| 4 | `SageSherpaRecognitionService.java` | `javac -Xlint:all` + **real** AAR | **exit 0, zero warnings** |
+
+Check 3 is the one that closes §0.1's gap. It also covers `AndroidSpeechPort.kt`, the one edited
+file that §0.1 could only audit by eye, because it needs the Android SDK to compile. Check 4 no
+longer depends on invented sherpa signatures. Only a single `R` stub was needed (for
+`BrainModelImportActivity.kt`, which references `R.string`); its values are irrelevant to
+compilation. `android.jar` was taken from the official `platform-35_r02.zip`.
+
+**The Android/Gradle build genuinely cannot run here, and this is now proven rather than assumed.**
+CI's sanctioned command is `gradle -p sageos2 testDebugUnitTest lintRelease assembleDebug`, but
+AGP 9.1.1 ships `aapt2` for `linux` and `osx` only — there is no Linux arm64 artifact:
+
+| `aapt2-9.1.1-14792394-<platform>.jar` | HTTP |
+|---|---|
+| `-linux` | 200 |
+| `-osx` | 200 |
+| `-linux-arm64` | **404** |
+| `-linux-aarch64` | **404** |
+
+The `linux` binary is `Advanced Micro Devices X86-64`, and executing it here fails with
+`cannot execute binary file: Exec format error` on this aarch64 device. Since both
+`testDebugUnitTest` and `assembleDebug` need aapt2 for resource processing (and
+`unitTests.isIncludeAndroidResources = true`), the Gradle path is closed on this machine. **CI is
+the only place the Android build can be verified**, and per instruction **no release APK was
+built** — `assembleDebug` in CI is the project's own debug candidate, not a release artifact.
+
+**Baseline and #46.** `origin/sageos-2` is at `36c6a08`, and local `HEAD` was already on it —
+**0 ahead, 0 behind**, nothing to rebase. `36c6a08` "Integrate verified stable Brain identity
+prefix" *is* the merge of PR #46, so the Brain repair is already incorporated and needed no
+rebasing. As §1 predicted, there is no file overlap with this repair. Note the fetch refspec in
+this clone is pinned to `repair/native-wake-model-212`, so `git fetch origin sageos-2` alone does
+**not** update `origin/sageos-2`; use
+`git fetch origin '+refs/heads/sageos-2:refs/remotes/origin/sageos-2'`.
+
+**Commit `6c64c32`** on `repair/command-speech-213`, on top of `36c6a08`, 7 files / +924 / −22
+(the six edits plus this handoff). `core` was deliberately left untracked.
+
+**BLOCKED: push and PR.** `git push` fails with `could not read Username for
+'https://github.com'`. There are no credentials in this environment: no `~/.git-credentials`, no
+`~/.config/gh/hosts.yml`, no `GH_TOKEN`/`GITHUB_TOKEN` in the environment, and `gh auth status`
+reports not logged in. So the branch is committed locally but **not pushed and no PR exists**. To
+finish, someone must run `gh auth login` (or supply a token) and then:
+
+```sh
+cd /data/data/com.termux/files/home/sage-work
+git push -u origin repair/command-speech-213
+gh pr create --draft --base sageos-2 --head repair/command-speech-213 \
+  --title "Fix command-speech endpoint gate and guard cancelled worker teardown" \
+  --body SAGEOS2_COMMAND_SPEECH_213_HANDOFF.md
+```
+
+Opening it will also trigger `verify-sageos2.yml` on the PR, which is what actually runs
+`testDebugUnitTest` and closes the Android-build gap above. **Watch that run before trusting the
+host results** — the host tests cannot see resource processing, dexing, or the native KWS/Brain
+CMake build, all of which CI does exercise.
 
 ---
 
