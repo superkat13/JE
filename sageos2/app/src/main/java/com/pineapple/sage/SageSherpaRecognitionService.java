@@ -21,6 +21,7 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerKt;
 import com.k2fsa.sherpa.onnx.OnlineRecognizerResult;
 import com.k2fsa.sherpa.onnx.OnlineStream;
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
+import com.pineapple.sageos2.speech.CommandEndpointPolicy;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -43,6 +44,8 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private static volatile OnlineRecognizer sharedRecognizer;
     private static volatile boolean recognizerWarming;
     private static volatile long lastReadyLatencyMs = -1L;
+    /** Why the last turn stopped: endpoint | budget | cancelled. Carries no audio or text. */
+    private static volatile String lastCompletion = "";
 
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile Thread worker;
@@ -86,7 +89,8 @@ public final class SageSherpaRecognitionService extends RecognitionService {
 
     public static String runtimeDetail() {
         if (sharedRecognizer != null) {
-            return "recognizer warm" + (lastReadyLatencyMs >= 0L ? " in " + lastReadyLatencyMs + "ms" : "");
+            return "recognizer warm" + (lastReadyLatencyMs >= 0L ? " in " + lastReadyLatencyMs + "ms" : "")
+                    + (lastCompletion.isEmpty() ? "" : ", last turn ended by " + lastCompletion);
         }
         if (recognizerWarming) return "recognizer warming";
         if (!lastFailure.isEmpty()) return "recognizer not warm: " + lastFailure;
@@ -148,6 +152,8 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private void runRecognition(Callback callback) {
         OnlineRecognizer recognizer = null;
         OnlineStream stream = null;
+        boolean endpointReached = false;
+        boolean speechBegan = false;
         try {
             if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                     != PackageManager.PERMISSION_GRANTED)
@@ -169,7 +175,6 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             ready.putString("sage_recognizer_backend", "sherpa-onnx");
             emitReady(callback, ready);
             short[] pcm = new short[READ_SAMPLES];
-            boolean began = false;
             int peakAbs = 0;
             long totalSamples = 0L;
             String lastText = "";
@@ -182,8 +187,8 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                 totalSamples += count;
                 peakAbs = Math.max(peakAbs, peakAbsolute(pcm, count));
                 emitRms(callback, rmsDb(pcm, count));
-                if (!began && hasSpeechEnergy(pcm, count)) {
-                    began = true;
+                if (!speechBegan && hasSpeechEnergy(pcm, count)) {
+                    speechBegan = true;
                     emitBeginning(callback);
                 }
                 float[] samples = new float[count];
@@ -196,11 +201,18 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                     lastText = text;
                     emitPartial(callback, resultBundle(text));
                 }
-                if (recognizer.isEndpoint(stream) && !text.isEmpty()) {
-                    finalText = text;
+                CommandEndpointPolicy.ChunkAction action = CommandEndpointPolicy.onChunk(
+                        recognizer.isEndpoint(stream), text, speechBegan);
+                if (action != CommandEndpointPolicy.ChunkAction.CONTINUE) {
+                    if (action == CommandEndpointPolicy.ChunkAction.FINISH_WITH_TEXT) finalText = text;
+                    endpointReached = true;
                     break;
                 }
             }
+            // An explicit stop must not keep decoding or emit afterwards. The drain below only
+            // re-derives the text the loop would have produced anyway, so bailing out here cannot
+            // change the outcome of a turn the caller still wanted.
+            if (stopRequested.get()) return;
             stream.inputFinished();
             while (recognizer.isReady(stream)) recognizer.decode(stream);
             OnlineRecognizerResult tail = recognizer.getResult(stream);
@@ -209,14 +221,15 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             if (finalText.isEmpty()) finalText = lastText;
             stopMicrophone();
             if (activeCallback != callback) return;
+            CommandEndpointPolicy.WindowEnd outcome = CommandEndpointPolicy.onWindowEnd(
+                    stopRequested.get(), totalSamples, peakAbs, finalText);
+            if (outcome == CommandEndpointPolicy.WindowEnd.SUPPRESSED) return;
             emitEnd(callback);
-            if (finalText.isEmpty()) {
-                if (totalSamples == 0L || peakAbs < 32) {
-                    markUnhealthy("microphone produced no usable PCM energy");
-                    emitError(callback, SpeechRecognizer.ERROR_AUDIO);
-                } else {
-                    emitError(callback, SpeechRecognizer.ERROR_NO_MATCH);
-                }
+            if (outcome == CommandEndpointPolicy.WindowEnd.AUDIO_ERROR) {
+                markUnhealthy("microphone produced no usable PCM energy");
+                emitError(callback, SpeechRecognizer.ERROR_AUDIO);
+            } else if (outcome == CommandEndpointPolicy.WindowEnd.NO_MATCH) {
+                emitError(callback, SpeechRecognizer.ERROR_NO_MATCH);
             } else {
                 lastFailure = "";
                 emitResults(callback, resultBundle(finalText));
@@ -229,7 +242,12 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             stopMicrophone();
             if (stream != null) try { stream.release(); } catch (Throwable ignored) { }
             if (activeCallback == callback) activeCallback = null;
-            worker = null;
+            // Only the worker that still owns the field may clear it. A turn that retires while a
+            // successor is already running would otherwise null the successor's reference, the
+            // ERROR_RECOGNIZER_BUSY guard in onStartListening would pass, and two AudioRecords
+            // would contend for the microphone. SherpaWakeWordEngine already guards this way.
+            if (worker == Thread.currentThread()) worker = null;
+            lastCompletion = endpointReached ? "endpoint" : (stopRequested.get() ? "cancelled" : "budget");
         }
     }
 
