@@ -28,7 +28,7 @@ class AndroidSpeechPort(
     private var listener: SpeechInputListener? = null
     private var recognizer: SpeechRecognizer? = null
     private var recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
-    private var recognitionSession = 0L
+    private val sessions = RecognitionSessionGate()
     private var localFallbackAttempted = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -193,7 +193,7 @@ class AndroidSpeechPort(
             listener?.onRecognitionError(turnId, generation, SpeechRecognizer.ERROR_CLIENT)
             return
         }
-        val session = ++recognitionSession
+        val session = sessions.next()
         recognizer?.setRecognitionListener(SessionRecognitionListener(session, turnId, generation))
         val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
             putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
@@ -215,7 +215,7 @@ class AndroidSpeechPort(
     ): Boolean {
         if (backend == CommandRecognizerBackend.UNAVAILABLE) return false
         if (recognizer != null && recognizerBackend == backend) return true
-        recognitionSession += 1
+        sessions.invalidate()
         runCatching { recognizer?.cancel() }
         runCatching { recognizer?.destroy() }
         recognizer = null
@@ -241,7 +241,7 @@ class AndroidSpeechPort(
 
     private fun stopInput() {
         try { wakeWordEngine.stop() } catch (_: Throwable) {}
-        recognitionSession += 1
+        sessions.invalidate()
         try { recognizer?.cancel() } catch (_: Throwable) {}
     }
 
@@ -251,11 +251,11 @@ class AndroidSpeechPort(
     }
 
     private fun handleResults(session: Long, capturedTurnId: Long, capturedGeneration: Long, results: Bundle?) {
-        if (session != recognitionSession) {
+        if (!sessions.isCurrent(session)) {
             listener?.onSpeechDiagnostic("ignored stale recognizer result session=$session")
             return
         }
-        recognitionSession += 1
+        sessions.invalidate()
         val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
         if (text == null) {
             listener?.onRecognitionError(capturedTurnId, capturedGeneration, SpeechRecognizer.ERROR_NO_MATCH)
@@ -271,7 +271,7 @@ class AndroidSpeechPort(
         capturedGeneration: Long,
         error: Int
     ) {
-        if (session != recognitionSession) {
+        if (!sessions.isCurrent(session)) {
             listener?.onSpeechDiagnostic("ignored stale recognizer error session=$session code=$error")
             return
         }
@@ -279,7 +279,7 @@ class AndroidSpeechPort(
             !localFallbackAttempted && error in LOCAL_BACKEND_FAILURES &&
             capturedTurnId == turnId && capturedGeneration == generation &&
             desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)
-        recognitionSession += 1
+        sessions.invalidate()
         if (canFallback) {
             localFallbackAttempted = true
             listener?.onSpeechDiagnostic("local command recognizer failed code=$error; trying Android once")
