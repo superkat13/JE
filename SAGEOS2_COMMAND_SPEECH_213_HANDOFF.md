@@ -283,6 +283,76 @@ which was gitignored — a real risk that a later `git add -A` would commit a 27
 distribution. Both are now ignored, along with `/sageos2/build/` which the same run would create.
 `core` remains untracked and uncommitted throughout.
 
+### 0.5 Fifth session — the §5.3 check had a race, and the fetch refspec is fixed
+
+Two loose ends from §0.4 were picked up. One is a local clone bug that is now genuinely fixed. The
+other could not be *performed* — there is no device — but auditing whether it was even
+*actionable* turned up a real defect in the instrument it depends on.
+
+**The device turn still cannot be run here.** `adb devices` lists nothing; the build machine has no
+attached hardware. §5.3 remains open and needs a VASOUN L10_T05. Nothing in this section should be
+read as a substitute for it.
+
+**The fetch refspec is fixed (local clone config, no repo change).** The pinned refspec from §0.2
+is gone:
+
+```sh
+git config --unset-all remote.origin.fetch
+git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git fetch origin --prune          # 99 remote branches now tracked
+```
+
+Verified properly rather than by assumption: `origin/sageos-2` was forced back to `36c6a08`, then
+the plain `git fetch origin sageos-2` was re-run. It now prints
+`36c6a08..0b691ff  sageos-2 -> origin/sageos-2`. The same command previously left the ref untouched
+while exiting 0. Anyone still seeing a stale base after this change is in a different clone.
+
+**A real race in `lastCompletion`, found by auditing §5.3 — this is the substantive fix.**
+`runtimeDetail()` reports `lastCompletion`, and §5.3 says to read it after a failing turn. But the
+emits are **synchronous binder calls** — `emitError` is `callback.error(code)` on the spot — while
+`lastCompletion` was written in the `finally`, i.e. *after* the emit returned. The sequence was:
+
+```
+emitError(callback, ERROR_NO_MATCH)   // app is told the turn failed, synchronously
+    ... control returns to the worker ...
+} finally { lastCompletion = "endpoint" | "cancelled" | "budget"; }
+```
+
+So between those two points the app was already reporting a `code=7` failure while
+`runtimeDetail()` still showed the **previous** turn's value, or nothing on the first turn. That is
+not a cosmetic problem: a stale `endpoint` left over from an earlier successful turn would read as
+**confirming §4's diagnosis**, when the current turn may have ended on `budget` and refuted it. The
+one check that decides whether this repair's theory is right could produce a false positive.
+
+Fixed by writing the value before the emits, at the point where it is already final:
+
+```java
+if (outcome == CommandEndpointPolicy.WindowEnd.SUPPRESSED) return;
+lastCompletion = endpointReached ? "endpoint" : (stopRequested.get() ? "cancelled" : "budget");
+emitEnd(callback);
+```
+
+`endpointReached` is final once the loop has exited, and `stopRequested.get()` has already been
+consulted by `onWindowEnd` one line earlier without suppressing, so the string is fully determined
+here. The `finally` assignment is **kept** and still recomputes the identical value, because it is
+the only thing covering the early returns at the `stopRequested` bail, the superseded-callback
+bail, the `SUPPRESSED` bail, and the exception paths. Behaviour is otherwise unchanged; only the
+write happens earlier.
+
+Re-verified after the edit: service compiles `javac -Xlint:all` against the real AAR with zero
+warnings, the full main source set compiles clean (408 classes — up from 407 only because the base
+moved to `0b691ff` and `95f84e8` added `runtime/BrainProgressTraceGate.kt`), and 36/36 speech tests
+still pass. **That new file is the other workstream's and was not touched here**; it is only
+present because the base advanced.
+
+**One limitation of the instrument, reported not changed.** `runtimeDetail()` only appends
+`lastCompletion` inside its `if (sharedRecognizer != null)` branch, so when the recognizer is not
+warm — `recognizerWarming`, or `not warm: <lastFailure>` — the value is dropped from the string
+entirely. For the `code=7` case §5.3 targets this does not bite, because the recognizer was warm in
+order to decode. It would matter if a tester chases a turn that never reached a warm recognizer, and
+would read as a missing field rather than a stale one. Restructuring those return branches is a
+larger change than this defect warrants, so it is left alone and written down.
+
 ---
 
 ## 0.1 Verified session — 2026-09-28, shell restored
@@ -719,6 +789,9 @@ aapt2). **Step 4 is the only one still open, and it is the one that matters.**
 3. **The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a
    failing turn. If it reports `budget` and not `endpoint`, the leading-silence reasoning is
    wrong and the real cause is upstream of the endpoint gate. Re-evaluate before trusting §4.
+   **Still open — no device is attached to the build machine (§0.5).** §0.5 also fixes a race that
+   made this check able to report a false positive, and records one residual gap in the same
+   diagnostic: `lastCompletion` is omitted entirely when the recognizer is not warm.
 4. **Mic contention is unseparated.** The `RecognitionService` runs in-process with
    `AndroidSpeechPort`, and the wake engine's `stop()` bounds its join at only
    `STOP_JOIN_MS = 1_500L`. Real contention behaviour cannot be distinguished from

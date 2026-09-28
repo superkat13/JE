@@ -224,6 +224,12 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             CommandEndpointPolicy.WindowEnd outcome = CommandEndpointPolicy.onWindowEnd(
                     stopRequested.get(), totalSamples, peakAbs, finalText);
             if (outcome == CommandEndpointPolicy.WindowEnd.SUPPRESSED) return;
+            // Record the outcome before emitting. The emits below are synchronous binder calls, so
+            // an observer woken by this turn can read runtimeDetail() immediately; writing
+            // lastCompletion afterwards would briefly report the previous turn's value, which for
+            // the endpoint check is a false positive. The finally block still recomputes the same
+            // string for the early-return and exception paths.
+            lastCompletion = endpointReached ? "endpoint" : (stopRequested.get() ? "cancelled" : "budget");
             emitEnd(callback);
             if (outcome == CommandEndpointPolicy.WindowEnd.AUDIO_ERROR) {
                 markUnhealthy("microphone produced no usable PCM energy");
