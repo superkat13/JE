@@ -789,7 +789,12 @@ open class MainActivity : Activity() {
         val displayName = editor("What you call this app", selectedDisplayName, 1)
         val aliases = editor("Aliases • comma or line separated", existing?.aliases?.joinToString(", ").orEmpty(), 3)
         val purpose = editor("What Sage should know about it", existing?.purpose.orEmpty(), 3)
-        listOf(displayName, aliases, purpose).forEach(form::addView)
+        val startupProcedure = editor(
+            "How Sage should get it ready • one short step per line",
+            existing?.startupProcedure.orEmpty(),
+            5
+        )
+        listOf(displayName, aliases, purpose, startupProcedure).forEach(form::addView)
         AlertDialog.Builder(this)
             .setTitle(if (existing == null) "Add app" else "Edit ${existing.displayName}")
             .setView(form)
@@ -811,7 +816,7 @@ open class MainActivity : Activity() {
                                     aliases = aliases(aliases.text.toString()),
                                     purpose = purpose.text.toString().trim(),
                                     enabled = existing?.enabled ?: true,
-                                    startupProcedure = existing?.startupProcedure.orEmpty()
+                                    startupProcedure = startupProcedure.text.toString().trim()
                                 )
                             )
                             host.traces.record("owner_apps", "Owner app saved package=$pkg")

@@ -6,6 +6,8 @@ import android.app.role.RoleManager
 import android.content.ComponentName
 import android.content.Context
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.service.voice.VoiceInteractionService
@@ -13,6 +15,7 @@ import com.pineapple.sage.SageAccessibilityService
 import com.pineapple.sage.SageDeviceAdminReceiver
 import com.pineapple.sage.SageNotificationListener
 import com.pineapple.sage.SageVoiceInteractionService
+import com.pineapple.sageos2.action.DeviceController
 import com.pineapple.sageos2.forge.ForgeApproval
 import com.pineapple.sageos2.forge.ForgeCallback
 import com.pineapple.sageos2.forge.ForgeClient
@@ -34,7 +37,10 @@ class AndroidCapabilityBroker(
     private val context: Context,
     private val rootBroker: RootBrokerClient = UnavailableRootBrokerClient(),
     private val forgeClient: ForgeClient? = null,
-    private val forgeStore: ForgeStore? = null
+    private val forgeStore: ForgeStore? = null,
+    private val deviceController: DeviceController? = null,
+    private val mainHandler: Handler = Handler(Looper.getMainLooper()),
+    private val deviceTimeoutMs: Long = 15_000L
 ) : CapabilityBroker {
     override fun snapshot(): CapabilitySnapshot = CapabilitySnapshot(
         mapOf(
@@ -53,11 +59,61 @@ class AndroidCapabilityBroker(
 
     override fun execute(action: DeviceAction): CapabilityResult = try {
         when {
+            action.name.startsWith("device.") -> executeDevice(action)
             action.name.startsWith("forge.") -> executeForge(action)
             else -> executeRoot(action)
         }
     } catch (t: Throwable) {
         CapabilityResult(false, "Capability action failed: ${t.message ?: t::class.java.simpleName}")
+    }
+
+    private fun executeDevice(action: DeviceAction): CapabilityResult {
+        val controller = deviceController ?: return CapabilityResult(false, "Device controller is unavailable")
+        val command = DeviceCapabilityMapper.map(action)
+            ?: return CapabilityResult(false, "Unsupported device action: ${action.name}")
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            val result = controller.execute(command)
+            return CapabilityResult(result.success, result.message)
+        }
+        val latch = CountDownLatch(1)
+        val result = AtomicReference<CapabilityResult>()
+        val state = AtomicReference("queued")
+        val work = Runnable {
+            if (!state.compareAndSet("queued", "running")) return@Runnable
+            try {
+                val completed = controller.execute(command)
+                result.set(CapabilityResult(completed.success, completed.message))
+            } catch (t: Throwable) {
+                result.set(CapabilityResult(false, "Device action failed: ${t.message ?: t::class.java.simpleName}"))
+            } finally {
+                state.set("complete")
+                latch.countDown()
+            }
+        }
+        if (!mainHandler.post(work)) {
+            return CapabilityResult(false, "Device action could not be queued")
+        }
+        try {
+            if (!latch.await(deviceTimeoutMs, TimeUnit.MILLISECONDS)) {
+                val cancelled = state.compareAndSet("queued", "cancelled")
+                mainHandler.removeCallbacks(work)
+                return result.get() ?: CapabilityResult(false, if (cancelled) {
+                    "Device action timed out before execution; queued action cancelled"
+                } else {
+                    "Device action already started; completion is unknown. Do not retry automatically."
+                })
+            }
+        } catch (_: InterruptedException) {
+            val cancelled = state.compareAndSet("queued", "cancelled")
+            mainHandler.removeCallbacks(work)
+            Thread.currentThread().interrupt()
+            return CapabilityResult(false, if (cancelled) {
+                "Device action interrupted before execution; queued action cancelled"
+            } else {
+                "Device action interrupted after starting; completion is unknown. Do not retry automatically."
+            })
+        }
+        return result.get() ?: CapabilityResult(false, "Device action completed without a result")
     }
 
     private fun executeRoot(action: DeviceAction): CapabilityResult {

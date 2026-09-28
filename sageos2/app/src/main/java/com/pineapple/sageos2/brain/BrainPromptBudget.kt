@@ -21,11 +21,40 @@ object BrainPromptBudget {
     fun fitSystemContext(
         systemContext: String,
         ownerPrompt: String,
-        combinedCharacterBudget: Int = DEFAULT_COMBINED_CHARACTER_BUDGET
+        combinedCharacterBudget: Int = DEFAULT_COMBINED_CHARACTER_BUDGET,
+        requiredContext: String = ""
     ): String {
         require(combinedCharacterBudget > MINIMUM_CONTEXT_CHARACTERS + OMISSION.length)
         val profile = BrainRequestPolicy.forPrompt(ownerPrompt)
         val scopedContext = scopeEngineeringContext(systemContext, profile)
+        if (requiredContext.isNotBlank()) {
+            // Never cut a tool signature or a saved procedure. Reserve it first and keep
+            // identity in the remaining space, without enlarging the local turn budget.
+            val identityAllowance = combinedCharacterBudget - ownerPrompt.length - requiredContext.length - 2
+            require(identityAllowance >= 320) { "Saved startup context exceeds this local turn's budget" }
+            val sections = semanticSections(scopedContext)
+            val selected = mutableSetOf<Int>()
+            var used = 0
+            val priority = sections.indices.sortedBy { index ->
+                when (sections[index].title) {
+                    "OWNER CORE" -> 0
+                    "WHO I AM" -> 1
+                    "WHAT MATTERS TO US" -> 2
+                    "ME" -> 3
+                    else -> 4
+                }
+            }
+            for (index in priority) {
+                val needed = minimumQuota(sections[index]) + if (selected.isEmpty()) 0 else 2
+                if (used + needed <= identityAllowance) {
+                    selected += index
+                    used += needed
+                }
+            }
+            require(selected.isNotEmpty()) { "No room for Sage identity in this startup turn" }
+            val identity = fitSemanticSections(sections.filterIndexed { index, _ -> index in selected }, identityAllowance)
+            return identity + "\n\n" + requiredContext
+        }
         val allowance = (combinedCharacterBudget - ownerPrompt.length)
             .coerceAtLeast(MINIMUM_CONTEXT_CHARACTERS)
         if (scopedContext.length <= allowance) return scopedContext
