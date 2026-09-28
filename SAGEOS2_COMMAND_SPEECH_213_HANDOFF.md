@@ -1,7 +1,8 @@
 # Command-Speech Repair Handoff — SageOS2 build 213
 
 **STATUS: COMPILED AND TESTED. 36/36 host tests pass. Rebased onto 36c6a08, zero conflicts.**
-**COMMITTED as 6c64c32 on `repair/command-speech-213`. NOT PUSHED, NO PR — blocked on auth.**
+**COMMITTED as 6c64c32 (+c2c0274 for this doc) on `repair/command-speech-213`. PUSHED, DRAFT PR
+OPEN against `sageos-2`.**
 **STILL NOT RUN ON A DEVICE, and no Android/Gradle build has run (aapt2 is x86-64 only).**
 **Two real test defects were found and fixed — see §0.1. This is the first real verification
 this repair has ever had.**
@@ -138,6 +139,50 @@ Opening it will also trigger `verify-sageos2.yml` on the PR, which is what actua
 `testDebugUnitTest` and closes the Android-build gap above. **Watch that run before trusting the
 host results** — the host tests cannot see resource processing, dexing, or the native KWS/Brain
 CMake build, all of which CI does exercise.
+
+### 0.3 Third verified session — push unblocked, all four checks reproduced
+
+`gh auth login` has been completed, so §0.2's blocker is gone. Nothing about the code changed in
+this session; the existing commits were re-verified from a clean shell and then published.
+
+**Re-ran all four checks from §0.2 against the committed tree, same results:**
+
+| # | Check | Result |
+|---|---|---|
+| 1 | 6 speech test/policy files compile, Kotlin 2.1.21 | **exit 0** |
+| 2 | 36 unit tests, JUnit 4.13.2 | **OK (36 tests), 0 failures** |
+| 3 | All 99 main source files vs real API-35 `android.jar` + real AAR `classes.jar` | **exit 0, 407 Kotlin classes + 2 Java classes** |
+| 4 | `SageSherpaRecognitionService.java`, `javac -Xlint:all` + real AAR | **exit 0, zero warnings** |
+
+Check 3 needed `SageSpeechBackendState.java` compiled alongside the service, because `kotlinc`
+resolves Java sources for typing but emits no class files for them; the two Java files are
+therefore compiled separately against the Kotlin output. The `409` total is `407` from Kotlin plus
+`2` from `javac`.
+
+**One correction to how check 4 is run: put `kotlin-stdlib.jar` on the classpath.** Without it,
+`javac -Xlint:all` emits ~60 warnings that all look like real defects but are not:
+
+```
+warning: Cannot find annotation method 'mv()' in type 'Metadata': class file for
+         kotlin.Metadata not found
+```
+
+These come from every Kotlin-compiled class on the classpath (the AAR's own
+`com.k2fsa.sherpa.onnx.*` types as well as our `CommandEndpointPolicy`), not from the service
+file. With `kotlin-stdlib.jar` added, check 4 is genuinely zero-warning as §0.2 reported. Do not
+chase these; they are a classpath artifact.
+
+**Baseline re-confirmed.** `origin/sageos-2` is `36c6a08` and local `HEAD` is 2 ahead / 0 behind —
+nothing to rebase. `36c6a08` is the merge of brain repair #46, which is already incorporated. The
+pinned-fetch-refspec caveat in §0.2 still applies and was used again.
+
+**Published.** `repair/command-speech-213` is pushed (tracking set), and a **draft** PR is open
+against `sageos-2`. `core` remains untracked and was not committed; the AAR, `sageos2/.deps/` and
+`sherpa-kws/` assets remain gitignored. No APK was built and nothing was signed or released.
+
+**CI is now the open question.** The PR triggers `verify-sageos2.yml`, which is the only place
+`testDebugUnitTest` can actually run. §5.3's device check — reading `lastCompletion` from
+`runtimeDetail()` — is still the decisive test and still outstanding.
 
 ---
 
