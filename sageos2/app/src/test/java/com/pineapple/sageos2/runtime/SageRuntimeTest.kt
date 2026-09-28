@@ -179,6 +179,88 @@ class SageRuntimeTest {
         assertEquals(1, f.fast.requests.size); assertEquals(0, f.brain.requests.size)
     }
 
+    @Test fun startupKeepsExactProcedureAndCompletedStepsAcrossToolTurnsWith25Apps() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = startupFixture(capability)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("Open Firefox"))
+        val first = f.brain.requests.single()
+        assertTrue(first.twinContextText.orEmpty().contains("OWNER_RULE_SURVIVES"))
+        assertTrue(first.twinContextText.orEmpty().contains("# WHO I AM"))
+        assertTrue(first.twinContextText.orEmpty().contains("Open Firefox\nTap Private browsing"))
+        assertTrue(first.twinContextText.orEmpty().contains("</SAGE_TOOL>"))
+        assertTrue(first.prompt.length + first.twinContextText.orEmpty().length <= 1200)
+        assertFalse(first.twinContextText.orEmpty().contains("UnrelatedApp"))
+        f.brain.respond(0, "<SAGE_TOOL>\nname=device.open_app\napp=Firefox\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 2 }
+        val next = f.brain.requests[1]
+        assertTrue(next.twinContextText.orEmpty().contains("Request: Open Firefox"))
+        assertTrue(next.twinContextText.orEmpty().contains("device.open_app app=Firefox"))
+        assertTrue(next.twinContextText.orEmpty().contains("Tap Private browsing"))
+        assertTrue(next.prompt.length + next.twinContextText.orEmpty().length <= 2000)
+        f.brain.respond(1, "<SAGE_TOOL>\nname=device.tap_label\nlabel=Private browsing\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 3 }
+        assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("device.tap_label label=Private browsing"))
+        f.brain.respond(2, "Firefox is ready.")
+        assertEquals(listOf("device.open_app", "device.tap_label"), capability.actions.map { it.name })
+        assertEquals("Firefox is ready.", f.observer.textResponses.last().second)
+        f.runtime.submit(SageEvent.TextSubmitted("Tell me something"))
+        assertFalse(f.brain.requests.last().twinContextText.orEmpty().contains("OWNER APP STARTUP"))
+    }
+
+    @Test fun oversizedStartupStopsBeforeInferenceInsteadOfClippingInstructions() {
+        val capability = FakeCapabilityBroker(rootActive = false)
+        val f = startupFixture(capability, "Open Firefox\n" + "Do a step. ".repeat(500))
+        f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("Open Firefox"))
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(capability.actions.isEmpty())
+        assertTrue(f.observer.textResponses.last().second.contains("too long"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
+    @Test fun startupRejectsUnlistedToolWithoutExecutingIt() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = startupFixture(capability)
+        f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("Open Firefox"))
+        f.brain.respond(0, "<SAGE_TOOL>\nname=root.exec\nexecutable=/system/bin/id\n</SAGE_TOOL>")
+        assertTrue(capability.actions.isEmpty())
+        assertTrue(f.observer.textResponses.last().second.contains("unsupported action"))
+    }
+
+    @Test fun failedStartupActionStopsWithoutAutomaticRetry() {
+        val actions = java.util.concurrent.CopyOnWriteArrayList<DeviceAction>()
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(emptyMap())
+            override fun execute(action: DeviceAction): CapabilityResult {
+                actions += action
+                return CapabilityResult(false, "Completion unknown; do not retry")
+            }
+        }
+        val f = startupFixture(capability)
+        f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("Open Firefox"))
+        f.brain.respond(0, "<SAGE_TOOL>\nname=device.open_app\napp=Firefox\n</SAGE_TOOL>")
+        waitUntil { f.observer.textResponses.isNotEmpty() }
+        assertEquals(1, actions.size)
+        assertEquals(1, f.brain.requests.size)
+        assertTrue(f.observer.textResponses.last().second.contains("Completion unknown"))
+    }
+
+    private fun startupFixture(capability: CapabilityBroker, steps: String = "Open Firefox\nTap Private browsing"): Fixture {
+        val app = OwnerAppRecord("org.mozilla.firefox", "Firefox", startupProcedure = steps)
+        val apps = object : OwnerAppProvider {
+            override fun snapshot() = OwnerAppSnapshot(25, (1..24).map {
+                OwnerAppRecord("test.app$it", "UnrelatedApp$it", startupProcedure = "Unrelated ".repeat(40))
+            } + app)
+        }
+        val core = object : SageCoreProvider {
+            override fun current() = EmptySageCoreProvider.current().copy(
+                notes = "Imported Sage 1.33.3 owner instructions:\nOWNER_RULE_SURVIVES " + "keep continuity ".repeat(100)
+            )
+        }
+        return Fixture(capability = capability, ownerApps = apps, sageCore = core,
+            coordinator = SageTurnCoordinator(SageCommandRouter(ownerApps = apps)))
+    }
+
     @Test fun fastActionFailureReturnsExactDeviceReasonWithoutStartingBrain() {
         val f = Fixture()
         f.runtime.start()
