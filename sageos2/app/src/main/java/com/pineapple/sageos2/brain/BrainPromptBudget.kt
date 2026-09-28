@@ -57,10 +57,13 @@ object BrainPromptBudget {
         }
         val allowance = (combinedCharacterBudget - ownerPrompt.length)
             .coerceAtLeast(MINIMUM_CONTEXT_CHARACTERS)
-        if (scopedContext.length <= allowance) return scopedContext
-
         val sections = semanticSections(scopedContext)
-        if (sections.size > 1) return fitSemanticSections(sections, allowance)
+        if (sections.size > 1) {
+            fitStableIdentityPrefix(sections, allowance, combinedCharacterBudget)?.let { return it }
+            if (scopedContext.length <= allowance) return scopedContext
+            return fitSemanticSections(sections, allowance)
+        }
+        if (scopedContext.length <= allowance) return scopedContext
 
         val contentAllowance = (allowance - OMISSION.length).coerceAtLeast(2)
         val headLength = (contentAllowance * 3 / 5).coerceAtLeast(1)
@@ -68,6 +71,29 @@ object BrainPromptBudget {
         return scopedContext.take(headLength).trimEnd() +
             OMISSION +
             scopedContext.takeLast(tailLength).trimStart()
+    }
+
+    /**
+     * History length and request-dependent memories must not resize the identity prefix on
+     * every turn. Reserve a fixed share of this profile's budget for durable sections. The
+     * remaining space goes to dynamic context; unused dynamic space does not enlarge identity.
+     * This affects only the rendered prompt, never the stored Core or memory. Tiny budgets
+     * fall back to the existing all-section fitter rather than dropping semantic sections.
+     */
+    private fun fitStableIdentityPrefix(
+        sections: List<PromptSection>, allowance: Int, profileBudget: Int
+    ): String? {
+        val identity = sections.filter { it.title in STABLE_IDENTITY_SECTIONS }
+        val dynamic = sections.filter { it.title !in STABLE_IDENTITY_SECTIONS }
+        if (identity.isEmpty() || dynamic.isEmpty()) return null
+        val identityBudget = profileBudget * 55 / 100
+        fun minimum(parts: List<PromptSection>) =
+            parts.sumOf { minimumQuota(it) } + (parts.size - 1).coerceAtLeast(0) * 2
+        if (identityBudget < minimum(identity)) return null
+        val prefix = fitSemanticSections(identity, identityBudget)
+        val dynamicBudget = allowance - prefix.length - 2
+        if (dynamicBudget < minimum(dynamic)) return null
+        return prefix + "\n\n" + fitSemanticSections(dynamic, dynamicBudget)
     }
 
     /**
@@ -208,6 +234,10 @@ object BrainPromptBudget {
     )
 
     private val SECTION_HEADER = Regex("(?m)^# ")
+    private val STABLE_IDENTITY_SECTIONS = setOf(
+        "SYSTEM GUIDE", "WHO I AM", "OWNER CORE", "WHAT MATTERS TO US", "ME",
+        "WHAT WE'VE BEEN DOING", "CURRENT FACET"
+    )
     private val HEAD_ONLY_SECTIONS = setOf(
         "OWNER CORE",
         "WHAT MATTERS TO US",
