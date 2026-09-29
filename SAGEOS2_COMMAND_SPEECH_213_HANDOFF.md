@@ -1,11 +1,13 @@
 # Command-Speech Repair Handoff — SageOS2 build 213
 
-**STATUS: COMPILED AND TESTED. 36/36 host tests pass. Rebased onto 36c6a08, zero conflicts.**
-**COMMITTED as 6c64c32 (+c2c0274 for this doc) on `repair/command-speech-213`. PUSHED, DRAFT PR
-OPEN against `sageos-2`.**
-**STILL NOT RUN ON A DEVICE, and no Android/Gradle build has run (aapt2 is x86-64 only).**
-**Two real test defects were found and fixed — see §0.1. This is the first real verification
-this repair has ever had.**
+**STATUS: REPAIR VERIFIED ON THE PHYSICAL DEVICE. §5.3 is closed — the diagnostic reads
+`last turn ended by endpoint`, not `budget`, so §4's diagnosis is CONFIRMED. Failed turns dropped
+from ~13,732 ms to ~1,289 ms (10.7x).**
+**The decoder-empty question (§5.2) is untouched and remains the real open problem: `code=7`
+persists — the recognizer still decodes zero text. This repair makes failures fast; it does not
+make the recognizer work, exactly as §4 always disclaimed.**
+**Merged as `0b691ff` via PR #47. PR #49 (a `lastCompletion` write-ordering fix plus handoff
+bookkeeping) is open and drafted.**
 
 The shell is back (see §2, the blocker is resolved). A JDK and a standalone Kotlin compiler were
 installed to get real results. Everything below §0.1 is the *original* handoff text, preserved
@@ -201,6 +203,212 @@ gh pr create --draft --base sageos-2 --head repair/command-speech-213 \
 `gh pr edit 47 --body-file <file>` repairs it after the fact. This is worth knowing because §0.2
 prescribes that exact command as the way to finish this work, so anyone repeating it would have
 opened a body-less PR and may not have noticed.
+
+### 0.4 Fourth session — PR #47 merged, and the Android build is finally verified
+
+**PR #47 is MERGED, not open.** It was merged at `2026-09-28T22:40:14Z` as merge commit `0b691ff`
+("Integrate OpenCode verified command speech repair"), and was un-drafted before merging. Confirmed
+with `gh pr view 47` and `git merge-base --is-ancestor 6c64c32 origin/sageos-2`. **The repair is
+already in `sageos-2`.** Anyone reading an older revision of this handoff and planning to "open the
+PR" is working from a stale premise.
+
+`git rebase origin/sageos-2` was still run and was a clean no-op: local `repair/command-speech-213`
+is now `0b691ff`, **0 ahead / 0 behind**. The fetch-refspec trap in §0.2 bit again and is worth
+repeating: `git fetch origin sageos-2` updates only `FETCH_HEAD` and leaves `origin/sageos-2`
+stale. The base had in fact moved `36c6a08 -> 0b691ff`; only the explicit refspec revealed it.
+
+**Brain/identity workstream untouched.** `runtime/BrainProgressTraceGate.kt` and
+`runtime/PersistentRuntimeObserver.kt` are owned by a separate workstream. Those two files were
+touched only by `95f84e8` ("Bound persistent Brain progress traces while preserving live
+updates"); `git diff 36c6a08 ab4b3ec` confirms `repair/command-speech-213` never touched them, and
+nothing in this session modified them.
+
+**The Android build was attempted locally and genuinely cannot run here.** Exact results, because
+the obvious invocation fails for a reason that is not the code's fault:
+
+| Command | Result |
+|---|---|
+| `bash gradlew :sageos2:app:testDebugUnitTest :app:assembleDebug --no-daemon` | **exit 1** — `Configuring project ':app' without an existing directory is not allowed` |
+| `bash gradlew -p sageos2 :app:testDebugUnitTest :app:assembleDebug --no-daemon` | **exit 1** — `SDK location not found` |
+
+Three notes on running Gradle on Termux: `./gradlew` is not executable and its shebang is
+`#!/usr/bin/env bash`, which does not exist here, so it must be invoked as `bash gradlew`; the
+shim downloads Gradle 9.3.1 into `.gradle-local/` on first use; and the first command's failure is
+the vestigial root build (Correction 2 again), which dies at *configuration* time. **There were
+zero test failures locally, because compilation was never reached.** Three independent blockers
+stand between this machine and an Android build, any one of which is fatal:
+
+1. **No Android SDK** — no `ANDROID_HOME`, no `ANDROID_SDK_ROOT`, no `local.properties`, no SDK
+   directory. This is the failure actually observed, and it is the *first* one; §0.1/§0.2 blamed
+   only aapt2, which is the blocker behind it.
+2. **No NDK `28.2.13676358` and no CMake** — `app/build.gradle.kts` sets `ndkVersion` and an
+   `externalNativeBuild { cmake { … } }` block for the sherpa native build.
+3. **aapt2 9.1.1 has no arm64 artifact** — the `linux` binary is `ELF 64-bit … x86-64` and fails
+   here with `Exec format error`; `-linux-arm64` and `-linux-aarch64` are both 404.
+
+**CI did run, and it is green.** `0b691ff` carries two successful workflows:
+
+```
+run 36493762379  "Verify SageOS 2"                          SUCCESS  5m38s
+  :app:compileDebugNavigationResources   <- aapt2 resource processing, impossible locally
+  :app:compileDebugKotlin
+  :app:compileDebugJavaWithJavac        <- SageSherpaRecognitionService against the real AAR
+  :app:compileDebugUnitTestKotlin
+  :app:testDebugUnitTest
+  :app:dexBuilderDebug
+  :app:mergeDebugNativeLibs  :app:packageDebug  :app:assembleDebug
+  BUILD SUCCESSFUL in 4m 52s
+run 36493762988  "Build verified signed SageOS 2 candidate"  SUCCESS  13m17s
+```
+
+Test totals, read from the `sageos2-test-reports` artifact rather than the log summary:
+
+```
+TEST TOTALS: {'tests': 266, 'failures': 0, 'errors': 0, 'skipped': 0}
+  CommandEndpointPolicyTest     21   fail=0 err=0
+  RecognitionSessionGateTest    11   fail=0 err=0
+  CommandRecognizerPolicyTest    4   fail=0 err=0      (21 + 11 + 4 = 36, matches the host run)
+```
+
+The sherpa AAR and the KWS assets were restored from the pinned cache key
+`sageos2-kws-v3-1.13.7-f170013b4716e41b`, so this exercised the real sherpa API rather than a stub.
+CI's own summary step hard-fails on any nonzero `failures`/`errors`, so 0/0 is enforced, not just
+reported.
+
+**This closes the last open gap from §0.2/§5.6.** Resource processing, dexing, native packaging
+and the sherpa API surface are now verified green on the merged code. What remains is only §5.3:
+a real device turn, reading `lastCompletion` from `runtimeDetail()`.
+
+**Housekeeping:** the local Gradle run created `.gradle-local/` (277 MB) and `build/`, neither of
+which was gitignored — a real risk that a later `git add -A` would commit a 277 MB Gradle
+distribution. Both are now ignored, along with `/sageos2/build/` which the same run would create.
+`core` remains untracked and uncommitted throughout.
+
+### 0.5 Fifth session — the §5.3 check had a race, and the fetch refspec is fixed
+
+Two loose ends from §0.4 were picked up. One is a local clone bug that is now genuinely fixed. The
+other could not be *performed* — there is no device — but auditing whether it was even
+*actionable* turned up a real defect in the instrument it depends on.
+
+**The device turn still cannot be run here.** `adb devices` lists nothing; the build machine has no
+attached hardware. §5.3 remains open and needs a VASOUN L10_T05. Nothing in this section should be
+read as a substitute for it.
+
+**The fetch refspec is fixed (local clone config, no repo change).** The pinned refspec from §0.2
+is gone:
+
+```sh
+git config --unset-all remote.origin.fetch
+git config --add remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'
+git fetch origin --prune          # 99 remote branches now tracked
+```
+
+Verified properly rather than by assumption: `origin/sageos-2` was forced back to `36c6a08`, then
+the plain `git fetch origin sageos-2` was re-run. It now prints
+`36c6a08..0b691ff  sageos-2 -> origin/sageos-2`. The same command previously left the ref untouched
+while exiting 0. Anyone still seeing a stale base after this change is in a different clone.
+
+**A real race in `lastCompletion`, found by auditing §5.3 — this is the substantive fix.**
+`runtimeDetail()` reports `lastCompletion`, and §5.3 says to read it after a failing turn. But the
+emits are **synchronous binder calls** — `emitError` is `callback.error(code)` on the spot — while
+`lastCompletion` was written in the `finally`, i.e. *after* the emit returned. The sequence was:
+
+```
+emitError(callback, ERROR_NO_MATCH)   // app is told the turn failed, synchronously
+    ... control returns to the worker ...
+} finally { lastCompletion = "endpoint" | "cancelled" | "budget"; }
+```
+
+So between those two points the app was already reporting a `code=7` failure while
+`runtimeDetail()` still showed the **previous** turn's value, or nothing on the first turn. That is
+not a cosmetic problem: a stale `endpoint` left over from an earlier successful turn would read as
+**confirming §4's diagnosis**, when the current turn may have ended on `budget` and refuted it. The
+one check that decides whether this repair's theory is right could produce a false positive.
+
+Fixed by writing the value before the emits, at the point where it is already final:
+
+```java
+if (outcome == CommandEndpointPolicy.WindowEnd.SUPPRESSED) return;
+lastCompletion = endpointReached ? "endpoint" : (stopRequested.get() ? "cancelled" : "budget");
+emitEnd(callback);
+```
+
+`endpointReached` is final once the loop has exited, and `stopRequested.get()` has already been
+consulted by `onWindowEnd` one line earlier without suppressing, so the string is fully determined
+here. The `finally` assignment is **kept** and still recomputes the identical value, because it is
+the only thing covering the early returns at the `stopRequested` bail, the superseded-callback
+bail, the `SUPPRESSED` bail, and the exception paths. Behaviour is otherwise unchanged; only the
+write happens earlier.
+
+Re-verified after the edit: service compiles `javac -Xlint:all` against the real AAR with zero
+warnings, the full main source set compiles clean (408 classes — up from 407 only because the base
+moved to `0b691ff` and `95f84e8` added `runtime/BrainProgressTraceGate.kt`), and 36/36 speech tests
+still pass. **That new file is the other workstream's and was not touched here**; it is only
+present because the base advanced.
+
+**One limitation of the instrument, reported not changed.** `runtimeDetail()` only appends
+`lastCompletion` inside its `if (sharedRecognizer != null)` branch, so when the recognizer is not
+warm — `recognizerWarming`, or `not warm: <lastFailure>` — the value is dropped from the string
+entirely. For the `code=7` case §5.3 targets this does not bite, because the recognizer was warm in
+order to decode. It would matter if a tester chases a turn that never reached a warm recognizer, and
+would read as a missing field rather than a stale one. Restructuring those return branches is a
+larger change than this defect warrants, so it is left alone and written down.
+
+### 0.6 Sixth session — §5.3 answered on the device: `endpoint`, not `budget`
+
+An operator produced a real diagnostic report on the VASOUN L10_T05 (Android 13, 2.0.0 build 213)
+after two live command turns. **The decisive line:**
+
+```
+Command speech: ready • local sherpa command speech ready; recognizer warm in 1791ms, last turn ended by endpoint
+```
+
+§5.3 set the decision rule in advance: *"If it reports `budget` and not `endpoint`, the
+leading-silence reasoning is wrong and the real cause is upstream of the endpoint gate. Re-evaluate
+before trusting §4."* **It reports `endpoint`, so §4's diagnosis stands and no re-evaluation is
+needed.** The endpoint gate is reachable and it is what now ends these turns.
+
+**The latency claim, measured.** From the trace (`turn=25`, `turn=26`):
+
+| | turn 25 | turn 26 |
+|---|---|---|
+| `COMMAND_LISTENING` → `speech began` | 2,097 ms | 1,572 ms |
+| `speech began` → `recognition failed code=7` | **931 ms** | **1,647 ms** |
+| total turn | 3,028 ms | 3,219 ms |
+
+Against the pre-repair baseline in §4 (`13,927 ms` and `13,538 ms` from onset to failure):
+
+```
+pre-repair  mean 13,732 ms
+post-repair mean  1,289 ms      -> 10.7x faster
+```
+
+The repair does exactly what it claimed, on real hardware, with real microphone audio.
+
+**The read is trustworthy even though the device ran the pre-race-fix build.** §0.5 found that
+`lastCompletion` was written after the emit and could in principle be read stale. It was not here:
+the report was created at `1790648714407`, **32,867 ms (33 s) after** the last turn failed at
+`1790648681540`, so the value had long since settled. The race is still a real defect and PR #49
+should still merge, but it did not compromise this measurement.
+
+**What is NOT fixed, and it is the actual problem.** Both turns still ended `recognition failed
+code=7`. Because `finalText` falls back to `lastText` before classification, `code=7` proves the
+decoder emitted **zero** text for the whole turn. This is §5.2 unchanged, and §4 said so in
+advance: the change *"reduces failed-turn delay only. It cannot change recognition accuracy."*
+That is exactly what the device shows. **Making the failure 10.7x faster is the whole of the
+repair's value; the recognizer is no more capable than before.**
+
+**One new observation, offered as a question and not as a conclusion.** Onset-to-endpoint is now
+just 0.9–1.6 s. That is short. The onset gate is `hasSpeechEnergy` — a latching energy threshold
+(1-in-4 subsample mean absolute value over `180L`) — not a speech recognizer, so it can trip on a
+transient, a breath, or the tail of the wake word, and sherpa's stock `rule1` then sees
+"speech, then silence" and fires. If the operator's command was longer than ~1.5 s, **this fix may
+now be truncating the utterance before the decoder ever had enough audio to work with**, which
+would be a newly introduced failure mode and would make turn *length* part of the §5.2 story
+rather than only decoder capability. The evidence cannot settle this: a short command like "go
+home" legitimately produces a ~1 s window. The discriminator is a deliberate long utterance — if a
+4–5 second command still ends at ~1.3 s, the endpoint is premature and §5.5's endpoint config
+needs attention; if it runs longer and decodes, the window is behaving.
 
 ---
 
@@ -616,9 +824,10 @@ cd /data/data/com.termux/files/home/sage-work
 # 5. commit, push, open DRAFT PR. Do not merge. Do not build/distribute an APK.
 ```
 
-Step 4 is the one that actually matters. Everything in §0.1 is host-side proof that the code
-compiles and the policy is self-consistent; only a device turn can show whether the endpoint gate
-shortens the failure as §4 predicts.
+**Steps 1-5 are all DONE — see §0.1 through §0.4.** PR #47 is merged as `0b691ff`; CI ran the
+Android build itself and it passed. Steps 1-3 do not need doing on this machine, because they
+cannot be done here at all (§0.4 documents why, and that the missing piece was the SDK, not just
+aapt2). **Step 4 is the only one still open, and it is the one that matters.**
 
 `CommandRecognizerPolicyTest` is included above deliberately: it is the pre-existing test for
 `CommandRecognizerPolicy` and must still pass, proving backend-selection behaviour is unchanged.
@@ -627,15 +836,20 @@ shortens the failure as §4 predicts.
 
 ## 5. Remaining limitations
 
-1. ~~**Nothing is verified.** No compile, no test run, no device run.~~ **SUPERSEDED by §0.1:**
-   everything is compiled and the 36 host tests pass. What is still unverified is the Android
-   integration (§5.6) and the sherpa API surface (§0.1), neither of which is reachable without an
-   Android SDK and the real AAR.
+1. ~~**Nothing is verified.** No compile, no test run, no device run.~~ **SUPERSEDED by §0.1 and
+   then by §0.4.** The code compiles, 36/36 host tests pass, and CI now runs the full Android
+   build on the merged head: **266/266 unit tests, 0 failures, `assembleDebug` successful.** The
+   sherpa API surface and Android integration are no longer unverified. The only thing still
+   unverified is the device turn itself (§5.3, §5.6).
 2. **The decoder-empty question is unexplained.** This change makes the failure fast; it does not
    make the recognizer work. `code=7` proves zero tokens across the whole turn.
-3. **The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a
-   failing turn. If it reports `budget` and not `endpoint`, the leading-silence reasoning is
-   wrong and the real cause is upstream of the endpoint gate. Re-evaluate before trusting §4.
+   **CONFIRMED STILL OPEN on the device (§0.6):** two live turns both ended `code=7` despite the
+   endpoint gate now firing correctly. This is the real remaining problem, and the next thing to
+   investigate — see §0.6's long-utterance discriminator.
+3. ~~**The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a
+   failing turn.~~ **DONE — see §0.6.** It read `endpoint`, confirming §4's diagnosis. Failed turns
+   went from ~13,732 ms to ~1,289 ms, 10.7x faster. The race found in §0.5 could not have
+   affected the read: the report was captured 33 s after the last turn.
 4. **Mic contention is unseparated.** The `RecognitionService` runs in-process with
    `AndroidSpeechPort`, and the wake engine's `stop()` bounds its join at only
    `STOP_JOIN_MS = 1_500L`. Real contention behaviour cannot be distinguished from
