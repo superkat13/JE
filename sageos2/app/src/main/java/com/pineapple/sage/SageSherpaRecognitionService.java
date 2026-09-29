@@ -187,6 +187,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             int lastRead = 0;
             int decodeSteps = 0;
             int nonEmptyTextChunks = 0;
+            int runningMeanAbs = 0;
             long speechBeganAtMs = -1L;
             while (!stopRequested.get()
                     && System.currentTimeMillis() - started < MAX_UTTERANCE_MS) {
@@ -196,11 +197,25 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                 chunkIndex++;
                 lastRead = count;
                 totalSamples += count;
-                peakAbs = Math.max(peakAbs, peakAbsolute(pcm, count));
+                int chunkPeakAbs = peakAbsolute(pcm, count);
+                int chunkMeanAbs = meanAbsolute(pcm, count);
+                peakAbs = Math.max(peakAbs, chunkPeakAbs);
+                runningMeanAbs = (int) (((long) runningMeanAbs * (totalSamples - count)
+                        + (long) chunkMeanAbs * count) / Math.max(1, totalSamples));
+                // Diagnostic-only. The previous onset threshold was fitted to a subsampled mean that
+                // was never recorded, which is why it could not be recalibrated when it proved wrong
+                // on the device. Logging the running mean and the chunk peak makes a real fit possible.
                 emitRms(callback, rmsDb(pcm, count));
-                if (!speechBegan && hasSpeechEnergy(pcm, count)) {
+                if (!speechBegan
+                        && CommandEndpointPolicy.hasSpeechEnergy(peakAbs)) {
                     speechBegan = true;
                     speechBeganAtMs = System.currentTimeMillis() - started;
+                    Log.i(DIAG_TAG, "onset[latched] chunk=" + chunkIndex
+                            + " audioMs=" + (totalSamples * 1000L / SAMPLE_RATE)
+                            + " chunkPeakAbs=" + chunkPeakAbs
+                            + " chunkMeanAbs=" + chunkMeanAbs
+                            + " runningMeanAbs=" + runningMeanAbs
+                            + " turnPeakAbs=" + peakAbs);
                     emitBeginning(callback);
                 }
                 float[] samples = new float[count];
@@ -228,7 +243,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                     logTurnState("endpoint", action.name(), chunkIndex, lastRead, totalSamples,
                             decodeSteps, nonEmptyTextChunks, text.length(),
                             System.currentTimeMillis() - started, speechBegan, endpointFlag, false,
-                            speechBeganAtMs, peakAbs);
+                            speechBeganAtMs, peakAbs, runningMeanAbs);
                     if (action == CommandEndpointPolicy.ChunkAction.FINISH_WITH_TEXT) finalText = text;
                     endpointReached = true;
                     break;
@@ -245,7 +260,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             logTurnState("preInputFinished", endpointReached ? "endpoint" : "budget", chunkIndex,
                     lastRead, totalSamples, decodeSteps, nonEmptyTextChunks, lastText.length(),
                     System.currentTimeMillis() - started, speechBegan, false, false,
-                    speechBeganAtMs, peakAbs);
+                    speechBeganAtMs, peakAbs, runningMeanAbs);
             stream.inputFinished();
             while (recognizer.isReady(stream)) {
                 recognizer.decode(stream);
@@ -258,7 +273,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             logTurnState("postInputFinished", "drain", chunkIndex, lastRead, totalSamples,
                     decodeSteps, nonEmptyTextChunks, tailText.length(),
                     System.currentTimeMillis() - started, speechBegan, false, true,
-                    speechBeganAtMs, peakAbs);
+                    speechBeganAtMs, peakAbs, runningMeanAbs);
             if (!tailText.isEmpty()) finalText = tailText;
             if (finalText.isEmpty()) finalText = lastText;
             stopMicrophone();
@@ -440,7 +455,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                                      long totalSamples, int decodeSteps, int nonEmptyTextChunks,
                                      int lastTextLength, long elapsedMs, boolean speechBegan,
                                      boolean endpointFlag, boolean inputFinished,
-                                     long speechBeganAtMs, int peakAbs) {
+                                     long speechBeganAtMs, int peakAbs, int runningMeanAbs) {
         Log.i(DIAG_TAG, "turn[" + phase + "]"
                 + " reason=" + reason
                 + " chunk=" + chunkIndex
@@ -453,15 +468,22 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                 + " speechBegan=" + speechBegan
                 + " speechBeganAtMs=" + speechBeganAtMs
                 + " peakAbs=" + peakAbs
+                + " runningMeanAbs=" + runningMeanAbs
                 + " isEndpoint=" + endpointFlag
                 + " inputFinished=" + inputFinished
                 + " elapsedMs=" + elapsedMs);
     }
 
-    private static boolean hasSpeechEnergy(short[] pcm, int count) {
-        long energy = 0L;
-        for (int index = 0; index < count; index += 4) energy += Math.abs((int) pcm[index]);
-        return energy / Math.max(1, count / 4) > 180L;
+    /**
+     * The old 1-in-4 subsample mean-absolute gate is gone; the onset test is now peak-based in
+     * {@link CommandEndpointPolicy#hasSpeechEnergy(int)}. This helper exists only to report the
+     * mean in diagnostics, so the threshold can be fitted on recorded data rather than guessed.
+     */
+    private static int meanAbsolute(short[] pcm, int count) {
+        if (count <= 0) return 0;
+        long sum = 0L;
+        for (int index = 0; index < count; index++) sum += Math.abs((int) pcm[index]);
+        return (int) (sum / count);
     }
 
     private static int peakAbsolute(short[] pcm, int count) {
