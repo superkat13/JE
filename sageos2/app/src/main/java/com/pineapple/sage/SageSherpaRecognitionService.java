@@ -39,7 +39,25 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private static final int FEATURE_DIM = 80;
     private static final int READ_SAMPLES = 1_600;
     private static final long MAX_UTTERANCE_MS = 15_000L;
-    private static final long COOLDOWN_MS = 60_000L;
+    /**
+     * How long a single failed turn keeps the command recognizer unavailable.
+     *
+     * This was 60,000 ms, which meant one quiet turn, one revoked-then-restored microphone
+     * permission, or one transient mic error left Sage deaf to voice for a full minute while the
+     * owner was still speaking to her. Nothing in the recognizer is expensive to rebuild:
+     * [prewarm] already holds one [OnlineRecognizer] in process, and [obtainRecognizer] returns that
+     * same instance rather than rebuilding. The cooldown only exists to avoid a hot retry loop
+     * against a genuinely broken model or permission, which a couple of seconds already covers.
+     */
+    private static final long COOLDOWN_MS = 2_000L;
+    /**
+     * Reads discarded immediately after the microphone opens, to drop the wake phrase's tail.
+     *
+     * [READ_SAMPLES] is 1,600 samples at 16 kHz, so each read is 100 ms and four reads are 400 ms.
+     * That is longer than the 200-300 ms a wake-spotter frame needs to drain on this device, and it
+     * is short enough to sit well inside the 1.0 s endpoint floor this recognizer already enforces.
+     */
+    private static final int WAKE_TAIL_DISCARD_CHUNKS = 4;
     private static volatile long unhealthyUntilMs;
     private static volatile String lastFailure = "";
     private static final Object RECOGNIZER_LOCK = new Object();
@@ -171,6 +189,28 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             audio.startRecording();
             if (audio.getRecordingState() != AudioRecord.RECORDSTATE_RECORDING)
                 throw new IllegalStateException("microphone did not enter recording state");
+            // The audio source can change input gain on this chipset, which moves the amplitude
+            // distribution SPEECH_ONSET_PEAK_ABS is calibrated against. Recording which source a
+            // turn actually used alongside the per-chunk peaks is what makes that checkable on the
+            // device instead of a guess. Carries no audio and no text.
+            Log.i(DIAG_TAG, "turn[audio] source=" + audioSourceName(COMMAND_AUDIO_SOURCE)
+                    + " resolved=" + audioSourceName(audio.getAudioSource())
+                    + " tailDiscardChunks=" + WAKE_TAIL_DISCARD_CHUNKS);
+
+            // The wake engine's AudioRecord is released, then a new one is opened here, but the
+            // platform audio path still holds the tail of whatever the wake spotter last decoded.
+            // Feeding that tail to the command recognizer makes the first chunks of a turn the
+            // residue of the owner's own wake phrase, which is consistent with the device trace
+            // where onset latches as early as 600 ms and with the short one- and two-character
+            // results. Discarding the first few reads removes it. This is deliberately not fed to
+            // the recognizer at all, so it cannot consume the utterance budget.
+            short[] discard = new short[READ_SAMPLES];
+            int discarded = 0;
+            while (discarded < WAKE_TAIL_DISCARD_CHUNKS && !stopRequested.get()) {
+                int dropped = audio.read(discard, 0, discard.length);
+                if (dropped <= 0) break;
+                discarded++;
+            }
 
             long started = System.currentTimeMillis();
             Bundle ready = new Bundle();
@@ -358,6 +398,24 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         return new OnlineRecognizer(null, config);
     }
 
+    /**
+     * Audio source for the command recognizer.
+     *
+     * This was [MediaRecorder.AudioSource.MIC], which is the raw path: no acoustic echo
+     * cancellation and no noise suppression. On a tablet that both plays Sage's answers through
+     * its own speaker and listens to her, that means TTS bleed is captured uncancelled and room
+     * noise is not suppressed.
+     *
+     * [MediaRecorder.AudioSource.VOICE_RECOGNITION] requests the platform's voice-communication
+     * processing instead. The important caveat, and the reason this logs its own level rather than
+     * being trusted blindly: on some Unisoc builds that source changes input gain and frequency
+     * response as well as adding processing, which moves the amplitude distribution this service
+     * measures. That interacts with [CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS] and with the
+     * wake-tail discard, so the first device run after this change must re-read the onset and
+     * per-chunk peak telemetry in [DIAG_TAG] before the threshold is considered still valid.
+     */
+    private static final int COMMAND_AUDIO_SOURCE = MediaRecorder.AudioSource.VOICE_RECOGNITION;
+
     private AudioRecord createMicrophone() {
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED)
@@ -365,9 +423,58 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         int minimum = AudioRecord.getMinBufferSize(SAMPLE_RATE,
                 AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT);
         if (minimum <= 0) throw new IllegalStateException("invalid microphone buffer: " + minimum);
-        return new AudioRecord(MediaRecorder.AudioSource.MIC, SAMPLE_RATE,
-                AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT,
-                Math.max(minimum * 2, READ_SAMPLES * 4));
+        int bufferBytes = Math.max(minimum * 2, READ_SAMPLES * 4);
+        // A device without the voice-recognition path must still be able to run commands, so fall
+        // back to the raw source rather than failing the turn. The fallback is logged because a
+        // silent drop back to MIC is exactly the kind of thing that would otherwise look like a
+        // regression in recognition quality several turns later.
+        AudioRecord record = openAudio(COMMAND_AUDIO_SOURCE, bufferBytes);
+        if (record != null && record.getState() == AudioRecord.STATE_INITIALIZED) return record;
+        if (record != null) {
+            try { record.release(); } catch (Throwable ignored) { }
+        }
+        AudioRecord fallback = openAudio(MediaRecorder.AudioSource.MIC, bufferBytes);
+        if (fallback != null && fallback.getState() == AudioRecord.STATE_INITIALIZED) {
+            Log.w(TAG, "voice-recognition source unavailable, using raw MIC for this device");
+            return fallback;
+        }
+        if (fallback != null) {
+            try { fallback.release(); } catch (Throwable ignored) { }
+        }
+        throw new IllegalStateException("AudioRecord not initialized");
+    }
+
+    /** Names the constant actually requested, not the fallback, so a run is never ambiguous. */
+    private static String audioSourceName(int source) {
+        if (source == MediaRecorder.AudioSource.VOICE_RECOGNITION) return "VOICE_RECOGNITION";
+        if (source == MediaRecorder.AudioSource.VOICE_COMMUNICATION) return "VOICE_COMMUNICATION";
+        if (source == MediaRecorder.AudioSource.MIC) return "MIC";
+        return "source" + source;
+    }
+
+    /**
+     * Opens one source, returning null instead of throwing so [createMicrophone] can try the next.
+     *
+     * The permission check is repeated here rather than relied on in the caller. This method is
+     * where the [AudioRecord] is constructed, so this is where the check has to be provably
+     * adjacent to it: Android permission can be revoked between the caller's check and the actual
+     * open, and a revoked permission surfaces as a [SecurityException] from the constructor, which
+     * is exactly the case that must not take down the whole turn. Kept adjacent deliberately: lint
+     * rejects a guard that is not in the same method as the call it protects.
+     */
+    private AudioRecord openAudio(int source, int bufferBytes) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "audio source " + source + " skipped, RECORD_AUDIO not granted");
+            return null;
+        }
+        try {
+            return new AudioRecord(source, SAMPLE_RATE,
+                    AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
+        } catch (Throwable problem) {
+            Log.w(TAG, "audio source " + source + " unavailable: " + problem);
+            return null;
+        }
     }
 
     private void stopMicrophone() {
