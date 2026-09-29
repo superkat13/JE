@@ -1,12 +1,13 @@
 # Command-Speech Repair Handoff — SageOS2 build 213
 
-**STATUS: MERGED AND VERIFIED ON CI. PR #47 merged as `0b691ff`; 266/266 unit tests pass on the
-merged head, and the Android build succeeds in CI including `assembleDebug`.**
-**STILL NOT RUN ON A DEVICE — §5.3's `lastCompletion` check is the one remaining unknown.**
-**Local Gradle is impossible on this machine (no SDK, no NDK, x86-64-only aapt2). CI is the only
-place the Android build runs; see §0.4.**
-**Two real test defects were found and fixed — see §0.1. This is the first real verification
-this repair has ever had.**
+**STATUS: REPAIR VERIFIED ON THE PHYSICAL DEVICE. §5.3 is closed — the diagnostic reads
+`last turn ended by endpoint`, not `budget`, so §4's diagnosis is CONFIRMED. Failed turns dropped
+from ~13,732 ms to ~1,289 ms (10.7x).**
+**The decoder-empty question (§5.2) is untouched and remains the real open problem: `code=7`
+persists — the recognizer still decodes zero text. This repair makes failures fast; it does not
+make the recognizer work, exactly as §4 always disclaimed.**
+**Merged as `0b691ff` via PR #47. PR #49 (a `lastCompletion` write-ordering fix plus handoff
+bookkeeping) is open and drafted.**
 
 The shell is back (see §2, the blocker is resolved). A JDK and a standalone Kotlin compiler were
 installed to get real results. Everything below §0.1 is the *original* handoff text, preserved
@@ -352,6 +353,62 @@ entirely. For the `code=7` case §5.3 targets this does not bite, because the re
 order to decode. It would matter if a tester chases a turn that never reached a warm recognizer, and
 would read as a missing field rather than a stale one. Restructuring those return branches is a
 larger change than this defect warrants, so it is left alone and written down.
+
+### 0.6 Sixth session — §5.3 answered on the device: `endpoint`, not `budget`
+
+An operator produced a real diagnostic report on the VASOUN L10_T05 (Android 13, 2.0.0 build 213)
+after two live command turns. **The decisive line:**
+
+```
+Command speech: ready • local sherpa command speech ready; recognizer warm in 1791ms, last turn ended by endpoint
+```
+
+§5.3 set the decision rule in advance: *"If it reports `budget` and not `endpoint`, the
+leading-silence reasoning is wrong and the real cause is upstream of the endpoint gate. Re-evaluate
+before trusting §4."* **It reports `endpoint`, so §4's diagnosis stands and no re-evaluation is
+needed.** The endpoint gate is reachable and it is what now ends these turns.
+
+**The latency claim, measured.** From the trace (`turn=25`, `turn=26`):
+
+| | turn 25 | turn 26 |
+|---|---|---|
+| `COMMAND_LISTENING` → `speech began` | 2,097 ms | 1,572 ms |
+| `speech began` → `recognition failed code=7` | **931 ms** | **1,647 ms** |
+| total turn | 3,028 ms | 3,219 ms |
+
+Against the pre-repair baseline in §4 (`13,927 ms` and `13,538 ms` from onset to failure):
+
+```
+pre-repair  mean 13,732 ms
+post-repair mean  1,289 ms      -> 10.7x faster
+```
+
+The repair does exactly what it claimed, on real hardware, with real microphone audio.
+
+**The read is trustworthy even though the device ran the pre-race-fix build.** §0.5 found that
+`lastCompletion` was written after the emit and could in principle be read stale. It was not here:
+the report was created at `1790648714407`, **32,867 ms (33 s) after** the last turn failed at
+`1790648681540`, so the value had long since settled. The race is still a real defect and PR #49
+should still merge, but it did not compromise this measurement.
+
+**What is NOT fixed, and it is the actual problem.** Both turns still ended `recognition failed
+code=7`. Because `finalText` falls back to `lastText` before classification, `code=7` proves the
+decoder emitted **zero** text for the whole turn. This is §5.2 unchanged, and §4 said so in
+advance: the change *"reduces failed-turn delay only. It cannot change recognition accuracy."*
+That is exactly what the device shows. **Making the failure 10.7x faster is the whole of the
+repair's value; the recognizer is no more capable than before.**
+
+**One new observation, offered as a question and not as a conclusion.** Onset-to-endpoint is now
+just 0.9–1.6 s. That is short. The onset gate is `hasSpeechEnergy` — a latching energy threshold
+(1-in-4 subsample mean absolute value over `180L`) — not a speech recognizer, so it can trip on a
+transient, a breath, or the tail of the wake word, and sherpa's stock `rule1` then sees
+"speech, then silence" and fires. If the operator's command was longer than ~1.5 s, **this fix may
+now be truncating the utterance before the decoder ever had enough audio to work with**, which
+would be a newly introduced failure mode and would make turn *length* part of the §5.2 story
+rather than only decoder capability. The evidence cannot settle this: a short command like "go
+home" legitimately produces a ~1 s window. The discriminator is a deliberate long utterance — if a
+4–5 second command still ends at ~1.3 s, the endpoint is premature and §5.5's endpoint config
+needs attention; if it runs longer and decodes, the window is behaving.
 
 ---
 
@@ -786,12 +843,13 @@ aapt2). **Step 4 is the only one still open, and it is the one that matters.**
    unverified is the device turn itself (§5.3, §5.6).
 2. **The decoder-empty question is unexplained.** This change makes the failure fast; it does not
    make the recognizer work. `code=7` proves zero tokens across the whole turn.
-3. **The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a
-   failing turn. If it reports `budget` and not `endpoint`, the leading-silence reasoning is
-   wrong and the real cause is upstream of the endpoint gate. Re-evaluate before trusting §4.
-   **Still open — no device is attached to the build machine (§0.5).** §0.5 also fixes a race that
-   made this check able to report a false positive, and records one residual gap in the same
-   diagnostic: `lastCompletion` is omitted entirely when the recognizer is not warm.
+   **CONFIRMED STILL OPEN on the device (§0.6):** two live turns both ended `code=7` despite the
+   endpoint gate now firing correctly. This is the real remaining problem, and the next thing to
+   investigate — see §0.6's long-utterance discriminator.
+3. ~~**The single decisive device check:** read `lastCompletion` from `runtimeDetail()` after a
+   failing turn.~~ **DONE — see §0.6.** It read `endpoint`, confirming §4's diagnosis. Failed turns
+   went from ~13,732 ms to ~1,289 ms, 10.7x faster. The race found in §0.5 could not have
+   affected the read: the report was captured 33 s after the last turn.
 4. **Mic contention is unseparated.** The `RecognitionService` runs in-process with
    `AndroidSpeechPort`, and the wake engine's `stop()` bounds its join at only
    `STOP_JOIN_MS = 1_500L`. Real contention behaviour cannot be distinguished from
