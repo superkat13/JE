@@ -452,7 +452,22 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         return "source" + source;
     }
 
+    /**
+     * Opens one source, returning null instead of throwing so [createMicrophone] can try the next.
+     *
+     * The permission check is repeated here rather than relied on in the caller. This method is
+     * where the [AudioRecord] is constructed, so this is where the check has to be provably
+     * adjacent to it: Android permission can be revoked between the caller's check and the actual
+     * open, and a revoked permission surfaces as a [SecurityException] from the constructor, which
+     * is exactly the case that must not take down the whole turn. Kept adjacent deliberately: lint
+     * rejects a guard that is not in the same method as the call it protects.
+     */
     private AudioRecord openAudio(int source, int bufferBytes) {
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            Log.w(TAG, "audio source " + source + " skipped, RECORD_AUDIO not granted");
+            return null;
+        }
         try {
             return new AudioRecord(source, SAMPLE_RATE,
                     AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT, bufferBytes);
