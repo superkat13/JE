@@ -144,6 +144,9 @@ class CommandEndpointPolicyTest {
     /**
      * Reproduces the two observed turn shapes. Both end in the same classification either way;
      * only the wall-clock cost differs. This is the regression that motivated the fix.
+     *
+     * This omits `audioMs`, so it pins the behaviour for callers that cannot supply a duration.
+     * The minimum-audio guard is covered separately, below.
      */
     @Test fun emptyEndpointTurnCompletesAtEndpointNotAtBudget() {
         var elapsed = 0L
@@ -183,5 +186,127 @@ class CommandEndpointPolicyTest {
             WindowEnd.RESULTS,
             CommandEndpointPolicy.onWindowEnd(stopRequested = false, totalSamples = 8_000L, peakAbs = 900, finalText = finalText)
         )
+    }
+
+    // --- minimum audio before an empty endpoint is honoured -------------------------
+
+    /**
+     * The three real L10_T05 empty turns, replayed against the new guard. Every one of them must
+     * now keep reading instead of closing the window, because all three finished before the
+     * decoder had ever produced text on this device.
+     */
+    @Test fun observedDeviceEmptyTurnsAreNoLongerTruncated() {
+        for (audioMs in listOf(2_844L, 2_997L, 2_959L)) {
+            assertEquals(
+                "an empty turn that closed at ${audioMs}ms must not be allowed to close at all",
+                ChunkAction.CONTINUE,
+                CommandEndpointPolicy.onChunk(
+                    endpointReached = true, text = "", speechBegan = true, audioMs = audioMs
+                )
+            )
+        }
+    }
+
+    /** The one turn that did produce text ran 5,573ms, so the guard must not block it. */
+    @Test fun observedDeviceSuccessfulTurnIsStillAllowedToClose() {
+        assertEquals(
+            ChunkAction.FINISH_EMPTY,
+            CommandEndpointPolicy.onChunk(
+                endpointReached = true, text = "", speechBegan = true, audioMs = 5_573L
+            )
+        )
+    }
+
+    @Test fun emptyEndpointIsRefusedOneSampleBelowTheMinimum() {
+        assertEquals(
+            ChunkAction.CONTINUE,
+            CommandEndpointPolicy.onChunk(
+                endpointReached = true, text = "", speechBegan = true,
+                audioMs = CommandEndpointPolicy.MIN_ENDPOINT_AUDIO_MS - 1L
+            )
+        )
+    }
+
+    @Test fun emptyEndpointIsAllowedExactlyAtTheMinimum() {
+        assertEquals(
+            ChunkAction.FINISH_EMPTY,
+            CommandEndpointPolicy.onChunk(
+                endpointReached = true, text = "", speechBegan = true,
+                audioMs = CommandEndpointPolicy.MIN_ENDPOINT_AUDIO_MS
+            )
+        )
+    }
+
+    /**
+     * The guard must never delay a result that already exists. If the decoder has produced text,
+     * holding the microphone open only accumulates trailing noise, so FINISH_WITH_TEXT stays ahead
+     * of the minimum-audio check.
+     */
+    @Test fun realTextIsNeverHeldBackByTheMinimum() {
+        assertEquals(
+            ChunkAction.FINISH_WITH_TEXT,
+            CommandEndpointPolicy.onChunk(
+                endpointReached = true, text = "play some music", speechBegan = true, audioMs = 400L
+            )
+        )
+    }
+
+    /** Callers that cannot supply a duration keep the previous behaviour unchanged. */
+    @Test fun omittingAudioMsKeepsPriorBehaviour() {
+        assertEquals(
+            ChunkAction.FINISH_EMPTY,
+            CommandEndpointPolicy.onChunk(endpointReached = true, text = "", speechBegan = true)
+        )
+    }
+
+    /**
+     * End-to-end replay of the device failure shape: a short burst of speech, a pause long enough
+     * to trip the native endpoint, then the rest of the command, then a genuine end-of-utterance
+     * endpoint. Before the guard this closed empty at 2,959ms; now it must survive the pause and
+     * emit the text that follows it.
+     */
+    @Test fun aPauseInsideACommandNoLongerEndsTheTurnEmpty() {
+        var audioMs = 0L
+        var speechBegan = false
+        var outcome: ChunkAction? = null
+        val chunks = 120 // 100ms => 12s, inside the 15s budget
+
+        for (index in 0 until chunks) {
+            audioMs += 100L
+            if (!speechBegan && index == 7) speechBegan = true
+            // 0.7-1.6s of speech, then a pause that trips the native trailing-silence rule, then
+            // the rest of the command, then real trailing silence at the end of the utterance.
+            val endpoint = index in 16..20 || index in 60..62
+            val text = if (index >= 26) "pick a random cosplay video" else ""
+            val action = CommandEndpointPolicy.onChunk(endpoint, text, speechBegan, audioMs)
+            if (action != ChunkAction.CONTINUE) { outcome = action; break }
+        }
+
+        assertEquals(ChunkAction.FINISH_WITH_TEXT, outcome)
+    }
+
+    /**
+     * The same replay with the guard absent, pinning what the device actually did: the pause ended
+     * the turn empty at 2,959ms and the text that followed was never decoded.
+     */
+    @Test fun withoutTheGuardTheSameShapeClosesEmptyAtThePause() {
+        var audioMs = 0L
+        var speechBegan = false
+        var finishedAt = -1L
+        var outcome: ChunkAction? = null
+
+        for (index in 0 until 120) {
+            audioMs += 100L
+            if (!speechBegan && index == 7) speechBegan = true
+            val endpoint = index in 16..20 || index in 60..62
+            val text = if (index >= 26) "pick a random cosplay video" else ""
+            // No audioMs argument: this is the pre-guard behaviour.
+            val action = CommandEndpointPolicy.onChunk(endpoint, text, speechBegan)
+            if (action != ChunkAction.CONTINUE) { finishedAt = audioMs; outcome = action; break }
+        }
+
+        assertEquals(ChunkAction.FINISH_EMPTY, outcome)
+        // First endpoint chunk: audioMs is incremented before evaluation, so index 16 is 1,700ms.
+        assertEquals(1_700L, finishedAt)
     }
 }

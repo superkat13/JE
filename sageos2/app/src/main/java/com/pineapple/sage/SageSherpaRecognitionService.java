@@ -218,8 +218,9 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                     emitPartial(callback, resultBundle(text));
                 }
                 boolean endpointFlag = recognizer.isEndpoint(stream);
-                CommandEndpointPolicy.ChunkAction action =
-                        CommandEndpointPolicy.onChunk(endpointFlag, text, speechBegan);
+                CommandEndpointPolicy.ChunkAction action = CommandEndpointPolicy.onChunk(
+                        endpointFlag, text, speechBegan,
+                        totalSamples * 1000L / SAMPLE_RATE);
                 if (action != CommandEndpointPolicy.ChunkAction.CONTINUE) {
                     // Capture the state the endpoint decision was made on, before anything is
                     // flushed. If text was empty here and stays empty after the drain below, the
@@ -334,7 +335,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         OnlineRecognizerConfig config = new OnlineRecognizerConfig();
         config.setFeatConfig(feature);
         config.setModelConfig(model);
-        config.setEndpointConfig(OnlineRecognizerKt.getEndpointConfig());
+        config.setEndpointConfig(commandEndpointConfig());
         logEndpointConfig("build", config.getEndpointConfig());
         config.setEnableEndpoint(true);
         config.setDecodingMethod("greedy_search");
@@ -373,6 +374,32 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private static void markUnhealthy(String reason) {
         lastFailure = clean(reason);
         unhealthyUntilMs = System.currentTimeMillis() + COOLDOWN_MS;
+    }
+
+    /**
+     * Endpoint rules for command speech, replacing sherpa's stock [OnlineRecognizerKt.getEndpointConfig].
+     *
+     * The stock config, read out of the AAR bytecode rather than assumed, is:
+     * rule1 = (mustContainNonSilence=false, minTrailingSilence=2.4, minUtteranceLength=0)
+     * rule2 = (mustContainNonSilence=true,  minTrailingSilence=1.4, minUtteranceLength=0)
+     * rule3 = (mustContainNonSilence=false, minTrailingSilence=0,   minUtteranceLength=20)
+     *
+     * sherpa ORs the three rules, so the stock set is permissive in two ways that both truncate
+     * commands on the L10_T05: rule1 can fire on 2.4s of pure silence with no speech at all, and
+     * rule2 ends a turn after only 1.4s of trailing silence, which is shorter than a natural pause
+     * inside a spoken command. Device evidence: every empty turn finished at 2,844 / 2,997 / 2,959 ms
+     * after the recognizer was ready, while the one turn that produced text ran 5,573 ms.
+     *
+     * Every rule here therefore requires observed non-silence, the trailing silence is widened to
+     * 2.6s, and a 1.0s floor plus a 15s hard cap (matching MAX_UTTERANCE_MS) bound the window. The
+     * extra trailing silence costs up to ~1.2s of added latency on a genuine end-of-utterance; that
+     * is the deliberate trade, because the alternative was returning nothing at all.
+     */
+    private static EndpointConfig commandEndpointConfig() {
+        return new EndpointConfig(
+                new EndpointRule(true, 2.6f, 1.0f),
+                new EndpointRule(true, 2.6f, 1.0f),
+                new EndpointRule(true, 0.0f, 15.0f));
     }
 
     private static final String DIAG_TAG = "SageSherpaDiag";
