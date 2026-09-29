@@ -127,16 +127,71 @@ class CommandEndpointPolicyTest {
 
     // --- onset gate ---------------------------------------------------------------
 
-    @Test fun loudAudioTriggersOnset() {
-        assertTrue(CommandEndpointPolicy.hasSpeechEnergy(subsampledAbsSum = 200L * 400L, count = 1_600))
+    /**
+     * The quiet turn that the old mean-absolute gate missed outright. The device log recorded
+     * peakAbs=747 with speechBegan=false and speechBeganAtMs=-1, and the turn burned the full
+     * 15,000 ms budget as a result. This is that exact value.
+     */
+    @Test fun quietSpeechObservedOnDeviceTriggersOnset() {
+        assertTrue(
+            "peakAbs=747 was real speech the old mean-based gate never latched",
+            CommandEndpointPolicy.hasSpeechEnergy(peakAbs = 747)
+        )
     }
 
-    @Test fun quietAudioDoesNotTriggerOnset() {
-        assertFalse(CommandEndpointPolicy.hasSpeechEnergy(subsampledAbsSum = 179L * 400L, count = 1_600))
+    /** The loud ends of the range the device logged, all of which latched under the old gate too. */
+    @Test fun loudSpeechTriggersOnset() {
+        for (peak in listOf(3_854, 4_349, 4_710, 5_452)) {
+            assertTrue("peak=$peak should latch onset", CommandEndpointPolicy.hasSpeechEnergy(peak))
+        }
     }
 
-    @Test fun zeroCountDoesNotDivideByZero() {
-        assertFalse(CommandEndpointPolicy.hasSpeechEnergy(subsampledAbsSum = 0L, count = 0))
+    /** True silence must not latch, so a quiet start still becomes a no-match rather than audio. */
+    @Test fun silenceDoesNotTriggerOnset() {
+        assertFalse(CommandEndpointPolicy.hasSpeechEnergy(peakAbs = 0))
+    }
+
+    /**
+     * The gate must stay above [MIN_PEAK_ABS], which the codebase already uses to tell silence
+     * from real audio in [onWindowEnd]. Agreeing with that floor keeps the two decisions
+     * consistent instead of quietly disagreeing about what counts as sound.
+     */
+    @Test fun onsetThresholdSitsAboveTheSilenceFloor() {
+        assertFalse(CommandEndpointPolicy.hasSpeechEnergy(peakAbs = CommandEndpointPolicy.MIN_PEAK_ABS))
+        assertTrue(
+            "the onset gate must be strictly above the silence floor",
+            CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS > CommandEndpointPolicy.MIN_PEAK_ABS
+        )
+    }
+
+    /** One below the threshold does not latch; exactly at it does. */
+    @Test fun onsetBoundaryIsExact() {
+        assertFalse(
+            CommandEndpointPolicy.hasSpeechEnergy(
+                peakAbs = CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS - 1
+            )
+        )
+        assertTrue(
+            CommandEndpointPolicy.hasSpeechEnergy(
+                peakAbs = CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS
+            )
+        )
+    }
+
+    /**
+     * The threshold is bracketed by the two values actually measured on the device: the silence
+     * floor the code already trusts, and the quietest genuine speech observed. This pins that
+     * bracket so a future edit cannot drift outside the range the hardware supports.
+     */
+    @Test fun onsetThresholdIsBracketedByMeasuredDeviceValues() {
+        assertTrue(
+            "must catch the quietest real speech the device produced (747)",
+            CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS <= 747
+        )
+        assertTrue(
+            "must not fire on anything the code already calls silence (32)",
+            CommandEndpointPolicy.SPEECH_ONSET_PEAK_ABS > 32
+        )
     }
 
     // --- failed-turn delay vs accuracy -------------------------------------------

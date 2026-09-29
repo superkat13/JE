@@ -19,7 +19,31 @@ package com.pineapple.sageos2.speech
 object CommandEndpointPolicy {
     /** Unchanged from the service: this policy does not shorten the overall budget. */
     const val DEFAULT_MAX_UTTERANCE_MS: Long = 15_000L
-    const val SPEECH_ONSET_ENERGY: Long = 180L
+    /**
+     * Peak amplitude at which a turn is considered to have started speaking, in 16-bit sample units.
+     *
+     * This replaces a mean-absolute threshold of 180 over a 1-in-4 subsample. That test was wrong in
+     * both directions, and the L10_T05 diagnostic logging caught it: one real turn reached
+     * `peakAbs=747` yet never latched onset, so the gate missed quiet speech entirely and the turn
+     * ran to the full 15,000 ms budget. Conversely it latched within ~700 ms on earlier failing
+     * turns, which is far too fast to be a spoken command and is consistent with the wake-word
+     * tail.
+     *
+     * A single mean over a subsample cannot separate those cases, because a short loud transient
+     * and a long quiet sentence can share a mean. Peak amplitude separates them, and the service
+     * already computes the running peak for [onWindowEnd], so this costs nothing.
+     *
+     * 400 sits between the two anchors actually measured: 12.5x above [MIN_PEAK_ABS] (32), which
+     * this codebase already treats as the floor between silence and audio, and 1.9x below the
+     * quietest genuine speech observed on the device (747). 400/32768 is 1.2% of full scale,
+     * about -38 dBFS.
+     *
+     * Honest limitation: the device log recorded the per-turn peak but not the per-chunk mean, so
+     * this threshold is derived from those two anchors rather than fitted. The service now logs
+     * per-chunk mean amplitude, so a future run can fit the mean properly if peak proves too
+     * trigger-happy on a noisy room.
+     */
+    const val SPEECH_ONSET_PEAK_ABS: Int = 400
     const val MIN_PEAK_ABS: Int = 32
 
     /**
@@ -90,8 +114,10 @@ object CommandEndpointPolicy {
         else -> WindowEnd.NO_MATCH
     }
 
-    /** Mirrors the service's amplitude onset gate (1-in-4 subsample mean absolute value). */
+    /**
+     * Mirrors the service's amplitude onset gate, which now tests the running peak of the turn
+     * rather than a subsampled mean. See [SPEECH_ONSET_PEAK_ABS] for why.
+     */
     @JvmStatic
-    fun hasSpeechEnergy(subsampledAbsSum: Long, count: Int): Boolean =
-        subsampledAbsSum / maxOf(1, count / 4) > SPEECH_ONSET_ENERGY
+    fun hasSpeechEnergy(peakAbs: Int): Boolean = peakAbs >= SPEECH_ONSET_PEAK_ABS
 }
