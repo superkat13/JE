@@ -13,6 +13,8 @@ import android.speech.RecognitionService;
 import android.speech.SpeechRecognizer;
 import android.util.Log;
 
+import com.k2fsa.sherpa.onnx.EndpointConfig;
+import com.k2fsa.sherpa.onnx.EndpointRule;
 import com.k2fsa.sherpa.onnx.FeatureConfig;
 import com.k2fsa.sherpa.onnx.OnlineModelConfig;
 import com.k2fsa.sherpa.onnx.OnlineRecognizer;
@@ -179,31 +181,53 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             long totalSamples = 0L;
             String lastText = "";
             String finalText = "";
+            // Diagnostic-only counters. They exist to separate "the decoder never produced text"
+            // from "the decoder produced text that was dropped before inputFinished()".
+            int chunkIndex = 0;
+            int lastRead = 0;
+            int decodeSteps = 0;
+            int nonEmptyTextChunks = 0;
+            long speechBeganAtMs = -1L;
             while (!stopRequested.get()
                     && System.currentTimeMillis() - started < MAX_UTTERANCE_MS) {
                 int count = audio.read(pcm, 0, pcm.length);
                 if (count < 0) throw new IllegalStateException("AudioRecord read failed: " + count);
                 if (count == 0) continue;
+                chunkIndex++;
+                lastRead = count;
                 totalSamples += count;
                 peakAbs = Math.max(peakAbs, peakAbsolute(pcm, count));
                 emitRms(callback, rmsDb(pcm, count));
                 if (!speechBegan && hasSpeechEnergy(pcm, count)) {
                     speechBegan = true;
+                    speechBeganAtMs = System.currentTimeMillis() - started;
                     emitBeginning(callback);
                 }
                 float[] samples = new float[count];
                 for (int index = 0; index < count; index++) samples[index] = pcm[index] / 32768.0f;
                 stream.acceptWaveform(samples, SAMPLE_RATE);
-                while (recognizer.isReady(stream)) recognizer.decode(stream);
+                while (recognizer.isReady(stream)) {
+                    recognizer.decode(stream);
+                    decodeSteps++;
+                }
                 OnlineRecognizerResult result = recognizer.getResult(stream);
                 String text = clean(result == null ? "" : result.getText());
+                if (!text.isEmpty()) nonEmptyTextChunks++;
                 if (!text.isEmpty() && !text.equals(lastText)) {
                     lastText = text;
                     emitPartial(callback, resultBundle(text));
                 }
-                CommandEndpointPolicy.ChunkAction action = CommandEndpointPolicy.onChunk(
-                        recognizer.isEndpoint(stream), text, speechBegan);
+                boolean endpointFlag = recognizer.isEndpoint(stream);
+                CommandEndpointPolicy.ChunkAction action =
+                        CommandEndpointPolicy.onChunk(endpointFlag, text, speechBegan);
                 if (action != CommandEndpointPolicy.ChunkAction.CONTINUE) {
+                    // Capture the state the endpoint decision was made on, before anything is
+                    // flushed. If text was empty here and stays empty after the drain below, the
+                    // endpoint genuinely ended the turn with no decodable audio.
+                    logTurnState("endpoint", action.name(), chunkIndex, lastRead, totalSamples,
+                            decodeSteps, nonEmptyTextChunks, text.length(),
+                            System.currentTimeMillis() - started, speechBegan, endpointFlag, false,
+                            speechBeganAtMs, peakAbs);
                     if (action == CommandEndpointPolicy.ChunkAction.FINISH_WITH_TEXT) finalText = text;
                     endpointReached = true;
                     break;
@@ -213,10 +237,27 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             // re-derives the text the loop would have produced anyway, so bailing out here cannot
             // change the outcome of a turn the caller still wanted.
             if (stopRequested.get()) return;
+            // Capture the state immediately before inputFinished(): this is the boundary where
+            // "recognizer reset prematurely" and "final chunks not flushed" become distinguishable.
+            // totalSamples here versus the endpoint log above shows whether any audio was read after
+            // the endpoint fired; decodeSteps versus audioMs shows whether sherpa was keeping up.
+            logTurnState("preInputFinished", endpointReached ? "endpoint" : "budget", chunkIndex,
+                    lastRead, totalSamples, decodeSteps, nonEmptyTextChunks, lastText.length(),
+                    System.currentTimeMillis() - started, speechBegan, false, false,
+                    speechBeganAtMs, peakAbs);
             stream.inputFinished();
-            while (recognizer.isReady(stream)) recognizer.decode(stream);
+            while (recognizer.isReady(stream)) {
+                recognizer.decode(stream);
+                decodeSteps++;
+            }
             OnlineRecognizerResult tail = recognizer.getResult(stream);
             String tailText = clean(tail == null ? "" : tail.getText());
+            // Post-drain capture. tailText empty while lastText was non-empty would mean the drain
+            // destroyed text; both empty means the model decoded nothing for the whole window.
+            logTurnState("postInputFinished", "drain", chunkIndex, lastRead, totalSamples,
+                    decodeSteps, nonEmptyTextChunks, tailText.length(),
+                    System.currentTimeMillis() - started, speechBegan, false, true,
+                    speechBeganAtMs, peakAbs);
             if (!tailText.isEmpty()) finalText = tailText;
             if (finalText.isEmpty()) finalText = lastText;
             stopMicrophone();
@@ -294,6 +335,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         config.setFeatConfig(feature);
         config.setModelConfig(model);
         config.setEndpointConfig(OnlineRecognizerKt.getEndpointConfig());
+        logEndpointConfig("build", config.getEndpointConfig());
         config.setEnableEndpoint(true);
         config.setDecodingMethod("greedy_search");
         config.setMaxActivePaths(4);
@@ -331,6 +373,62 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private static void markUnhealthy(String reason) {
         lastFailure = clean(reason);
         unhealthyUntilMs = System.currentTimeMillis() + COOLDOWN_MS;
+    }
+
+    private static final String DIAG_TAG = "SageSherpaDiag";
+
+    /**
+     * Diagnostic-only. Records endpoint rule parameters so a device log can prove which rule is
+     * capable of ending a turn. Carries no audio and no transcript text.
+     */
+    private static void logEndpointConfig(String phase, EndpointConfig config) {
+        if (config == null) {
+            Log.w(DIAG_TAG, "endpointConfig[" + phase + "]=null");
+            return;
+        }
+        StringBuilder out = new StringBuilder("endpointConfig[" + phase + "]");
+        EndpointRule[] rules = {config.getRule1(), config.getRule2(), config.getRule3()};
+        String[] names = {"rule1", "rule2", "rule3"};
+        for (int index = 0; index < rules.length; index++) {
+            EndpointRule rule = rules[index];
+            if (rule == null) {
+                out.append(' ').append(names[index]).append("=null");
+                continue;
+            }
+            out.append(' ').append(names[index])
+                    .append("(mustContainNonSilence=").append(rule.getMustContainNonSilence())
+                    .append(",minTrailingSilence=").append(rule.getMinTrailingSilence())
+                    .append(",minUtteranceLength=").append(rule.getMinUtteranceLength())
+                    .append(')');
+        }
+        Log.i(DIAG_TAG, out.toString());
+    }
+
+    /**
+     * Diagnostic-only. Emits the state of a turn at one of the three points where a decode can be
+     * lost. Reports sizes, counts and elapsed times only: never samples, never transcript text, so
+     * the diagnostic output stays free of both.
+     */
+    private static void logTurnState(String phase, String reason, int chunkIndex, int lastRead,
+                                     long totalSamples, int decodeSteps, int nonEmptyTextChunks,
+                                     int lastTextLength, long elapsedMs, boolean speechBegan,
+                                     boolean endpointFlag, boolean inputFinished,
+                                     long speechBeganAtMs, int peakAbs) {
+        Log.i(DIAG_TAG, "turn[" + phase + "]"
+                + " reason=" + reason
+                + " chunk=" + chunkIndex
+                + " lastReadSamples=" + lastRead
+                + " totalSamples=" + totalSamples
+                + " audioMs=" + (totalSamples * 1000L / SAMPLE_RATE)
+                + " decodeSteps=" + decodeSteps
+                + " nonEmptyTextChunks=" + nonEmptyTextChunks
+                + " lastTextLen=" + lastTextLength
+                + " speechBegan=" + speechBegan
+                + " speechBeganAtMs=" + speechBeganAtMs
+                + " peakAbs=" + peakAbs
+                + " isEndpoint=" + endpointFlag
+                + " inputFinished=" + inputFinished
+                + " elapsedMs=" + elapsedMs);
     }
 
     private static boolean hasSpeechEnergy(short[] pcm, int count) {
