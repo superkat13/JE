@@ -56,4 +56,45 @@ class FastCommandParserTest {
         assertEquals(FastCommand.ImportBrainModel, parser.parse("load brain model"))
     }
     @Test fun rejectsUnknownCommand() = assertNull(parser.parse("explain gravity"))
+
+    // A 20M-parameter streaming recognizer transcribes the owner's politeness and determiners as
+    // readily as the command itself. Before this tolerance only the bare phrase took the fast path,
+    // so every polite phrasing cost a full prompt prefill on the L10_T05.
+    @Test fun parsesPolitenessWrappedCommands() {
+        assertEquals(FastCommand.Media(MediaAction.PLAY), parser.parse("please play music"))
+        assertEquals(FastCommand.Media(MediaAction.PLAY), parser.parse("can you play music"))
+        assertEquals(FastCommand.Media(MediaAction.PLAY), parser.parse("could you please play music"))
+        assertEquals(FastCommand.Home, parser.parse("please go home"))
+        assertEquals(FastCommand.Volume(VolumeDirection.UP), parser.parse("please turn volume up"))
+        assertEquals(FastCommand.Media(MediaAction.PAUSE), parser.parse("hey sage pause music"))
+    }
+
+    @Test fun parsesAppNamesWithDeterminersAndTrailingNoun() {
+        assertEquals(FastCommand.OpenApp("youtube"), parser.parse("open the youtube app"))
+        assertEquals(FastCommand.OpenApp("youtube"), parser.parse("please open youtube"))
+        assertEquals(FastCommand.OpenApp("youtube"), parser.parse("launch the youtube app"))
+    }
+
+    @Test fun parsesDeterminerInsideAppName() {
+        assertEquals(FastCommand.OpenApp("calendar"), parser.parse("open the calendar"))
+        assertEquals(FastCommand.OpenApp("app store"), parser.parse("open the app store"))
+    }
+
+    /**
+     * The tolerance only ever removes whole words from the outside of a phrase. An interior word
+     * or an unrecognised phrase must still fall through to the Brain rather than being coerced into
+     * a device action, because a phrase must never bypass the Brain unless the fast executor can
+     * actually carry it out.
+     */
+    @Test fun doesNotCoerceUnrecognisedOrInteriorChanges() {
+        assertNull(parser.parse("please explain gravity"))
+        assertNull(parser.parse("play some music"))
+        assertNull(parser.parse("what can you tell me about the moon"))
+    }
+
+    /** An app whose real name ends in one of the stripped words keeps it. */
+    @Test fun preservesMeaningfulTrailingWords() {
+        assertEquals(FastCommand.OpenApp("app"), parser.parse("open app"))
+        assertEquals(FastCommand.OpenApp("map"), parser.parse("open the map"))
+    }
 }

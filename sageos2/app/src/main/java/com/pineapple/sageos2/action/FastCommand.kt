@@ -26,7 +26,28 @@ enum class VolumeDirection { UP, DOWN, MUTE, UNMUTE }
 enum class MediaAction { PLAY, PAUSE, NEXT, PREVIOUS }
 
 class FastCommandParser {
-    fun parse(raw: String): FastCommand? {
+    /**
+     * Politeness and filler words the owner adds to speech that the exact matcher below cannot see.
+     *
+     * The command recognizer is a 20M-parameter streaming zipformer, so "play music" and
+     * "please play the music" are all equally likely transcripts of the same intent. Only the first
+     * matched the original `==` / [Regex.matchEntire] checks, so every polite or determiner-carrying
+     * phrasing fell through to the Brain and cost a full prompt prefill on this tablet. The device
+     * traces also show short one- and two-character results from the same model, which is the
+     * failure mode this tolerance is meant to absorb.
+     *
+     * These are only ever removed from the outside of a phrase, and only as whole words, so a
+     * command's own payload is never altered. "open the youtube app" still resolves its app name
+     * after the leading determiner, and no interior word is ever dropped: "play some music" loses
+     * only its leading "please". Nothing here makes a match fuzzier than an exact one, so the rule
+     * that a phrase must never bypass the Brain unless the fast executor can actually carry it out
+     * still holds. An unrecognised phrase returns null exactly as before.
+     */
+    fun parse(raw: String): FastCommand? =
+        parseCanonical(raw) ?: parseCanonical(stripPoliteness(raw))
+
+    /** The original matcher, unchanged, so a tolerant outer layer cannot alter what it accepts. */
+    private fun parseCanonical(raw: String): FastCommand? {
         val value = raw.lowercase().replace(Regex("\\s+"), " ").trim()
         if (value.startsWith("open ")) return app(value.removePrefix("open "))
         if (value.startsWith("launch ")) return app(value.removePrefix("launch "))
@@ -95,5 +116,60 @@ class FastCommandParser {
         }
     }
 
-    private fun app(name: String): FastCommand? = name.trim().takeIf { it.isNotEmpty() }?.let(FastCommand::OpenApp)
+    /**
+     * App names arrive with the determiner and noun the owner actually spoke: "open the youtube
+     * app", not "open youtube". Only whole-word leading determiners and a single trailing "app"
+     * are removed, so an app genuinely named with one of those words at its edge is not truncated.
+     */
+    private fun app(name: String): FastCommand? {
+        var value = name.trim()
+        for (determiner in listOf("the ", "a ", "an ", "my ")) {
+            if (value.length > determiner.length && value.startsWith(determiner)) {
+                value = value.removePrefix(determiner).trim()
+                break
+            }
+        }
+        if (value.length > 4 && value.endsWith(" app")) value = value.removeSuffix(" app").trim()
+        return value.takeIf { it.isNotEmpty() }?.let(FastCommand::OpenApp)
+    }
+
+    private companion object {
+        /**
+         * Leading politeness, permission, and determiner words, longest first so that "can you"
+         * is consumed before a bare "can". These are stripped only from the start, and only as
+         * whole words, and only while the remaining text still looks like a command.
+         */
+        val LEADING_FILLER = listOf(
+            "could you please", "can you please", "would you please", "will you please",
+            "can you", "could you", "would you", "will you",
+            "please could you", "please can you", "please would you",
+            "sage", "hey sage", "ok sage", "okay sage",
+            "please", "just", "now", "then", "and",
+            "the", "a", "an", "my"
+        )
+
+        /** Trailing fillers, matched the same way. */
+        val TRAILING_FILLER = listOf("please", "for me", "thanks", "thank you", "now", "okay", "ok")
+
+        private fun stripPoliteness(raw: String): String {
+            var value = raw.lowercase().replace(Regex("[^a-z0-9.\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+            var changed = true
+            while (changed) {
+                changed = false
+                for (filler in LEADING_FILLER) {
+                    if (value.length > filler.length && value.startsWith("$filler ")) {
+                        value = value.removePrefix(filler).trim()
+                        changed = true
+                    }
+                }
+                for (filler in TRAILING_FILLER) {
+                    if (value.length > filler.length && value.endsWith(" $filler")) {
+                        value = value.removeSuffix(filler).trim()
+                        changed = true
+                    }
+                }
+            }
+            return value
+        }
+    }
 }
