@@ -2,6 +2,7 @@ package com.pineapple.sageos2.localapi
 
 import android.os.Handler
 import android.os.Looper
+import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
 import org.json.JSONObject
@@ -51,6 +52,7 @@ class SageRuntimePromptGateway(
 
         val latch = CountDownLatch(1)
         val result = AtomicReference<SageLocalApiResult?>()
+        val submitted = AtomicBoolean(false)
         val listener = object : SageRuntimeListener {
             override fun onTextResponse(turnId: Long, text: String) {
                 if (result.compareAndSet(null, SageLocalApiResult.Success(text))) {
@@ -63,11 +65,26 @@ class SageRuntimePromptGateway(
                     latch.countDown()
                 }
             }
+
+            override fun onStateChanged(snapshot: com.pineapple.sageos2.core.SageRuntimeSnapshot) {
+                if (!submitted.get() || result.get() != null) return
+                val terminal = when (snapshot.state) {
+                    SageRuntimeState.IDLE_WAKE ->
+                        SageLocalApiResult.Success("Sage accepted that request.")
+                    SageRuntimeState.ERROR ->
+                        SageLocalApiResult.Failure(500, "Sage entered an error state while handling the request")
+                    else -> null
+                }
+                if (terminal != null && result.compareAndSet(null, terminal)) {
+                    latch.countDown()
+                }
+            }
         }
 
         host.addListener(listener)
         try {
             main.post {
+                submitted.set(true)
                 val accepted = runCatching { host.submitTextIfReady(clean) }
                     .getOrElse {
                         result.compareAndSet(
@@ -79,6 +96,7 @@ class SageRuntimePromptGateway(
                         )
                         false
                     }
+                if (!accepted) submitted.set(false)
                 if (!accepted && result.compareAndSet(
                         null,
                         SageLocalApiResult.Failure(
