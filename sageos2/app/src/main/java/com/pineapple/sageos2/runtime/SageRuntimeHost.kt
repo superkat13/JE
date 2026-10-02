@@ -23,6 +23,7 @@ import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
+import com.pineapple.sageos2.core.SageRuntimeState
 import com.pineapple.sageos2.core.SageTurnCoordinator
 import com.pineapple.sageos2.diagnostics.DiagnosticReportRenderer
 import com.pineapple.sageos2.diagnostics.DiagnosticReportSnapshot
@@ -32,6 +33,8 @@ import com.pineapple.sageos2.forge.ForgeClient
 import com.pineapple.sageos2.forge.ForgeStore
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.learning.SharedPreferencesLearnedPhraseStore
+import com.pineapple.sageos2.localapi.SageLocalApiServer
+import com.pineapple.sageos2.localapi.SageRuntimePromptGateway
 import com.pineapple.sageos2.memory.ConversationEntry
 import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
@@ -133,6 +136,12 @@ class SageRuntimeHost private constructor(context: Context) {
     private val workflows = WorkflowRegistryEngine(tasks, traces, chickenTonightScope)
     private val personalCommands = SagePersonalCommandEngine(memory, learnedPhrases, modes)
     private val selfCare = SelfCareManager(tasks)
+    private val localApi by lazy {
+        SageLocalApiServer(
+            gateway = SageRuntimePromptGateway(this),
+            logger = { detail -> traces.record("local_api", detail.take(800)) }
+        )
+    }
     private val selfCareHandler = Handler(Looper.getMainLooper())
     private val selfCareRunnable = object : Runnable {
         override fun run() {
@@ -185,6 +194,7 @@ class SageRuntimeHost private constructor(context: Context) {
             }
             SageSherpaRecognitionService.prewarm(appContext)
             runtime.start()
+            localApi.start()
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
         }
@@ -215,6 +225,26 @@ class SageRuntimeHost private constructor(context: Context) {
     }
 
     fun submitText(text: String) { start(); runtime.submit(SageEvent.TextSubmitted(text)) }
+
+    /**
+     * Submit a local-API text turn only when it can begin immediately.
+     *
+     * Keeping the readiness check and submit under the runtime monitor prevents a localhost
+     * request from being queued behind another owner turn and then receiving the wrong response.
+     */
+    fun submitTextIfReady(text: String): Boolean {
+        start()
+        synchronized(runtime) {
+            return when (runtime.snapshot().state) {
+                SageRuntimeState.IDLE_WAKE, SageRuntimeState.FOLLOW_UP_LISTENING -> {
+                    runtime.submit(SageEvent.TextSubmitted(text))
+                    true
+                }
+                else -> false
+            }
+        }
+    }
+
     fun pushToTalk() { start(); runtime.submit(SageEvent.PushToTalkRequested) }
     fun snapshot(): SageRuntimeSnapshot = runtime.snapshot()
     fun brainStatus() = brain.health()
