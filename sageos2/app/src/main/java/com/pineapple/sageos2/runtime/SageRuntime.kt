@@ -283,23 +283,52 @@ class SageRuntime(
             val verificationTarget = verificationTargetToolCountByTurn.remove(response.turnId)
 
             if (verificationTarget != null && toolCount == verificationTarget) {
-                val rounds = verificationRoundsByTurn[response.turnId] ?: 0
-                checkpointTurn(
-                    response.turnId,
-                    TaskState.COMPLETED,
-                    "Owner goal completed and verified after $toolCount tool call(s).",
-                    "",
-                    mapOf(
-                        "phase" to "completed",
-                        "verified" to "true",
-                        "toolCount" to toolCount.toString(),
-                        "verificationRounds" to rounds.toString()
+                when (val verification = GoalCompletionPolicy.parseVerificationResponse(response.text)) {
+                    null -> observer.onDiagnostic(
+                        "goal verification protocol missing: turn=${response.turnId} tools=$toolCount"
                     )
-                )
-                clearGoalRuntimeState(response.turnId)
-                startupByTurn.remove(response.turnId)
-                submit(SageEvent.ResponseReady(response.turnId, response.text, true))
-                return
+                    is GoalCompletionPolicy.VerificationResult -> when (verification.status) {
+                        GoalCompletionPolicy.VerificationStatus.VERIFIED -> {
+                            val rounds = verificationRoundsByTurn[response.turnId] ?: 0
+                            checkpointTurn(
+                                response.turnId,
+                                TaskState.COMPLETED,
+                                "Owner goal completed and explicitly verified after $toolCount tool call(s).",
+                                "",
+                                mapOf(
+                                    "phase" to "completed",
+                                    "verified" to "true",
+                                    "toolCount" to toolCount.toString(),
+                                    "verificationRounds" to rounds.toString()
+                                )
+                            )
+                            clearGoalRuntimeState(response.turnId)
+                            startupByTurn.remove(response.turnId)
+                            submit(SageEvent.ResponseReady(response.turnId, verification.ownerFacingText, true))
+                            return
+                        }
+                        GoalCompletionPolicy.VerificationStatus.UNVERIFIED -> {
+                            val rounds = verificationRoundsByTurn[response.turnId] ?: 0
+                            checkpointTurn(
+                                response.turnId,
+                                TaskState.WAITING,
+                                "Sage could not verify the final state with available evidence.",
+                                "Resume from the stored owner goal when new evidence or another safe verification path is available.",
+                                mapOf(
+                                    "phase" to "verification_waiting",
+                                    "verified" to "false",
+                                    "toolCount" to toolCount.toString(),
+                                    "verificationRounds" to rounds.toString()
+                                )
+                            )
+                            val unverified = GoalCompletionPolicy.unverifiedFinal(verification.ownerFacingText)
+                            clearGoalRuntimeState(response.turnId)
+                            startupByTurn.remove(response.turnId)
+                            submit(SageEvent.ResponseReady(response.turnId, unverified, false))
+                            return
+                        }
+                    }
+                }
             }
 
             if (toolCount > 0) {
