@@ -24,6 +24,7 @@ object BrainRequestPolicy {
             "install|uninstall|send|move|delete|rename|turn|set|change|check|inspect|run)\\b"
     )
     private val toolResultCue = Regex("(?i)^\\s*<?SAGE_TOOL_RESULT\\b")
+    private val goalVerificationCue = Regex("(?i)^\\s*<SAGE_GOAL_VERIFY>")
 
     data class Profile(
         val systemGuide: String,
@@ -52,8 +53,20 @@ object BrainRequestPolicy {
         }
 
         val isToolContinuation = toolResultCue.containsMatchIn(cleaned)
-        val wantsTaskContext = taskCue.containsMatchIn(cleaned) || isToolContinuation
-        val wantsToolContext = actionCue.containsMatchIn(cleaned) || isToolContinuation
+        val isGoalVerification = goalVerificationCue.containsMatchIn(cleaned)
+        val wantsTaskContext = taskCue.containsMatchIn(cleaned) || isToolContinuation || isGoalVerification
+        val wantsToolContext = actionCue.containsMatchIn(cleaned) || isToolContinuation || isGoalVerification
+
+        if (isGoalVerification) {
+            return Profile(
+                systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
+                combinedCharacterBudget = if (coldStart) 1_400 else 2_200,
+                outputTokens = 48,
+                deterministic = false,
+                includeTaskContext = true,
+                includeToolContext = true
+            )
+        }
 
         if (conversationalCue.containsMatchIn(cleaned) || wantsTaskContext) {
             return Profile(
