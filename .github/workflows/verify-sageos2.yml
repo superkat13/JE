@@ -114,7 +114,14 @@ jobs:
         run: |
           set -euo pipefail
           grep -F 'object BrainToolDirectiveParser' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolDirective.kt
-          grep -F 'maxToolCallsPerTurn: Int = 4' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'DEFAULT_MAX_TOOL_CALLS = 8' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'DEFAULT_MAX_VERIFICATION_ROUNDS = 3' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'verificationTargetToolCountByTurn' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'VERIFIED_MARKER = "SAGE_GOAL_VERIFIED"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'UNVERIFIED_MARKER = "SAGE_GOAL_UNVERIFIED"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'parseVerificationResponse' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'TaskState.WAITING' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'capabilityExecutor = Executors.newSingleThreadExecutor' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'Capability.FORGE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
           grep -F 'approved = false' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
