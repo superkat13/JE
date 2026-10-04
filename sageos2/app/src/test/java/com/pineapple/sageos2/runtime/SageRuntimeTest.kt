@@ -289,7 +289,7 @@ class SageRuntimeTest {
         assertEquals(listOf("chicken_tonight"), f.workflows.launched); assertTrue(f.speech.spoken.isEmpty())
     }
 
-    @Test fun exactBrainToolDirectiveExecutesCapabilityAndContinuesSameTurn() {
+    @Test fun exactBrainToolDirectiveExecutesCapabilityAndVerifiesBeforeReplying() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)
         f.runtime.start()
@@ -318,9 +318,47 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[1].twinContextText.orEmpty().contains("ACTIVE / RECOVERABLE TASKS"))
 
         f.brain.respond(1, "Root is alive and answering through the broker.")
+
+        waitUntil { f.brain.requests.size == 3 }
+        assertTrue(f.observer.textResponses.isEmpty())
+        assertTrue(f.brain.requests[2].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+        assertTrue(f.brain.requests[2].prompt.contains("owner_goal=check your root identity"))
+        assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("SAGE TOOL CONTRACT"))
+        assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("ACTIVE / RECOVERABLE TASKS"))
+
+        f.brain.respond(2, "Verified: root is alive and answering through the broker.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Root is alive and answering through the broker.", f.observer.textResponses.last().second)
+        assertEquals(
+            "Verified: root is alive and answering through the broker.",
+            f.observer.textResponses.last().second
+        )
         assertTrue(f.speech.spoken.isEmpty())
+    }
+
+    @Test fun verificationCanTakeCorrectiveActionAndThenReverify() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("check root health and make sure it really worked"))
+
+        f.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { capability.actions.size == 1 && f.brain.requests.size == 2 }
+
+        f.brain.respond(1, "The first health request completed.")
+        waitUntil { f.brain.requests.size == 3 }
+        assertTrue(f.brain.requests[2].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+
+        f.brain.respond(2, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { capability.actions.size == 2 && f.brain.requests.size == 4 }
+
+        f.brain.respond(3, "The verification health request also completed.")
+        waitUntil { f.brain.requests.size == 5 }
+        assertTrue(f.brain.requests[4].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+        assertTrue(f.observer.textResponses.isEmpty())
+
+        f.brain.respond(4, "Verified: root health is responding.")
+        waitUntil { f.observer.textResponses.isNotEmpty() }
+        assertEquals("Verified: root health is responding.", f.observer.textResponses.last().second)
     }
 
     @Test fun normalBrainProseMentioningToolNameNeverExecutesCapability() {
@@ -365,9 +403,9 @@ class SageRuntimeTest {
         assertTrue(f.observer.textResponses.single().second.contains("taking too long"))
     }
 
-    @Test fun fifthToolCallIsBlockedByPerTurnLimit() {
+    @Test fun fifthToolCallIsBlockedWhenConfiguredPerTurnLimitIsFour() {
         val capability = FakeCapabilityBroker(rootActive = true)
-        val f = Fixture(capability)
+        val f = Fixture(capability, maxToolCallsPerTurn = 4)
         f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("run a bounded diagnostic chain"))
 
         repeat(4) { index ->
@@ -382,6 +420,7 @@ class SageRuntimeTest {
 
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
+        maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
         scheduler: RuntimeScheduler = FakeScheduler(),
         brainResponseTimeoutMs: Long = 120_000L,
         coordinator: SageTurnCoordinator = SageTurnCoordinator(),
@@ -404,6 +443,7 @@ class SageRuntimeTest {
             conversationHistory = conversationHistory,
             ownerApps = ownerApps,
             capabilities = capability,
+            maxToolCallsPerTurn = maxToolCallsPerTurn,
             brainResponseTimeoutMs = brainResponseTimeoutMs
         )
     }
