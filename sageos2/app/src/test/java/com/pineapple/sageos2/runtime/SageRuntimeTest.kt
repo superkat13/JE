@@ -326,10 +326,10 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("SAGE TOOL CONTRACT"))
         assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("ACTIVE / RECOVERABLE TASKS"))
 
-        f.brain.respond(2, "Verified: root is alive and answering through the broker.")
+        f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nRoot is alive and answering through the broker.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
         assertEquals(
-            "Verified: root is alive and answering through the broker.",
+            "Root is alive and answering through the broker.",
             f.observer.textResponses.last().second
         )
         assertTrue(f.speech.spoken.isEmpty())
@@ -356,9 +356,33 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[4].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
         assertTrue(f.observer.textResponses.isEmpty())
 
-        f.brain.respond(4, "Verified: root health is responding.")
+        f.brain.respond(4, "${GoalCompletionPolicy.VERIFIED_MARKER}\nRoot health is responding.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Verified: root health is responding.", f.observer.textResponses.last().second)
+        assertEquals("Root health is responding.", f.observer.textResponses.last().second)
+    }
+
+    @Test fun unverifiedGoalDoesNotPretendSuccess() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("check root health and confirm the final state"))
+
+        f.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { capability.actions.size == 1 && f.brain.requests.size == 2 }
+
+        f.brain.respond(1, "The health command returned.")
+        waitUntil { f.brain.requests.size == 3 }
+
+        f.brain.respond(
+            2,
+            "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nThe available evidence does not prove the final state."
+        )
+        waitUntil { f.observer.textResponses.isNotEmpty() }
+
+        val text = f.observer.textResponses.last().second
+        assertTrue(text.contains("does not prove the final state"))
+        assertTrue(text.contains("couldn't verify the final state yet"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
     }
 
     @Test fun normalBrainProseMentioningToolNameNeverExecutesCapability() {
