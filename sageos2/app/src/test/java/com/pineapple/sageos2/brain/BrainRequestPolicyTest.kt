@@ -70,6 +70,29 @@ class BrainRequestPolicyTest {
         assertTrue(realToolResult.includeTaskContext)
     }
 
+
+    @Test fun goalVerificationAlwaysCarriesTaskAndToolContext() {
+        val prompt = """
+            <SAGE_GOAL_VERIFY>
+            owner_goal=fix the printer
+            completed_tool_calls=2
+            verification_round=1
+            </SAGE_GOAL_VERIFY>
+            Continue the same owner goal and verify the result.
+        """.trimIndent()
+
+        val warm = BrainRequestPolicy.forPrompt(prompt)
+        assertTrue(warm.includeToolContext)
+        assertTrue(warm.includeTaskContext)
+        assertTrue(warm.includeTwinContext)
+        assertFalse(warm.deterministic)
+        assertEquals(2_200, warm.combinedCharacterBudget)
+        assertEquals(48, warm.outputTokens)
+
+        val cold = BrainRequestPolicy.forPrompt(prompt, coldStart = true)
+        assertEquals(1_400, cold.combinedCharacterBudget)
+    }
+
     @Test fun literalComparisonAllowsOnlyWrappingQuotesAndWhitespaceDifferences() {
         assertTrue(BrainRequestPolicy.literalMatches("  \"Brain   online.\" ", "Brain online."))
         assertFalse(BrainRequestPolicy.literalMatches("Brain is online.", "Brain online."))
