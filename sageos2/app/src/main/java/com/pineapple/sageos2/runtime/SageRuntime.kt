@@ -85,6 +85,8 @@ class SageRuntime(
     private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
     private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
     private val ownerGoalByTurn = mutableMapOf<Long, String>()
+    private val recoveryReplayGuardByTurn = mutableMapOf<Long, RecoveryCompletionPolicy.ReplayGuard>()
+    private val recoveryReplayBlocksByTurn = mutableMapOf<Long, Int>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
     private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sage-capability").apply { isDaemon = true }
@@ -92,6 +94,25 @@ class SageRuntime(
 
     @Synchronized fun start() { submit(SageEvent.Start) }
     @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
+
+    fun resumeRecoveredTask(task: TaskCheckpoint) {
+        val metadata = task.metadata
+        val ownerPrompt = metadata["ownerPrompt"]?.trim().orEmpty()
+        if (ownerPrompt.isBlank()) {
+            observer.onDiagnostic("recovery skipped: ${task.taskId} has no stored owner prompt")
+            return
+        }
+        submit(SageEvent.RecoverTask(
+            recoveredTaskId = task.taskId,
+            ownerPrompt = ownerPrompt,
+            priorPhase = metadata["phase"],
+            lastAction = metadata["lastAction"],
+            lastActionSignature = metadata["lastActionSignature"],
+            lastActionSuccess = metadata["lastActionSuccess"],
+            completedToolCalls = metadata["toolCount"]?.toIntOrNull() ?: 0,
+            recoveryDepth = metadata["recoveryDepth"]?.toIntOrNull() ?: 1
+        ))
+    }
     @Synchronized fun submit(event: SageEvent) {
         process(coordinator.handle(event))
         observer.onStateChanged(coordinator.snapshot())
@@ -142,6 +163,32 @@ class SageRuntime(
                     startupByTurn[effect.turnId] = OwnerAppStartupSession(effect.prompt, app)
                 }
                 startBrain(effect.turnId, effect.prompt)
+            }
+            is SageEffect.QueryRecoveredBrain -> {
+                val restoredToolCount = when {
+                    effect.completedToolCalls > 0 -> effect.completedToolCalls.coerceAtMost(maxToolCallsPerTurn)
+                    !effect.lastAction.isNullOrBlank() -> 1
+                    else -> 0
+                }
+                ownerGoalByTurn[effect.turnId] = effect.ownerPrompt
+                if (restoredToolCount > 0) toolCallsByTurn[effect.turnId] = restoredToolCount
+                RecoveryCompletionPolicy.replayGuard(effect.lastAction, effect.lastActionSignature)?.let { guard ->
+                    recoveryReplayGuardByTurn[effect.turnId] = guard
+                }
+                checkpointRecoveredTurnStarted(effect.turnId, effect, restoredToolCount)
+                startBrain(
+                    effect.turnId,
+                    RecoveryCompletionPolicy.recoveryPrompt(
+                        recoveredTaskId = effect.recoveredTaskId,
+                        ownerGoal = effect.ownerPrompt,
+                        priorPhase = effect.priorPhase,
+                        lastAction = effect.lastAction,
+                        lastActionSignature = effect.lastActionSignature,
+                        lastActionSuccess = effect.lastActionSuccess,
+                        completedToolCalls = restoredToolCount,
+                        recoveryDepth = effect.recoveryDepth
+                    )
+                )
             }
             is SageEffect.LaunchOwnerWorkflow -> workflows.launch(effect.turnId, effect.workflowId)
             is SageEffect.StartEchoGuard -> {
