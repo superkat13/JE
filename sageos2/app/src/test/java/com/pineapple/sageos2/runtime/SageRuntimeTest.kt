@@ -203,6 +203,13 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[2].twinContextText.orEmpty().contains("device.tap_label label=Private browsing"))
         f.brain.respond(2, "Firefox is ready.")
         assertEquals(listOf("device.open_app", "device.tap_label"), capability.actions.map { it.name })
+        waitUntil { f.brain.requests.size == 4 }
+        assertTrue(f.observer.textResponses.isEmpty())
+        assertTrue(f.brain.requests[3].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+        assertTrue(f.brain.requests[3].twinContextText.orEmpty().contains("device.open_app app=Firefox"))
+        assertTrue(f.brain.requests[3].twinContextText.orEmpty().contains("device.tap_label label=Private browsing"))
+        f.brain.respond(3, "${GoalCompletionPolicy.VERIFIED_MARKER}\nFirefox is ready.")
+        waitUntil { f.observer.textResponses.isNotEmpty() }
         assertEquals("Firefox is ready.", f.observer.textResponses.last().second)
         f.runtime.submit(SageEvent.TextSubmitted("Tell me something"))
         assertFalse(f.brain.requests.last().twinContextText.orEmpty().contains("OWNER APP STARTUP"))
