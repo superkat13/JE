@@ -34,7 +34,7 @@ object RecoveryCompletionPolicy {
             appendLine(RECOVERY_MARKER)
             appendLine("recovered_task_id=${sanitize(recoveredTaskId)}")
             appendLine("owner_goal=$goal")
-            appendLine("prior_phase=${sanitize(priorPhase.orEmpty()).ifBlank { \"unknown\" }}")
+            appendLine("prior_phase=${sanitize(priorPhase.orEmpty()).ifBlank { "unknown" }}")
             appendLine("completed_tool_calls=$completedToolCalls")
             appendLine("recovery_depth=$recoveryDepth")
             lastAction?.takeIf { it.isNotBlank() }?.let { appendLine("last_action=${sanitize(it)}") }
@@ -93,16 +93,16 @@ object RecoveryCompletionPolicy {
     fun actionSignature(action: DeviceAction): String = buildString {
         append(action.name.trim())
         action.arguments.toSortedMap().forEach { (key, value) ->
-            append(\'|\').append(sanitize(key)).append(\'=\').append(sanitize(value))
+            append('|').append(sanitize(key)).append('=').append(sanitize(value))
         }
     }.take(4_000)
 
     fun isMutating(actionName: String): Boolean = actionName !in READ_ONLY_ACTIONS
 
     private fun sanitize(value: String): String = value
-        .replace("\\u0000", "")
-        .replace("\\r", " ")
-        .replace("\\n", " ")
+        .replace("\u0000", "")
+        .replace("\r", " ")
+        .replace("\n", " ")
         .trim()
 
     private val READ_ONLY_ACTIONS = setOf(
