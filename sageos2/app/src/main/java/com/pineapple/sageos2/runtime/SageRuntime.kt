@@ -444,6 +444,9 @@ class SageRuntime(
         // Clear the target so the next prose response must be verified again after that action.
         verificationTargetToolCountByTurn.remove(response.turnId)
 
+        val action = DeviceAction(directive.name, directive.arguments)
+        if (handleBlockedRecoveryReplay(response.turnId, action)) return
+
         val nextCount = (toolCallsByTurn[response.turnId] ?: 0) + 1
         if (nextCount > maxToolCallsPerTurn) {
             clearGoalRuntimeState(response.turnId)
@@ -454,7 +457,6 @@ class SageRuntime(
         }
         toolCallsByTurn[response.turnId] = nextCount
 
-        val action = DeviceAction(directive.name, directive.arguments)
         if (startupByTurn[response.turnId]?.supports(action) == false) {
             failStartup(response.turnId, "That saved startup needs an unsupported action (${action.name}). I stopped before running it.")
             return
@@ -464,7 +466,12 @@ class SageRuntime(
             TaskState.ACTIVE,
             "Executing structured capability ${action.name} (step $nextCount of $maxToolCallsPerTurn).",
             "Wait for the capability result, then continue reasoning without replaying this action.",
-            mapOf("phase" to "capability", "lastAction" to action.name, "toolCount" to nextCount.toString())
+            mapOf(
+                "phase" to "capability",
+                "lastAction" to action.name,
+                "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(action),
+                "toolCount" to nextCount.toString()
+            )
         )
         capabilityJob?.cancel(true)
         capabilityJob = capabilityExecutor.submit {
@@ -472,6 +479,64 @@ class SageRuntime(
                 .getOrElse { CapabilityResult(false, "Capability execution failed: ${it.message ?: it::class.java.simpleName}") }
             continueAfterCapability(response.turnId, action, result)
         }
+    }
+
+    private fun handleBlockedRecoveryReplay(turnId: Long, action: DeviceAction): Boolean {
+        val guard = recoveryReplayGuardByTurn[turnId] ?: return false
+        if (!RecoveryCompletionPolicy.shouldBlockReplay(guard, action)) return false
+
+        val blocks = (recoveryReplayBlocksByTurn[turnId] ?: 0) + 1
+        val toolCount = (toolCallsByTurn[turnId] ?: 1).coerceAtLeast(1)
+        val nextRound = (verificationRoundsByTurn[turnId] ?: 0) + 1
+        recoveryReplayBlocksByTurn[turnId] = blocks
+
+        if (blocks > RecoveryCompletionPolicy.MAX_REPLAY_BLOCKS || nextRound > maxVerificationRounds) {
+            checkpointTurn(
+                turnId,
+                TaskState.WAITING,
+                "Recovered goal stopped before blindly replaying ${action.name}.",
+                "Obtain fresh evidence before retrying the interrupted side effect.",
+                mapOf(
+                    "phase" to "recovery_waiting",
+                    "verified" to "false",
+                    "replayBlocked" to "true",
+                    "lastAction" to action.name
+                )
+            )
+            val text = GoalCompletionPolicy.unverifiedFinal(
+                "I recovered the task, but I could not safely prove whether ${action.name} already happened, so I did not repeat it."
+            )
+            clearGoalRuntimeState(turnId)
+            startupByTurn.remove(turnId)
+            submit(SageEvent.ResponseReady(turnId, text, false))
+            return true
+        }
+
+        verificationRoundsByTurn[turnId] = nextRound
+        verificationTargetToolCountByTurn[turnId] = toolCount
+        checkpointTurn(
+            turnId,
+            TaskState.ACTIVE,
+            "Blocked blind replay of interrupted side effect ${action.name}; verification required.",
+            "Verify the current real state with a different read-only tool before repeating the side effect.",
+            mapOf(
+                "phase" to "recovery_verification",
+                "verified" to "false",
+                "replayBlocked" to "true",
+                "verificationRound" to nextRound.toString()
+            )
+        )
+        observer.onDiagnostic("recovery replay blocked: turn=$turnId action=${action.name} round=$nextRound")
+        startBrain(
+            turnId,
+            RecoveryCompletionPolicy.replayBlockedVerificationPrompt(
+                ownerGoal = ownerGoalByTurn[turnId].orEmpty(),
+                blockedAction = action,
+                completedToolCalls = toolCount,
+                verificationRound = nextRound
+            )
+        )
+        return true
     }
 
     @Synchronized
