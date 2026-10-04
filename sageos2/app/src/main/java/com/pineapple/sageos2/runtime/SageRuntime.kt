@@ -51,7 +51,8 @@ class SageRuntime(
     private val taskContinuity: TaskContinuityStore? = null,
     private val twinContextRenderer: TwinContextRenderer = TwinContextRenderer(),
     private val echoGuardMs: Long = 450L,
-    private val maxToolCallsPerTurn: Int = 4,
+    private val maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
+    private val maxVerificationRounds: Int = GoalCompletionPolicy.DEFAULT_MAX_VERIFICATION_ROUNDS,
     private val brainResponseTimeoutMs: Long = 120_000L,
     private val brainLoadTimeoutMs: Long = 30_000L,
     private val brainFirstTokenTimeoutMs: Long = 60_000L,
@@ -60,6 +61,7 @@ class SageRuntime(
     init {
         require(echoGuardMs >= 0L)
         require(maxToolCallsPerTurn in 1..16)
+        require(maxVerificationRounds in 1..6)
         require(brainResponseTimeoutMs > 0L)
         require(brainLoadTimeoutMs > 0L)
         require(brainFirstTokenTimeoutMs > 0L)
@@ -80,6 +82,9 @@ class SageRuntime(
     private var brainTimeoutHandle: ScheduledHandle? = null
     private var brainStageTimeoutHandle: ScheduledHandle? = null
     private val toolCallsByTurn = mutableMapOf<Long, Int>()
+    private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
+    private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
+    private val ownerGoalByTurn = mutableMapOf<Long, String>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
     private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
         Thread(runnable, "sage-capability").apply { isDaemon = true }
@@ -129,6 +134,7 @@ class SageRuntime(
                 }
             }
             is SageEffect.QueryDeepBrain -> {
+                ownerGoalByTurn.putIfAbsent(effect.turnId, effect.prompt)
                 checkpointTurnStarted(effect.turnId, effect.prompt)
                 val open = FastCommandParser().parse(effect.prompt) as? FastCommand.OpenApp
                 val app = open?.let { OwnerAppResolver().resolve(it.appName, ownerApps.snapshot()) }
@@ -155,7 +161,7 @@ class SageRuntime(
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
                 capabilityJob?.cancel(true); capabilityJob = null
                 clearBrainTimeouts()
-                toolCallsByTurn.remove(effect.turnId)
+                clearGoalRuntimeState(effect.turnId)
                 startupByTurn.remove(effect.turnId)
                 checkpointTurn(effect.turnId, TaskState.CANCELLED, "Turn cancelled before completion.", "")
                 echoGuardHandle?.cancel(); echoGuardHandle = null
@@ -273,16 +279,98 @@ class SageRuntime(
         }
 
         if (directive == null) {
-            toolCallsByTurn.remove(response.turnId)
+            val toolCount = toolCallsByTurn[response.turnId] ?: 0
+            val verificationTarget = verificationTargetToolCountByTurn.remove(response.turnId)
+
+            if (verificationTarget != null && toolCount == verificationTarget) {
+                val rounds = verificationRoundsByTurn[response.turnId] ?: 0
+                checkpointTurn(
+                    response.turnId,
+                    TaskState.COMPLETED,
+                    "Owner goal completed and verified after $toolCount tool call(s).",
+                    "",
+                    mapOf(
+                        "phase" to "completed",
+                        "verified" to "true",
+                        "toolCount" to toolCount.toString(),
+                        "verificationRounds" to rounds.toString()
+                    )
+                )
+                clearGoalRuntimeState(response.turnId)
+                startupByTurn.remove(response.turnId)
+                submit(SageEvent.ResponseReady(response.turnId, response.text, true))
+                return
+            }
+
+            if (toolCount > 0) {
+                val nextRound = (verificationRoundsByTurn[response.turnId] ?: 0) + 1
+                if (nextRound <= maxVerificationRounds) {
+                    verificationRoundsByTurn[response.turnId] = nextRound
+                    verificationTargetToolCountByTurn[response.turnId] = toolCount
+                    val ownerGoal = ownerGoalByTurn[response.turnId]
+                        ?: taskContinuity?.get(runtimeTaskId(response.turnId))?.metadata?.get("ownerPrompt")
+                        ?: "Complete owner turn ${response.turnId}"
+                    checkpointTurn(
+                        response.turnId,
+                        TaskState.ACTIVE,
+                        "Tool-backed work finished a reasoning pass; verifying the owner's requested result.",
+                        "Verify the result with direct available evidence. Correct it if needed before replying.",
+                        mapOf(
+                            "phase" to "verification",
+                            "verified" to "false",
+                            "toolCount" to toolCount.toString(),
+                            "verificationRound" to nextRound.toString()
+                        )
+                    )
+                    observer.onDiagnostic(
+                        "goal verification: turn=${response.turnId} round=$nextRound tools=$toolCount"
+                    )
+                    startBrain(
+                        response.turnId,
+                        GoalCompletionPolicy.verificationPrompt(ownerGoal, toolCount, nextRound)
+                    )
+                    return
+                }
+
+                val unverified = GoalCompletionPolicy.unverifiedFinal(response.text)
+                checkpointTurn(
+                    response.turnId,
+                    TaskState.WAITING,
+                    "Sage completed the available actions but exhausted the bounded verification loop.",
+                    "Resume verification from the stored owner goal; do not replay completed side effects.",
+                    mapOf(
+                        "phase" to "verification_waiting",
+                        "verified" to "false",
+                        "toolCount" to toolCount.toString(),
+                        "verificationRounds" to (verificationRoundsByTurn[response.turnId] ?: 0).toString()
+                    )
+                )
+                clearGoalRuntimeState(response.turnId)
+                startupByTurn.remove(response.turnId)
+                submit(SageEvent.ResponseReady(response.turnId, unverified, false))
+                return
+            }
+
+            checkpointTurn(
+                response.turnId,
+                TaskState.COMPLETED,
+                "Owner turn completed without external actions.",
+                "",
+                mapOf("phase" to "completed", "verified" to "not_required")
+            )
+            clearGoalRuntimeState(response.turnId)
             startupByTurn.remove(response.turnId)
-            checkpointTurn(response.turnId, TaskState.COMPLETED, "Owner turn completed successfully.", "")
             submit(SageEvent.ResponseReady(response.turnId, response.text, true))
             return
         }
 
+        // A verification pass that emits another tool has discovered unfinished work.
+        // Clear the target so the next prose response must be verified again after that action.
+        verificationTargetToolCountByTurn.remove(response.turnId)
+
         val nextCount = (toolCallsByTurn[response.turnId] ?: 0) + 1
         if (nextCount > maxToolCallsPerTurn) {
-            toolCallsByTurn.remove(response.turnId)
+            clearGoalRuntimeState(response.turnId)
             startupByTurn.remove(response.turnId)
             checkpointTurn(response.turnId, TaskState.FAILED, "Structured tool call ceiling reached.", "Continue from the stored owner prompt with a shorter tool plan.")
             submit(SageEvent.BrainFailed(response.turnId, "structured tool call limit exceeded"))
@@ -318,6 +406,7 @@ class SageRuntime(
             onSuccess = { response -> handleBrainResponse(response) },
             onFailure = {
                 startupByTurn.remove(turnId)
+                clearGoalRuntimeState(turnId)
                 checkpointTurn(turnId, TaskState.FAILED, "Brain failed before the turn completed.", "Review diagnostics and retry from the stored owner prompt.")
                 submit(SageEvent.BrainFailed(turnId, it.message ?: it::class.simpleName.orEmpty()))
             }
@@ -351,7 +440,7 @@ class SageRuntime(
 
     private fun failStartup(turnId: Long, detail: String) {
         startupByTurn.remove(turnId)
-        toolCallsByTurn.remove(turnId)
+        clearGoalRuntimeState(turnId)
         clearBrainTimeouts()
         checkpointTurn(turnId, TaskState.FAILED, detail, "Review saved startup steps before retrying; do not replay completed actions.")
         observer.onDiagnostic("owner app startup stopped: turn=$turnId detail=$detail")
@@ -368,14 +457,15 @@ class SageRuntime(
                 taskId = runtimeTaskId(turnId),
                 title = cleanPrompt.take(80).ifBlank { "Sage owner turn $turnId" },
                 state = TaskState.ACTIVE,
-                summary = "Deep Brain reasoning started for this owner turn.",
-                nextStep = "Generate a final response or one exact structured capability call.",
+                summary = "Owner goal accepted; Sage owns the turn until the result is finished or explicitly left waiting.",
+                nextStep = "Reason, act when needed, then verify any tool-backed result before replying.",
                 updatedAtMs = System.currentTimeMillis(),
                 metadata = mapOf(
                     "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
                     "turnId" to turnId.toString(),
                     "ownerPrompt" to cleanPrompt,
-                    "phase" to "brain"
+                    "phase" to "goal_reasoning",
+                    "verified" to "false"
                 )
             )
         )
@@ -403,6 +493,13 @@ class SageRuntime(
     }
 
     private fun runtimeTaskId(turnId: Long) = "runtime:turn:$turnId"
+
+    private fun clearGoalRuntimeState(turnId: Long) {
+        toolCallsByTurn.remove(turnId)
+        verificationTargetToolCountByTurn.remove(turnId)
+        verificationRoundsByTurn.remove(turnId)
+        ownerGoalByTurn.remove(turnId)
+    }
 
     @Synchronized
     private fun onBrainProgress(progress: BrainProgress) {
@@ -457,6 +554,7 @@ class SageRuntime(
         if (snapshot.activeTurnId != turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
         if (brainJob?.turnId == turnId) brainJob?.cancel()
         startupByTurn.remove(turnId)
+        clearGoalRuntimeState(turnId)
         brainJob = null
         clearBrainTimeouts()
         checkpointTurn(
