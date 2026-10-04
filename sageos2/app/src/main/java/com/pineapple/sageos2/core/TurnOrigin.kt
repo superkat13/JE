@@ -4,5 +4,6 @@ enum class TurnOrigin {
     NONE,
     VOICE_WAKE,
     PUSH_TO_TALK,
-    TEXT
+    TEXT,
+    RECOVERY
 }

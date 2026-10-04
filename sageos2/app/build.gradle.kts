@@ -11,7 +11,7 @@ android {
         applicationId = "com.pineapple.sagecommander.stable"
         minSdk = 26
         targetSdk = 35
-        versionCode = 215
+        versionCode = 216
         versionName = "2.0.0"
 
         testInstrumentationRunner = "android.app.Instrumentation"

@@ -47,8 +47,36 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
         return recovered
     }
 
+    fun autoResumeCandidate(): TaskCheckpoint? = store.active()
+        .asSequence()
+        .filter { it.state == TaskState.WAITING }
+        .filter { it.metadata["kind"] == RUNTIME_TURN_KIND }
+        .filter { it.metadata["recovered"] == "true" }
+        .filter { it.metadata["autoResumeAttempted"] != "true" }
+        .filter { (it.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) < MAX_AUTO_RESUME_DEPTH }
+        .maxByOrNull { it.updatedAtMs }
+
+    fun markAutoResumeAttempted(
+        taskId: String,
+        nowMs: Long = System.currentTimeMillis()
+    ): TaskCheckpoint? {
+        val task = store.get(taskId) ?: return null
+        val depth = (task.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) + 1
+        val updated = task.copy(
+            updatedAtMs = nowMs,
+            metadata = task.metadata + mapOf(
+                "autoResumeAttempted" to "true",
+                "autoResumeAttemptedAtMs" to nowMs.toString(),
+                "recoveryDepth" to depth.toString()
+            )
+        )
+        store.upsert(updated)
+        return updated
+    }
+
     companion object {
         const val RUNTIME_TURN_KIND = "runtime_turn"
+        const val MAX_AUTO_RESUME_DEPTH = 3
     }
 }
 

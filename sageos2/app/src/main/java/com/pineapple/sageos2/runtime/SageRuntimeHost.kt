@@ -20,6 +20,7 @@ import com.pineapple.sageos2.capability.CapabilityStatus
 import com.pineapple.sageos2.continuity.OwnerContinuityImporter
 import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
+import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -179,6 +180,7 @@ class SageRuntimeHost private constructor(context: Context) {
             traces.record("legacy_migration", legacyMigrationReport.summary())
             traces.record("legacy_personality_migration", legacyPersonalityMigrationReport.summary())
             val recovered = recovery.recoverInterruptedRuntimeTasks()
+            val autoResumeCandidate = recovery.autoResumeCandidate()
             val states = capabilities.snapshot().states
             traces.record(
                 "host",
@@ -195,9 +197,27 @@ class SageRuntimeHost private constructor(context: Context) {
             SageSherpaRecognitionService.prewarm(appContext)
             runtime.start()
             localApi.start()
+            scheduleRecoveredResume(autoResumeCandidate)
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
         }
+    }
+
+    private fun scheduleRecoveredResume(candidate: TaskCheckpoint?) {
+        if (candidate == null) return
+        selfCareHandler.postDelayed({
+            if (!started.get()) return@postDelayed
+            if (runtime.snapshot().state != SageRuntimeState.IDLE_WAKE) {
+                traces.record("recovery", "auto-resume deferred because Sage is busy; task=${candidate.taskId}")
+                return@postDelayed
+            }
+            val marked = recovery.markAutoResumeAttempted(candidate.taskId) ?: return@postDelayed
+            traces.record(
+                "recovery",
+                "auto-resuming task=${marked.taskId} depth=${marked.metadata["recoveryDepth"] ?: "1"}"
+            )
+            runtime.resumeRecoveredTask(marked)
+        }, RECOVERY_RESUME_DELAY_MS)
     }
 
     private fun runSelfCareCheck() {
@@ -381,6 +401,7 @@ class SageRuntimeHost private constructor(context: Context) {
     fun removeListener(listener: SageRuntimeListener) { listeners -= listener }
 
     companion object {
+        private const val RECOVERY_RESUME_DELAY_MS = 1_200L
         private const val SELF_CARE_INITIAL_DELAY_MS = 8_000L
         private const val SELF_CARE_INTERVAL_MS = 5L * 60L * 1000L
         @Volatile private var instance: SageRuntimeHost? = null

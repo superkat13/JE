@@ -45,6 +45,7 @@ class SageTurnCoordinator(
         is SageEvent.TranscriptFinal -> onTranscript(event)
         is SageEvent.RecognitionFailed -> onRecognitionFailed(event)
         is SageEvent.TextSubmitted -> onText(event)
+        is SageEvent.RecoverTask -> onRecoverTask(event)
         is SageEvent.ResponseReady -> onResponse(event)
         is SageEvent.BrainFailed -> onBrainFailed(event)
         is SageEvent.SpeechFinished -> onSpeechFinished(event)
@@ -134,6 +135,34 @@ class SageTurnCoordinator(
         )
     }
 
+    private fun onRecoverTask(event: SageEvent.RecoverTask): List<SageEffect> {
+        if (state != SageRuntimeState.IDLE_WAKE) {
+            return listOf(SageEffect.RecordDiagnostic("recovery deferred while $state"))
+        }
+        val ownerPrompt = event.ownerPrompt.trim()
+        if (ownerPrompt.isEmpty()) {
+            return listOf(SageEffect.RecordDiagnostic("recovery skipped: stored owner prompt is empty"))
+        }
+        activeTurnId = nextTurnId++
+        activeTurnOrigin = TurnOrigin.RECOVERY
+        state = SageRuntimeState.THINKING_DEEP
+        return listOf(
+            changeListening(SageListeningMode.WAKE_ONLY, activeTurnId),
+            SageEffect.RecordDiagnostic("resuming recovered task ${event.recoveredTaskId}"),
+            SageEffect.QueryRecoveredBrain(
+                turnId = activeTurnId,
+                recoveredTaskId = event.recoveredTaskId,
+                ownerPrompt = ownerPrompt,
+                priorPhase = event.priorPhase,
+                lastAction = event.lastAction,
+                lastActionSignature = event.lastActionSignature,
+                lastActionSuccess = event.lastActionSuccess,
+                completedToolCalls = event.completedToolCalls.coerceAtLeast(0),
+                recoveryDepth = event.recoveryDepth.coerceAtLeast(1)
+            )
+        )
+    }
+
     private fun onText(event: SageEvent.TextSubmitted): List<SageEffect> {
         val cleaned = event.text.trim()
         if (cleaned.isEmpty()) return listOf(SageEffect.TypedInputRejected("empty input"))
@@ -196,7 +225,7 @@ class SageTurnCoordinator(
 
     private fun onResponse(event: SageEvent.ResponseReady): List<SageEffect> {
         if (event.turnId != activeTurnId || (state != SageRuntimeState.THINKING_FAST && state != SageRuntimeState.THINKING_DEEP)) return stale("response")
-        if (activeTurnOrigin == TurnOrigin.TEXT) {
+        if (activeTurnOrigin == TurnOrigin.TEXT || activeTurnOrigin == TurnOrigin.RECOVERY) {
             val effects = mutableListOf<SageEffect>(SageEffect.EmitTextResponse(activeTurnId, event.text))
             effects += finishTextTurn()
             return effects
@@ -208,7 +237,7 @@ class SageTurnCoordinator(
 
     private fun onBrainFailed(event: SageEvent.BrainFailed): List<SageEffect> {
         if (event.turnId != activeTurnId) return stale("brain failure")
-        if (activeTurnOrigin == TurnOrigin.TEXT) {
+        if (activeTurnOrigin == TurnOrigin.TEXT || activeTurnOrigin == TurnOrigin.RECOVERY) {
             val effects = mutableListOf<SageEffect>(
                 SageEffect.RecordDiagnostic("brain failed: ${event.reason}"),
                 SageEffect.EmitTextResponse(activeTurnId, SageResponseCopy.forBrainFailure(event.reason))

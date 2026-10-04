@@ -58,6 +58,36 @@ class SageTurnCoordinatorTest {
         assertEquals(TurnOrigin.NONE, c.snapshot().activeTurnOrigin)
     }
 
+    @Test fun recoveredTaskStartsDedicatedSilentDeepTurnAndReturnsText() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+
+        val effects = c.handle(
+            SageEvent.RecoverTask(
+                recoveredTaskId = "runtime:turn:9",
+                ownerPrompt = "finish the printer repair",
+                priorPhase = "capability",
+                lastAction = "root.restart_service",
+                lastActionSignature = "root.restart_service|service=print",
+                lastActionSuccess = null,
+                completedToolCalls = 1,
+                recoveryDepth = 1
+            )
+        )
+        val turn = c.snapshot().activeTurnId
+
+        assertEquals(TurnOrigin.RECOVERY, c.snapshot().activeTurnOrigin)
+        assertEquals(SageRuntimeState.THINKING_DEEP, c.snapshot().state)
+        assertTrue(effects.any { it is SageEffect.QueryRecoveredBrain && it.turnId == turn })
+        assertTrue(effects.none { it is SageEffect.RecordOwnerInput })
+        assertTrue(effects.none { it is SageEffect.Speak })
+
+        val response = c.handle(SageEvent.ResponseReady(turn, "Recovered and verified.", false))
+        assertTrue(response.contains(SageEffect.EmitTextResponse(turn, "Recovered and verified.")))
+        assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+        assertEquals(TurnOrigin.NONE, c.snapshot().activeTurnOrigin)
+    }
+
     @Test fun customWakeProfileCanActivateModeWithoutCreatingAnotherSage() {
         val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
         val effects = c.handle(SageEvent.WakeDetected(c.snapshot().recognizerGeneration, "sage_glitch", "red_queen", "Yes"))
