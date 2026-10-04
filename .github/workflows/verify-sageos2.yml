@@ -122,6 +122,13 @@ jobs:
           grep -F 'UNVERIFIED_MARKER = "SAGE_GOAL_UNVERIFIED"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
           grep -F 'parseVerificationResponse' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'TaskState.WAITING' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'RECOVERY_MARKER = "<SAGE_GOAL_RECOVER>"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/RecoveryCompletionPolicy.kt
+          grep -F 'MAX_AUTO_RESUME_DEPTH = 3' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'recoveryReplayGuardByTurn' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'handleBlockedRecoveryReplay' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'scheduleRecoveredResume' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'is SageEvent.RecoverTask -> onRecoverTask(event)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageTurnCoordinator.kt
+          grep -F 'recoveredMutatingActionIsNotBlindlyReplayed' sageos2/app/src/test/java/com/pineapple/sageos2/runtime/SageRuntimeTest.kt
           grep -F 'capabilityExecutor = Executors.newSingleThreadExecutor' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
           grep -F 'Capability.FORGE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
           grep -F 'approved = false' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
