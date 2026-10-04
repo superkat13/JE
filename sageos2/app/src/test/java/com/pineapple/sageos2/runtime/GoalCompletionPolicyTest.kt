@@ -32,6 +32,24 @@ class GoalCompletionPolicyTest {
         assertTrue(prompt.contains("[goal-verify-end]"))
     }
 
+    @Test fun verificationResponseRequiresExplicitStatusMarker() {
+        val verified = GoalCompletionPolicy.parseVerificationResponse(
+            "${GoalCompletionPolicy.VERIFIED_MARKER}\nEverything checks out."
+        )
+        assertTrue(verified != null)
+        assertTrue(verified?.status == GoalCompletionPolicy.VerificationStatus.VERIFIED)
+        assertTrue(verified?.ownerFacingText == "Everything checks out.")
+
+        val unverified = GoalCompletionPolicy.parseVerificationResponse(
+            "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nNo direct evidence is available."
+        )
+        assertTrue(unverified != null)
+        assertTrue(unverified?.status == GoalCompletionPolicy.VerificationStatus.UNVERIFIED)
+        assertTrue(unverified?.ownerFacingText == "No direct evidence is available.")
+
+        assertTrue(GoalCompletionPolicy.parseVerificationResponse("Looks good to me.") == null)
+    }
+
     @Test fun unverifiedFinalNeverPretendsUnknownWorkWasVerified() {
         val response = GoalCompletionPolicy.unverifiedFinal("I restarted the service.")
         assertTrue(response.startsWith("I restarted the service."))
