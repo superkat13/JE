@@ -11,6 +11,11 @@ object GoalCompletionPolicy {
     const val DEFAULT_MAX_TOOL_CALLS = 8
     const val DEFAULT_MAX_VERIFICATION_ROUNDS = 3
     const val VERIFY_MARKER = "<SAGE_GOAL_VERIFY>"
+    const val VERIFIED_MARKER = "SAGE_GOAL_VERIFIED"
+    const val UNVERIFIED_MARKER = "SAGE_GOAL_UNVERIFIED"
+
+    enum class VerificationStatus { VERIFIED, UNVERIFIED }
+    data class VerificationResult(val status: VerificationStatus, val ownerFacingText: String)
 
     fun verificationPrompt(
         ownerGoal: String,
@@ -34,8 +39,26 @@ object GoalCompletionPolicy {
             appendLine("Verify the requested result using direct available evidence when possible.")
             appendLine("If another listed tool is needed to verify or correct the result, emit exactly one SAGE_TOOL block.")
             appendLine("Do not repeat an action that already succeeded unless verification itself requires it.")
-            append("If the goal is achieved, answer the owner with the finished result. If it cannot be verified, say exactly what remains unknown.")
+            appendLine("If the goal is verified, reply with $VERIFIED_MARKER on the first line and the owner-facing finished result after it.")
+            append("If the goal cannot be verified with available evidence, reply with $UNVERIFIED_MARKER on the first line and exactly what remains unknown after it.")
         }.trim()
+    }
+
+    fun parseVerificationResponse(response: String): VerificationResult? {
+        val normalized = response.replace("\u0000", "").trim()
+        val firstLine = normalized.lineSequence().firstOrNull()?.trim() ?: return null
+        val body = normalized.substringAfter('\n', "").trim()
+        return when (firstLine) {
+            VERIFIED_MARKER -> VerificationResult(
+                VerificationStatus.VERIFIED,
+                body.ifBlank { "Verified complete." }
+            )
+            UNVERIFIED_MARKER -> VerificationResult(
+                VerificationStatus.UNVERIFIED,
+                body.ifBlank { "The final state could not be verified." }
+            )
+            else -> null
+        }
     }
 
     fun unverifiedFinal(proposedAnswer: String): String {
