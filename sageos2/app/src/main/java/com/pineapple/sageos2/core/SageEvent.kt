@@ -15,6 +15,16 @@ sealed interface SageEvent {
     data class TranscriptFinal(val turnId: Long, val recognizerGeneration: Long, val text: String) : SageEvent
     data class RecognitionFailed(val turnId: Long, val recognizerGeneration: Long, val code: Int) : SageEvent
     data class TextSubmitted(val text: String) : SageEvent
+    data class RecoverTask(
+        val recoveredTaskId: String,
+        val ownerPrompt: String,
+        val priorPhase: String?,
+        val lastAction: String?,
+        val lastActionSignature: String?,
+        val lastActionSuccess: String?,
+        val completedToolCalls: Int,
+        val recoveryDepth: Int
+    ) : SageEvent
     data class ResponseReady(val turnId: Long, val text: String, val allowFollowUp: Boolean = true) : SageEvent
     data class BrainFailed(val turnId: Long, val reason: String) : SageEvent
     data class SpeechFinished(val turnId: Long) : SageEvent
