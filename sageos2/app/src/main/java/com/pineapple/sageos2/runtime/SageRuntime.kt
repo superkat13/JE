@@ -271,7 +271,7 @@ class SageRuntime(
         val directive = try {
             BrainToolDirectiveParser.parse(response.text)
         } catch (t: Throwable) {
-            toolCallsByTurn.remove(response.turnId)
+            clearGoalRuntimeState(response.turnId)
             startupByTurn.remove(response.turnId)
             checkpointTurn(response.turnId, TaskState.FAILED, "Brain produced an invalid structured tool response.", "Retry reasoning from the stored owner prompt.")
             submit(SageEvent.BrainFailed(response.turnId, "invalid structured tool response: ${t.message ?: t::class.simpleName}"))
