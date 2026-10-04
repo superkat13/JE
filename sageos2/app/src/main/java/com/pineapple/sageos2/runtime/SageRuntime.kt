@@ -562,6 +562,10 @@ class SageRuntime(
             return
         }
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
+        if (result.success && !RecoveryCompletionPolicy.isMutating(action.name)) {
+            recoveryReplayGuardByTurn.remove(turnId)
+            recoveryReplayBlocksByTurn.remove(turnId)
+        }
         startupByTurn[turnId]?.let { startup ->
             if (!result.success) {
                 failStartup(turnId, "I stopped the saved app startup: ${result.detail}")
@@ -574,7 +578,13 @@ class SageRuntime(
             TaskState.ACTIVE,
             "Capability ${action.name} returned success=${result.success}.",
             "Continue reasoning from the capability result; do not replay the completed capability call.",
-            mapOf("phase" to "brain_after_capability", "lastAction" to action.name, "lastActionSuccess" to result.success.toString())
+            mapOf(
+                "phase" to "brain_after_capability",
+                "lastAction" to action.name,
+                "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(action),
+                "lastActionSuccess" to result.success.toString(),
+                "toolCount" to (toolCallsByTurn[turnId] ?: 0).toString()
+            )
         )
         startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
     }
@@ -586,6 +596,42 @@ class SageRuntime(
         checkpointTurn(turnId, TaskState.FAILED, detail, "Review saved startup steps before retrying; do not replay completed actions.")
         observer.onDiagnostic("owner app startup stopped: turn=$turnId detail=$detail")
         submit(SageEvent.ResponseReady(turnId, detail, false))
+    }
+
+    private fun checkpointRecoveredTurnStarted(
+        turnId: Long,
+        effect: SageEffect.QueryRecoveredBrain,
+        restoredToolCount: Int
+    ) {
+        val store = taskContinuity ?: return
+        val id = runtimeTaskId(turnId)
+        TaskRecoveryManager(store).supersedeOlderRuntimeTasks(id)
+        val cleanPrompt = effect.ownerPrompt.replace(Regex("\\s+"), " ").trim().take(4_000)
+        val metadata = mutableMapOf(
+            "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+            "turnId" to turnId.toString(),
+            "ownerPrompt" to cleanPrompt,
+            "phase" to "goal_recovery",
+            "verified" to "false",
+            "recoveredFrom" to effect.recoveredTaskId,
+            "recoveryDepth" to effect.recoveryDepth.toString(),
+            "toolCount" to restoredToolCount.toString()
+        )
+        effect.priorPhase?.takeIf { it.isNotBlank() }?.let { metadata["recoveryPriorPhase"] = it }
+        effect.lastAction?.takeIf { it.isNotBlank() }?.let { metadata["lastAction"] = it }
+        effect.lastActionSignature?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSignature"] = it }
+        effect.lastActionSuccess?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSuccess"] = it }
+        store.upsert(
+            TaskCheckpoint(
+                taskId = id,
+                title = cleanPrompt.take(80).ifBlank { "Recovered Sage owner turn $turnId" },
+                state = TaskState.ACTIVE,
+                summary = "Recovered interrupted owner goal; Sage is verifying current state before continuing.",
+                nextStep = "Resume from current evidence without blindly replaying the prior side effect.",
+                updatedAtMs = System.currentTimeMillis(),
+                metadata = metadata
+            )
+        )
     }
 
     private fun checkpointTurnStarted(turnId: Long, ownerPrompt: String) {
@@ -640,6 +686,8 @@ class SageRuntime(
         verificationTargetToolCountByTurn.remove(turnId)
         verificationRoundsByTurn.remove(turnId)
         ownerGoalByTurn.remove(turnId)
+        recoveryReplayGuardByTurn.remove(turnId)
+        recoveryReplayBlocksByTurn.remove(turnId)
     }
 
     @Synchronized
@@ -715,7 +763,7 @@ class SageRuntime(
         val input = when (effect.origin) {
             TurnOrigin.TEXT -> ConversationInput.TEXT
             TurnOrigin.VOICE_WAKE, TurnOrigin.PUSH_TO_TALK -> ConversationInput.VOICE
-            TurnOrigin.NONE -> ConversationInput.SYSTEM
+            TurnOrigin.NONE, TurnOrigin.RECOVERY -> ConversationInput.SYSTEM
         }
         store.record(
             ConversationEntry(
