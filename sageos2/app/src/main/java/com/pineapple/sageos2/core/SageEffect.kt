@@ -9,6 +9,17 @@ sealed interface SageEffect {
     data class EmitTextResponse(val turnId: Long, val text: String) : SageEffect
     data class ExecuteFast(val turnId: Long, val command: String) : SageEffect
     data class QueryDeepBrain(val turnId: Long, val prompt: String) : SageEffect
+    data class QueryRecoveredBrain(
+        val turnId: Long,
+        val recoveredTaskId: String,
+        val ownerPrompt: String,
+        val priorPhase: String?,
+        val lastAction: String?,
+        val lastActionSignature: String?,
+        val lastActionSuccess: String?,
+        val completedToolCalls: Int,
+        val recoveryDepth: Int
+    ) : SageEffect
     data class LaunchOwnerWorkflow(val turnId: Long, val workflowId: String) : SageEffect
     data class StartEchoGuard(val turnId: Long) : SageEffect
     data class ScheduleFollowUpExpiry(val turnId: Long, val delayMs: Long) : SageEffect
