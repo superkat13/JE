@@ -69,6 +69,58 @@ class TaskRecoveryManagerTest {
     }
 
     @Test
+    fun newestRecoveredWaitingTaskIsTheOnlyAutomaticResumeCandidate() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:1", "Older", TaskState.WAITING, "recovered", "resume", 10,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "older goal"
+            )
+        ))
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:2", "Newer", TaskState.WAITING, "recovered", "resume", 20,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "newer goal"
+            )
+        ))
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:3", "Normal waiting", TaskState.WAITING, "blocked", "ask owner", 30,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "ownerPrompt" to "do not auto resume me"
+            )
+        ))
+
+        val manager = TaskRecoveryManager(store)
+        assertEquals("runtime:turn:2", manager.autoResumeCandidate()?.taskId)
+
+        val marked = manager.markAutoResumeAttempted("runtime:turn:2", nowMs = 50)!!
+        assertEquals("true", marked.metadata["autoResumeAttempted"])
+        assertEquals("1", marked.metadata["recoveryDepth"])
+        assertEquals("runtime:turn:1", manager.autoResumeCandidate()?.taskId)
+    }
+
+    @Test
+    fun automaticResumeStopsAtRecoveryDepthLimit() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:8", "Looping task", TaskState.WAITING, "recovered", "resume", 40,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "finish this",
+                "recoveryDepth" to TaskRecoveryManager.MAX_AUTO_RESUME_DEPTH.toString()
+            )
+        ))
+
+        assertEquals(null, TaskRecoveryManager(store).autoResumeCandidate())
+    }
+
+    @Test
     fun contextMakesRecoveredWorkVisibleButNotAnExecutionTrigger() {
         val text = TaskContinuityContextRenderer.render(
             listOf(
