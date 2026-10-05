@@ -24,6 +24,7 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerResult;
 import com.k2fsa.sherpa.onnx.OnlineStream;
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
 import com.pineapple.sageos2.speech.CommandEndpointPolicy;
+import com.pineapple.sageos2.speech.CommandSpeechFailurePolicy;
 import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership;
 
 import java.io.File;
@@ -169,24 +170,30 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         if (!turns.requestStop(callback)) return;
         stopRequested.set(true);
         stopMicrophone();
+        awaitRetiredWorker();
     }
 
     @Override protected void onCancel(Callback callback) {
         if (!turns.retire(callback)) return;
         stopRequested.set(true);
         stopMicrophone();
+        awaitRetiredWorker();
     }
 
     @Override public void onDestroy() {
         turns.clear();
         stopRequested.set(true);
         stopMicrophone();
+        awaitRetiredWorker();
         super.onDestroy();
     }
 
     private void runRecognition(Callback callback) {
         OnlineRecognizer recognizer = null;
         OnlineStream stream = null;
+        // Held outside the try so the finally block can release exactly this turn's microphone
+        // rather than whatever the field holds by then. See releaseMicrophone.
+        AudioRecord audio = null;
         boolean endpointReached = false;
         boolean speechBegan = false;
         try {
@@ -197,7 +204,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                 throw new IllegalStateException("verified sherpa engine/model became unavailable");
             recognizer = obtainRecognizer(this);
             stream = recognizer.createStream("");
-            AudioRecord audio = createMicrophone();
+            audio = createMicrophone();
             microphone = audio;
             if (audio.getState() != AudioRecord.STATE_INITIALIZED)
                 throw new IllegalStateException("AudioRecord not initialized");
@@ -331,7 +338,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
                     speechBeganAtMs, peakAbs, runningMeanAbs);
             if (!tailText.isEmpty()) finalText = tailText;
             if (finalText.isEmpty()) finalText = lastText;
-            stopMicrophone();
+            releaseMicrophone(audio);
             if (!turns.owns(callback)) return;
             CommandEndpointPolicy.WindowEnd outcome = CommandEndpointPolicy.onWindowEnd(
                     stopRequested.get(), totalSamples, peakAbs, finalText);
@@ -357,7 +364,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         } catch (Throwable problem) {
             fail(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, problem);
         } finally {
-            stopMicrophone();
+            releaseMicrophone(audio);
             if (stream != null) try { stream.release(); } catch (Throwable ignored) { }
             turns.retire(callback);
             // Only the worker that still owns the field may clear it. A turn that retires while a
@@ -492,20 +499,68 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         }
     }
 
+    /**
+     * Releases the live microphone unconditionally, for callers acting on behalf of the live turn.
+     */
     private void stopMicrophone() {
         AudioRecord value = microphone;
         microphone = null;
+        releaseAudioRecord(value);
+    }
+
+    /**
+     * Releases the microphone only when [expected] is still the live one.
+     *
+     * A retiring worker tears itself down after the turn is already gone. By then the field can hold
+     * a successor's AudioRecord, and releasing that would strand the successor with a dead capture
+     * while it still believes it is recording: no samples, no transcript, no error. Comparing before
+     * releasing keeps a retiring worker from touching its successor's microphone. The identity check
+     * in the worker's finally block does the same for the worker field; SherpaWakeWordEngine already
+     * guards both this way.
+     */
+    private void releaseMicrophone(AudioRecord expected) {
+        AudioRecord value = microphone;
+        if (value != expected) return;
+        microphone = null;
+        releaseAudioRecord(value);
+    }
+
+    private static void releaseAudioRecord(AudioRecord value) {
         if (value == null) return;
         try { if (value.getRecordingState() == AudioRecord.RECORDSTATE_RECORDING) value.stop(); }
         catch (RuntimeException ignored) { }
         try { value.release(); } catch (RuntimeException ignored) { }
     }
 
+    /**
+     * Ends the turn's teardown before returning, so the owner's next request is not refused while
+     * this worker is still clearing the AudioRecord it was asked to release.
+     *
+     * Releasing the microphone unblocks the pending read with an error; the worker then unwinds,
+     * retires the turn and nulls its own thread reference. onStartListening rejects any request
+     * while [worker] is alive, so without this wait an immediate retry races the teardown the caller
+     * just requested and is answered ERROR_RECOGNIZER_BUSY. Bounded, because the worker is not
+     * guaranteed to return promptly, and the next request is still rejected once the bound expires.
+     */
+    private void awaitRetiredWorker() {
+        Thread retiring = worker;
+        if (retiring == null || retiring == Thread.currentThread()) return;
+        try { retiring.join(CommandSpeechFailurePolicy.STOP_JOIN_MS); }
+        catch (InterruptedException interrupted) { Thread.currentThread().interrupt(); }
+        catch (RuntimeException ignored) { }
+    }
+
     private void fail(Callback callback, int code, Throwable problem) {
         String reason = safeProblem(problem);
-        markUnhealthy(reason);
+        boolean ownsTurn = turns.owns(callback);
+        // A cancelled turn's read fails by construction, because cancelling released its microphone.
+        // Marking that unhealthy opened a cooldown that rejected the caller's next request even
+        // though the backend was fine, so the cooldown is limited to the live, uncancelled turn.
+        if (CommandSpeechFailurePolicy.shouldMarkUnhealthy(ownsTurn, stopRequested.get())) {
+            markUnhealthy(reason);
+        }
         Log.w(TAG, "Local command recognition failed; Android fallback may be used: " + reason);
-        if (turns.owns(callback)) emitError(callback, code);
+        if (CommandSpeechFailurePolicy.shouldEmitError(ownsTurn)) emitError(callback, code);
     }
 
     private static void markUnhealthy(String reason) {

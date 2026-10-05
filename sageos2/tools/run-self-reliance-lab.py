@@ -22,6 +22,7 @@ CLASSES = [
     'speech.CommandRecognizerPolicyTest',
     'speech.CommandSpeechRegressionLabTest',
     'speech.CommandSpeechTurnOwnershipTest',
+    'speech.CommandSpeechFailurePolicyTest',
     'speech.RecognitionSessionGateTest',
     'speech.WakeRecoveryBudgetTest',
     'speech.WakeReconnectPolicyTest',
