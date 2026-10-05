@@ -168,11 +168,55 @@ class TaskRecoveryManagerTest {
         val store = MemoryTaskStore()
         store.upsert(TaskCheckpoint("runtime:turn:11", "Recovered", TaskState.WAITING,
             "recovered", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
-                "recovered" to "true")))
+                "recovered" to "true", "ownerPrompt" to "finish this")))
         val manager = TaskRecoveryManager(store)
         val first = manager.markAutoResumeAttempted("runtime:turn:11", 100)!!
         assertEquals(null, manager.markAutoResumeAttempted(first.taskId, 200))
         assertEquals(first, store.get(first.taskId))
+    }
+
+    @Test fun unusablePromptCannotHideAValidRecoveryCandidateOrConsumeAnAttempt() {
+        listOf<String?>(null, "", "  \n  ").forEach { prompt ->
+            val store = MemoryTaskStore()
+            val metadata = mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "recovered" to "true")
+            val valid = TaskCheckpoint("valid", "Valid", TaskState.WAITING, "recovered", "resume", 10,
+                metadata + ("ownerPrompt" to "finish my research"))
+            val invalid = valid.copy(taskId = "invalid", updatedAtMs = 20,
+                metadata = metadata + if (prompt == null) emptyMap() else mapOf("ownerPrompt" to prompt))
+            store.upsert(valid)
+            store.upsert(invalid)
+            val manager = TaskRecoveryManager(store)
+            assertEquals(valid.taskId, manager.autoResumeCandidate()?.taskId)
+            assertEquals(null, manager.markAutoResumeAttempted(invalid.taskId, 30))
+            assertEquals(invalid, store.get(invalid.taskId))
+        }
+    }
+
+    @Test fun promptRemovedAfterSelectionDoesNotConsumeAnAttempt() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("selected", "Selected", TaskState.WAITING, "recovered", "resume", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "recovered" to "true", "ownerPrompt" to "finish"))
+        store.upsert(task)
+        val manager = TaskRecoveryManager(store)
+        assertEquals(task, manager.autoResumeCandidate())
+        val changed = task.copy(metadata = task.metadata - "ownerPrompt")
+        store.upsert(changed)
+        assertEquals(null, manager.markAutoResumeAttempted(task.taskId, 20))
+        assertEquals(changed, store.get(task.taskId))
+    }
+
+    @Test fun recoveringSeveralTasksPreservesTheirPreRestartRecency() {
+        val store = MemoryTaskStore()
+        val old = TaskCheckpoint("old", "Old", TaskState.ACTIVE, "working", "continue", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "ownerPrompt" to "older goal"))
+        val recent = old.copy(taskId = "recent", updatedAtMs = 20,
+            metadata = old.metadata + ("ownerPrompt" to "newer goal"))
+        store.upsert(old)
+        store.upsert(recent)
+        val manager = TaskRecoveryManager(store)
+        manager.recoverInterruptedRuntimeTasks(100)
+        assertEquals("recovery timestamps must not erase original ordering", recent.taskId,
+            manager.autoResumeCandidate()?.taskId)
     }
 
     private class MemoryTaskStore : TaskContinuityStore {

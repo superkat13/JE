@@ -685,6 +685,142 @@ class SageRuntimeTest {
         f.runtime.stop()
     }
 
+    @Test fun newRuntimeDoesNotOverwriteCompletedTaskWithReusedTurnNumber() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        first.brain.respond(0, "Gravity attracts masses.")
+        val completed = store.recent(10).single()
+        assertEquals(TaskState.COMPLETED, completed.state)
+        first.runtime.stop()
+
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        assertEquals("turn counters restart; persisted IDs must not", first.brain.requests[0].turnId,
+            second.brain.requests[0].turnId)
+        assertEquals("previous outcome must survive a runtime restart", completed, store.get(completed.taskId))
+        assertEquals(2, store.recent(10).size)
+        second.runtime.stop()
+    }
+
+    @Test fun recoveryAcrossRuntimeRestartPreservesItsSourceCheckpoint() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("research the interrupted goal"))
+        val original = store.active().single()
+        // Simulate abrupt loss of the runtime: its active checkpoint survives unchanged.
+        val recovery = TaskRecoveryManager(store)
+        recovery.recoverInterruptedRuntimeTasks()
+        val candidate = recovery.markAutoResumeAttempted(original.taskId)!!
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.resumeRecoveredTask(candidate)
+
+        val resumed = store.active().single()
+        assertTrue("recovery must create a distinct checkpoint", resumed.taskId != original.taskId)
+        assertEquals(original.taskId, resumed.metadata["recoveredFrom"])
+        val source = store.get(original.taskId)!!
+        assertEquals("true", source.metadata["autoResumeAttempted"])
+        assertEquals(resumed.taskId, source.metadata["supersededBy"])
+        assertEquals(original.metadata["ownerPrompt"], source.metadata["ownerPrompt"])
+        first.runtime.stop()
+        second.runtime.stop()
+    }
+
+    @Test fun lateBrainResponseCannotRemoveNextTurnsWatchdog() {
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        f.brain.respond(0, "Gravity attracts masses.")
+        f.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        f.brain.respond(0, "Late duplicate")
+        assertTrue(scheduler.activeDelays().contains(120_000L))
+        scheduler.runLast(120_000L)
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
+    @Test fun duplicateBrainResultCannotCompleteANewerAttemptInSameTurn() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        f.runtime.start()
+        f.runtime.resumeRecoveredTask(interruptedPrintTask())
+        f.brain.respond(0, "Checking the recovered result.")
+        assertEquals(2, f.brain.requests.size)
+        f.brain.respond(0, "${GoalCompletionPolicy.VERIFIED_MARKER}\nStale completion")
+        assertTrue(f.observer.textResponses.isEmpty())
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        f.brain.respond(1, "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nNeed current evidence.")
+        assertEquals(1, f.observer.textResponses.size)
+        assertTrue(store.active().any { it.state == TaskState.WAITING })
+    }
+
+    @Test fun timedOutBrainResponseCannotOverwriteFailedCheckpoint() {
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        scheduler.runLast(120_000L)
+        val failed = store.recent(10).single()
+        assertEquals(TaskState.FAILED, failed.state)
+        f.brain.respond(0, "Late success")
+        assertEquals(failed, store.get(failed.taskId))
+        assertEquals(1, f.observer.textResponses.size)
+    }
+
+    @Test fun stuckCapabilityReleasesConversationWithoutClaimingOrReplayingItsOutcome() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val returned = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val broker = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE))
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                entered.countDown()
+                // Model a broker that cannot be stopped by Thread.interrupt().
+                while (release.count > 0) {
+                    try { release.await() } catch (_: InterruptedException) { }
+                }
+                returned.countDown()
+                return CapabilityResult(true, "late completion")
+            }
+        }
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(capability = broker, scheduler = scheduler, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("restart the print service"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue("tool execution must retain a runtime deadline", scheduler.activeDelays().contains(310_000L))
+            scheduler.runLast(310_000L)
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+            val waiting = store.active().single()
+            assertEquals(TaskState.WAITING, waiting.state)
+            assertEquals("unknown", waiting.metadata["lastActionSuccess"])
+            assertTrue(RecoveryCompletionPolicy.replayGuards(waiting.metadata).isNotEmpty())
+            assertTrue(f.observer.textResponses.single().second.contains("could not confirm"))
+            f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+            release.countDown()
+            assertTrue(returned.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            waitUntil { f.observer.diagnostics.any { it.contains("stale capability result ignored") } }
+            assertEquals(2, f.brain.requests.size)
+            assertTrue(scheduler.activeDelays().contains(120_000L))
+            assertEquals(1, calls.get())
+            f.brain.respond(1, "Gravity attracts masses.")
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        } finally {
+            release.countDown()
+            f.runtime.stop()
+        }
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
