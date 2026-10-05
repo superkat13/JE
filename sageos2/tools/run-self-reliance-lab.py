@@ -20,6 +20,8 @@ CLASSES = [
     'core.SageTurnCoordinatorTest',
     'speech.CommandEndpointPolicyTest',
     'speech.CommandRecognizerPolicyTest',
+    'speech.CommandSpeechRegressionLabTest',
+    'speech.CommandSpeechTurnOwnershipTest',
     'speech.RecognitionSessionGateTest',
     'speech.WakeRecoveryBudgetTest',
     'speech.WakeReconnectPolicyTest',
