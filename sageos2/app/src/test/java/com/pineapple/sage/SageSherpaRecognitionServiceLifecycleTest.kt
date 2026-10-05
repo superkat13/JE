@@ -392,7 +392,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
 
     private fun recognizerLock(): Any =
         SageSherpaRecognitionService::class.java.getDeclaredField("RECOGNIZER_LOCK")
-            .apply { isAccessible = true }.get(null)
+            .apply { isAccessible = true }.get(null) as Any
 
     /**
      * A thread that has released its capture and is still running, which is what a slow teardown
