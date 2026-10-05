@@ -7,6 +7,7 @@ import android.media.MediaRecorder
 import android.os.Looper
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
+import com.pineapple.sageos2.speech.CommandSpeechFailurePolicy
 import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership
 import java.lang.reflect.Field
 import java.lang.reflect.Method
@@ -15,7 +16,7 @@ import java.io.RandomAccessFile
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
-import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.TimeUnit.MILLISECONDS
 import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.After
 import org.junit.Assert.*
@@ -219,7 +220,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
         val live = Thread { takeMicrophone(detachedAudioRecord()); holding.countDown(); Thread.sleep(1_000) }
         field("worker").set(service, live)
         live.start()
-        assertTrue("the worker should have taken the microphone", holding.await(5, SECONDS))
+        assertTrue("the worker should have taken the microphone", holding.await(THREAD_JOIN_MS, MILLISECONDS))
 
         val refused = newCallback(service)
         onStartListening(refused)
@@ -229,7 +230,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
             errors.toList()
         )
         assertNull("a refused request must not begin a turn", turns().live)
-        live.join(5_000)
+        live.join(THREAD_JOIN_MS)
 
         // The same request once the capture is gone, with a retiring thread still running. This is
         // the half that decides which rule admission follows.
@@ -255,14 +256,14 @@ class SageSherpaRecognitionServiceLifecycleTest {
     @Test fun promptTeardownAdmitsTheNextTurn() {
         fakeSherpaReady()
 
-        val audio = detachedAudioRecord()
-        val finished = CountDownLatch(1)
-        Thread {
+        val retiring = Thread {
+            val audio = detachedAudioRecord()
             takeMicrophone(audio)
             releaseMicrophone(audio)
-            finished.countDown()
-        }.start()
-        assertTrue(finished.await(5, SECONDS))
+        }
+        retiring.start()
+        retiring.join(THREAD_JOIN_MS)
+        assertFalse("the retiring worker should have finished", retiring.isAlive)
 
         val successor = newCallback(service)
         synchronized(recognizerLock()) {
@@ -285,9 +286,12 @@ class SageSherpaRecognitionServiceLifecycleTest {
     @Test fun aDeadOwnerDoesNotWedgeAdmission() {
         fakeSherpaReady()
 
-        val dead = CountDownLatch(1)
-        Thread { takeMicrophone(detachedAudioRecord()); dead.countDown() }.start()
-        assertTrue(dead.await(5, SECONDS))
+        // Joined rather than latched: the marker clears on the owner's death, so the thread has to
+        // have actually exited before admission is asked. A latch alone only proves it was about to.
+        val owner = Thread { takeMicrophone(detachedAudioRecord()) }
+        owner.start()
+        owner.join(THREAD_JOIN_MS)
+        assertFalse("the owner should have exited", owner.isAlive)
 
         val successor = newCallback(service)
         synchronized(recognizerLock()) {
@@ -412,19 +416,23 @@ class SageSherpaRecognitionServiceLifecycleTest {
         // Installed as the worker, so an admission rule that reads thread liveness sees a live one.
         field("worker").set(service, thread)
         thread.start()
-        assertTrue("the worker should have released its capture", released.await(5, SECONDS))
+        assertTrue("the worker should have released its capture", released.await(THREAD_JOIN_MS, MILLISECONDS))
         finish.countDownAfter(thread)
         return thread
     }
 
     /**
      * Lets a retiring test thread finish on a timer, so it outlives the assertion without leaking.
+     *
+     * The delay is deliberately longer than STOP_JOIN_MS, because a slow teardown is the case under
+     * test: the retiring thread is still alive well after the service would have given up waiting
+     * for it, which is exactly when the previous rule refused the next request.
      */
     private fun CountDownLatch.countDownAfter(thread: Thread) {
         Thread {
-            Thread.sleep(1_000)
+            Thread.sleep(SLOW_TEARDOWN_MS)
             countDown()
-            thread.join(5_000)
+            thread.join(THREAD_JOIN_MS)
         }.apply { isDaemon = true }.start()
     }
 
@@ -438,7 +446,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
     private fun stopWorker() {
         shadowOf(Looper.getMainLooper()).idle()
         val worker = field("worker").get(service) as Thread?
-        worker?.join(5_000)
+        worker?.join(THREAD_JOIN_MS)
     }
 
     /**
@@ -551,6 +559,19 @@ class SageSherpaRecognitionServiceLifecycleTest {
      * where the test is about the marker rather than about releasing the live microphone.
      */
     private fun detachedAudioRecord(): AudioRecord = newAudioRecord()
+
+    /**
+     * How long to wait for a test thread to reach a state. Generous, because it only ever bounds a
+     * failure; the joins are what the assertions depend on.
+     */
+    private val THREAD_JOIN_MS = 5_000L
+
+    /**
+     * How long the slow-teardown worker stays alive after giving the microphone back. Comfortably
+     * past STOP_JOIN_MS, so the assertion is made while the main thread would already have stopped
+     * waiting for that thread.
+     */
+    private val SLOW_TEARDOWN_MS = 4L * CommandSpeechFailurePolicy.STOP_JOIN_MS
 
     /** Robolectric supplies the AudioRecord object; no host device is opened. */
     private fun newAudioRecord(): AudioRecord =
