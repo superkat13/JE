@@ -730,6 +730,48 @@ class SageRuntimeTest {
         second.runtime.stop()
     }
 
+    @Test fun lateBrainResponseCannotRemoveNextTurnsWatchdog() {
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        f.brain.respond(0, "Gravity attracts masses.")
+        f.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        f.brain.respond(0, "Late duplicate")
+        assertTrue(scheduler.activeDelays().contains(120_000L))
+        scheduler.runLast(120_000L)
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
+    @Test fun duplicateBrainResultCannotCompleteANewerAttemptInSameTurn() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        f.runtime.start()
+        f.runtime.resumeRecoveredTask(interruptedPrintTask())
+        f.brain.respond(0, "Checking the recovered result.")
+        assertEquals(2, f.brain.requests.size)
+        f.brain.respond(0, "${GoalCompletionPolicy.VERIFIED_MARKER}\nStale completion")
+        assertTrue(f.observer.textResponses.isEmpty())
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        f.brain.respond(1, "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nNeed current evidence.")
+        assertEquals(1, f.observer.textResponses.size)
+        assertTrue(store.active().any { it.state == TaskState.WAITING })
+    }
+
+    @Test fun timedOutBrainResponseCannotOverwriteFailedCheckpoint() {
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        scheduler.runLast(120_000L)
+        val failed = store.recent(10).single()
+        assertEquals(TaskState.FAILED, failed.state)
+        f.brain.respond(0, "Late success")
+        assertEquals(failed, store.get(failed.taskId))
+        assertEquals(1, f.observer.textResponses.size)
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
