@@ -685,6 +685,51 @@ class SageRuntimeTest {
         f.runtime.stop()
     }
 
+    @Test fun newRuntimeDoesNotOverwriteCompletedTaskWithReusedTurnNumber() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        first.brain.respond(0, "Gravity attracts masses.")
+        val completed = store.recent(10).single()
+        assertEquals(TaskState.COMPLETED, completed.state)
+        first.runtime.stop()
+
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        assertEquals("turn counters restart; persisted IDs must not", first.brain.requests[0].turnId,
+            second.brain.requests[0].turnId)
+        assertEquals("previous outcome must survive a runtime restart", completed, store.get(completed.taskId))
+        assertEquals(2, store.recent(10).size)
+        second.runtime.stop()
+    }
+
+    @Test fun recoveryAcrossRuntimeRestartPreservesItsSourceCheckpoint() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("research the interrupted goal"))
+        val original = store.active().single()
+        // Simulate abrupt loss of the runtime: its active checkpoint survives unchanged.
+        val recovery = TaskRecoveryManager(store)
+        recovery.recoverInterruptedRuntimeTasks()
+        val candidate = recovery.markAutoResumeAttempted(original.taskId)!!
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.resumeRecoveredTask(candidate)
+
+        val resumed = store.active().single()
+        assertTrue("recovery must create a distinct checkpoint", resumed.taskId != original.taskId)
+        assertEquals(original.taskId, resumed.metadata["recoveredFrom"])
+        val source = store.get(original.taskId)!!
+        assertEquals("true", source.metadata["autoResumeAttempted"])
+        assertEquals(resumed.taskId, source.metadata["supersededBy"])
+        assertEquals(original.metadata["ownerPrompt"], source.metadata["ownerPrompt"])
+        first.runtime.stop()
+        second.runtime.stop()
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,

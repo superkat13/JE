@@ -74,6 +74,9 @@ class SageRuntime(
         })
     }
 
+    // Coordinator turn numbers restart at 1 with each runtime. Persist a session namespace so
+    // new turns and recovered turns cannot overwrite checkpoints from a previous runtime.
+    private val taskSessionId = UUID.randomUUID().toString()
     private var brainJob: BrainJob? = null
     private var fastActionJob: FastActionJob? = null
     private var capabilityJob: Future<*>? = null
@@ -694,7 +697,7 @@ class SageRuntime(
         )
     }
 
-    private fun runtimeTaskId(turnId: Long) = "runtime:turn:$turnId"
+    private fun runtimeTaskId(turnId: Long) = "runtime:session:$taskSessionId:turn:$turnId"
 
     private fun clearGoalRuntimeState(turnId: Long) {
         toolCallsByTurn.remove(turnId)
