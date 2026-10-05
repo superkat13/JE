@@ -74,9 +74,15 @@ class SageRuntime(
         })
     }
 
+    // Coordinator turn numbers restart at 1 with each runtime. Persist a session namespace so
+    // new turns and recovered turns cannot overwrite checkpoints from a previous runtime.
+    private val taskSessionId = UUID.randomUUID().toString()
     private var brainJob: BrainJob? = null
+    private var brainAttemptGeneration = 0L
     private var fastActionJob: FastActionJob? = null
     private var capabilityJob: Future<*>? = null
+    private var capabilityAttemptGeneration = 0L
+    private var capabilityTimeoutHandle: ScheduledHandle? = null
     private var echoGuardHandle: ScheduledHandle? = null
     private var followUpExpiryHandle: ScheduledHandle? = null
     private var brainTimeoutHandle: ScheduledHandle? = null
@@ -85,7 +91,7 @@ class SageRuntime(
     private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
     private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
     private val ownerGoalByTurn = mutableMapOf<Long, String>()
-    private val recoveryReplayGuardByTurn = mutableMapOf<Long, RecoveryCompletionPolicy.ReplayGuard>()
+    private val recoveryReplayGuardByTurn = mutableMapOf<Long, MutableList<RecoveryCompletionPolicy.ReplayGuard>>()
     private val recoveryReplayBlocksByTurn = mutableMapOf<Long, Int>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
     private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -110,7 +116,10 @@ class SageRuntime(
             lastActionSignature = metadata["lastActionSignature"],
             lastActionSuccess = metadata["lastActionSuccess"],
             completedToolCalls = metadata["toolCount"]?.toIntOrNull() ?: 0,
-            recoveryDepth = metadata["recoveryDepth"]?.toIntOrNull() ?: 1
+            recoveryDepth = metadata["recoveryDepth"]?.toIntOrNull() ?: 1,
+            replayGuardMetadata = RecoveryCompletionPolicy.replayGuardMetadata(
+                RecoveryCompletionPolicy.replayGuards(metadata)
+            )
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
@@ -156,6 +165,8 @@ class SageRuntime(
             }
             is SageEffect.QueryDeepBrain -> {
                 ownerGoalByTurn.putIfAbsent(effect.turnId, effect.prompt)
+                // Record mutations now so a later read-only call cannot hide them from recovery.
+                recoveryReplayGuardByTurn[effect.turnId] = mutableListOf()
                 checkpointTurnStarted(effect.turnId, effect.prompt)
                 val open = FastCommandParser().parse(effect.prompt) as? FastCommand.OpenApp
                 val app = open?.let { OwnerAppResolver().resolve(it.appName, ownerApps.snapshot()) }
@@ -172,9 +183,10 @@ class SageRuntime(
                 }
                 ownerGoalByTurn[effect.turnId] = effect.ownerPrompt
                 if (restoredToolCount > 0) toolCallsByTurn[effect.turnId] = restoredToolCount
-                RecoveryCompletionPolicy.replayGuard(effect.lastAction, effect.lastActionSignature)?.let { guard ->
-                    recoveryReplayGuardByTurn[effect.turnId] = guard
-                }
+                val guards = RecoveryCompletionPolicy.replayGuards(effect.replayGuardMetadata).toMutableList()
+                RecoveryCompletionPolicy.replayGuard(effect.lastAction, effect.lastActionSignature)
+                    ?.takeIf { it !in guards }?.let { guards.add(it) }
+                recoveryReplayGuardByTurn[effect.turnId] = guards
                 checkpointRecoveredTurnStarted(effect.turnId, effect, restoredToolCount)
                 startBrain(
                     effect.turnId,
@@ -204,9 +216,10 @@ class SageRuntime(
             is SageEffect.RecordDiagnostic -> observer.onDiagnostic(effect.message)
             is SageEffect.IgnoreStaleCallback -> observer.onDiagnostic("stale callback: ${effect.reason}")
             is SageEffect.CancelTurn -> {
+                brainAttemptGeneration++
                 if (brainJob?.turnId == effect.turnId) { brainJob?.cancel(); brainJob = null }
                 if (fastActionJob?.turnId == effect.turnId) { fastActionJob?.cancel(); fastActionJob = null }
-                capabilityJob?.cancel(true); capabilityJob = null
+                retireCapabilityAttempt()
                 clearBrainTimeouts()
                 clearGoalRuntimeState(effect.turnId)
                 startupByTurn.remove(effect.turnId)
@@ -218,6 +231,7 @@ class SageRuntime(
     }
 
     private fun startBrain(turnId: Long, prompt: String) {
+        val attempt = ++brainAttemptGeneration
         brainJob?.cancel()
         val preRequestHealth = runCatching { brain.health() }.getOrNull()
         val coldStart = preRequestHealth?.lastLatencyMs == null
@@ -273,7 +287,7 @@ class SageRuntime(
             return
         }
         clearBrainTimeouts()
-        brainTimeoutHandle = scheduler.schedule(brainResponseTimeoutMs) { onBrainTimeout(turnId) }
+        brainTimeoutHandle = scheduler.schedule(brainResponseTimeoutMs) { onBrainTimeout(turnId, attempt = attempt) }
         val startedJob = brain.start(BrainRequest(
             turnId = turnId,
             prompt = prompt,
@@ -286,10 +300,10 @@ class SageRuntime(
             maxOutputTokens = requestProfile.outputTokens,
             deterministic = requestProfile.deterministic,
             expectedLiteral = requestProfile.expectedLiteral,
-            onProgress = ::onBrainProgress
-        )) { result -> finishBrainAttempt(turnId, result) }
+            onProgress = { onBrainProgress(it, attempt) }
+        )) { result -> finishBrainAttempt(turnId, attempt, result) }
         val snapshot = coordinator.snapshot()
-        if (snapshot.activeTurnId == turnId && snapshot.state == SageRuntimeState.THINKING_DEEP) {
+        if (brainAttemptGeneration == attempt && snapshot.activeTurnId == turnId && snapshot.state == SageRuntimeState.THINKING_DEEP) {
             brainJob = startedJob
         } else {
             startedJob.cancel()
@@ -461,6 +475,11 @@ class SageRuntime(
             failStartup(response.turnId, "That saved startup needs an unsupported action (${action.name}). I stopped before running it.")
             return
         }
+        // Persist protection before execution: another crash can leave this action's result unknown.
+        recoveryReplayGuardByTurn[response.turnId]?.let { guards ->
+            RecoveryCompletionPolicy.replayGuard(action.name, RecoveryCompletionPolicy.actionSignature(action))
+                ?.takeIf { it !in guards }?.let { guards.add(it) }
+        }
         checkpointTurn(
             response.turnId,
             TaskState.ACTIVE,
@@ -470,20 +489,28 @@ class SageRuntime(
                 "phase" to "capability",
                 "lastAction" to action.name,
                 "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(action),
+                "lastActionSuccess" to "unknown",
                 "toolCount" to nextCount.toString()
             )
         )
-        capabilityJob?.cancel(true)
+        retireCapabilityAttempt()
+        val attempt = capabilityAttemptGeneration
+        // Outer deadline exceeds the root broker's maximum 305-second response deadline.
+        // Covers queueing and brokers that fail to return despite their own timeout.
+        capabilityTimeoutHandle = scheduler.schedule(310_000L) {
+            onCapabilityTimeout(response.turnId, attempt, action)
+        }
         capabilityJob = capabilityExecutor.submit {
             val result = runCatching { capabilities.execute(action) }
                 .getOrElse { CapabilityResult(false, "Capability execution failed: ${it.message ?: it::class.java.simpleName}") }
-            continueAfterCapability(response.turnId, action, result)
+            continueAfterCapability(response.turnId, attempt, action, result)
         }
     }
 
     private fun handleBlockedRecoveryReplay(turnId: Long, action: DeviceAction): Boolean {
-        val guard = recoveryReplayGuardByTurn[turnId] ?: return false
-        if (!RecoveryCompletionPolicy.shouldBlockReplay(guard, action)) return false
+        if (coordinator.snapshot().activeTurnOrigin != TurnOrigin.RECOVERY) return false
+        val guards = recoveryReplayGuardByTurn[turnId] ?: return false
+        if (guards.none { RecoveryCompletionPolicy.shouldBlockReplay(it, action) }) return false
 
         val blocks = (recoveryReplayBlocksByTurn[turnId] ?: 0) + 1
         val toolCount = (toolCallsByTurn[turnId] ?: 1).coerceAtLeast(1)
@@ -518,7 +545,7 @@ class SageRuntime(
             turnId,
             TaskState.ACTIVE,
             "Blocked blind replay of interrupted side effect ${action.name}; verification required.",
-            "Verify the current real state with a different read-only tool before repeating the side effect.",
+            "Verify the current real state without repeating the protected side effect.",
             mapOf(
                 "phase" to "recovery_verification",
                 "verified" to "false",
@@ -540,7 +567,15 @@ class SageRuntime(
     }
 
     @Synchronized
-    private fun finishBrainAttempt(turnId: Long, result: Result<BrainResponse>) {
+    private fun finishBrainAttempt(turnId: Long, attempt: Long, result: Result<BrainResponse>) {
+        val snapshot = coordinator.snapshot()
+        if (attempt != brainAttemptGeneration || snapshot.activeTurnId != turnId ||
+            snapshot.state != SageRuntimeState.THINKING_DEEP) {
+            observer.onDiagnostic("stale Brain attempt ignored: turn=$turnId attempt=$attempt")
+            return
+        }
+        // Retire before handling the result, which can synchronously start another reasoning pass.
+        brainAttemptGeneration++
         brainJob = null
         clearBrainTimeouts()
         result.fold(
@@ -555,17 +590,19 @@ class SageRuntime(
     }
 
     @Synchronized
-    private fun continueAfterCapability(turnId: Long, action: DeviceAction, result: CapabilityResult) {
-        capabilityJob = null
-        if (coordinator.snapshot().activeTurnId != turnId) {
+    private fun continueAfterCapability(turnId: Long, attempt: Long, action: DeviceAction, result: CapabilityResult) {
+        val snapshot = coordinator.snapshot()
+        if (attempt != capabilityAttemptGeneration || snapshot.activeTurnId != turnId ||
+            snapshot.state != SageRuntimeState.THINKING_DEEP) {
             observer.onDiagnostic("stale capability result ignored: turn=$turnId action=${action.name}")
             return
         }
+        capabilityAttemptGeneration++
+        capabilityTimeoutHandle?.cancel()
+        capabilityTimeoutHandle = null
+        capabilityJob = null
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
-        if (result.success && !RecoveryCompletionPolicy.isMutating(action.name)) {
-            recoveryReplayGuardByTurn.remove(turnId)
-            recoveryReplayBlocksByTurn.remove(turnId)
-        }
+        // Tool success reports only this call's result. It cannot authorize an interrupted mutation.
         startupByTurn[turnId]?.let { startup ->
             if (!result.success) {
                 failStartup(turnId, "I stopped the saved app startup: ${result.detail}")
@@ -587,6 +624,31 @@ class SageRuntime(
             )
         )
         startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
+    }
+
+    private fun retireCapabilityAttempt() {
+        capabilityAttemptGeneration++
+        capabilityTimeoutHandle?.cancel()
+        capabilityTimeoutHandle = null
+        capabilityJob?.cancel(true)
+        capabilityJob = null
+    }
+
+    @Synchronized
+    private fun onCapabilityTimeout(turnId: Long, attempt: Long, action: DeviceAction) {
+        val snapshot = coordinator.snapshot()
+        if (attempt != capabilityAttemptGeneration || snapshot.activeTurnId != turnId ||
+            snapshot.state != SageRuntimeState.THINKING_DEEP) return
+        retireCapabilityAttempt()
+        checkpointTurn(turnId, TaskState.WAITING,
+            "Capability ${action.name} did not return before the runtime deadline; its outcome is unknown.",
+            "Verify current state before continuing; do not replay the action on the assumption it failed.",
+            mapOf("phase" to "capability_timeout", "lastActionSuccess" to "unknown", "verified" to "false"))
+        clearGoalRuntimeState(turnId)
+        startupByTurn.remove(turnId)
+        observer.onDiagnostic("capability timeout: turn=$turnId action=${action.name}; outcome unknown")
+        submit(SageEvent.ResponseReady(turnId,
+            "I could not confirm the outcome of ${action.name} before the tool timeout. It may still be running. I saved the task for verification and did not retry the action.", false))
     }
 
     private fun failStartup(turnId: Long, detail: String) {
@@ -621,6 +683,9 @@ class SageRuntime(
         effect.lastAction?.takeIf { it.isNotBlank() }?.let { metadata["lastAction"] = it }
         effect.lastActionSignature?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSignature"] = it }
         effect.lastActionSuccess?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSuccess"] = it }
+        metadata.putAll(RecoveryCompletionPolicy.replayGuardMetadata(
+            recoveryReplayGuardByTurn[turnId].orEmpty()
+        ))
         store.upsert(
             TaskCheckpoint(
                 taskId = id,
@@ -674,12 +739,14 @@ class SageRuntime(
                 summary = summary,
                 nextStep = nextStep,
                 updatedAtMs = System.currentTimeMillis(),
-                metadata = existing.metadata + metadata
+                metadata = existing.metadata + metadata + recoveryReplayGuardByTurn[turnId]?.let {
+                    RecoveryCompletionPolicy.replayGuardMetadata(it)
+                }.orEmpty()
             )
         )
     }
 
-    private fun runtimeTaskId(turnId: Long) = "runtime:turn:$turnId"
+    private fun runtimeTaskId(turnId: Long) = "runtime:session:$taskSessionId:turn:$turnId"
 
     private fun clearGoalRuntimeState(turnId: Long) {
         toolCallsByTurn.remove(turnId)
@@ -691,7 +758,8 @@ class SageRuntime(
     }
 
     @Synchronized
-    private fun onBrainProgress(progress: BrainProgress) {
+    private fun onBrainProgress(progress: BrainProgress, attempt: Long) {
+        if (attempt != brainAttemptGeneration) return
         observer.onBrainProgress(progress)
         val snapshot = coordinator.snapshot()
         if (snapshot.activeTurnId != progress.turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
@@ -720,9 +788,10 @@ class SageRuntime(
 
     @Synchronized
     private fun scheduleBrainStageTimeout(turnId: Long, timeoutMs: Long, stage: String) {
+        val attempt = brainAttemptGeneration
         brainStageTimeoutHandle?.cancel()
         brainStageTimeoutHandle = scheduler.schedule(timeoutMs) {
-            onBrainTimeout(turnId, stage, timeoutMs)
+            onBrainTimeout(turnId, stage, timeoutMs, attempt)
         }
     }
 
@@ -737,10 +806,12 @@ class SageRuntime(
     private fun onBrainTimeout(
         turnId: Long,
         stage: String = "response",
-        timeoutMs: Long = brainResponseTimeoutMs
+        timeoutMs: Long = brainResponseTimeoutMs,
+        attempt: Long
     ) {
         val snapshot = coordinator.snapshot()
-        if (snapshot.activeTurnId != turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
+        if (attempt != brainAttemptGeneration || snapshot.activeTurnId != turnId || snapshot.state != SageRuntimeState.THINKING_DEEP) return
+        brainAttemptGeneration++
         if (brainJob?.turnId == turnId) brainJob?.cancel()
         startupByTurn.remove(turnId)
         clearGoalRuntimeState(turnId)

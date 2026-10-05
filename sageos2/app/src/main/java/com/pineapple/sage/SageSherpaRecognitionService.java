@@ -24,6 +24,7 @@ import com.k2fsa.sherpa.onnx.OnlineRecognizerResult;
 import com.k2fsa.sherpa.onnx.OnlineStream;
 import com.k2fsa.sherpa.onnx.OnlineTransducerModelConfig;
 import com.pineapple.sageos2.speech.CommandEndpointPolicy;
+import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -70,7 +71,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile Thread worker;
     private volatile AudioRecord microphone;
-    private volatile Callback activeCallback;
+    private final CommandSpeechTurnOwnership turns = new CommandSpeechTurnOwnership();
 
     public static ComponentName primaryComponent(Context context) {
         return available(context)
@@ -146,24 +147,38 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             return;
         }
         stopRequested.set(false);
-        activeCallback = callback;
+        if (!turns.begin(callback)) {
+            emitError(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
+            return;
+        }
         worker = new Thread(() -> runRecognition(callback), "SageSherpaPrimaryASR");
         worker.start();
     }
 
+    /**
+     * Both platform callbacks below are guarded by turn ownership.
+     *
+     * RecognitionService delivers these per session across a binder, so the stop or cancel for a
+     * turn that already reached a terminal outcome can arrive after the next turn has started.
+     * Applying it unconditionally released the live turn's AudioRecord, raised its stop flag and
+     * dropped its ownership, after which that turn's own terminal outcome was unreachable: it ended
+     * with no results, no error and no end of speech. A late callback is now ignored. See
+     * CommandSpeechTurnOwnership.
+     */
     @Override protected void onStopListening(Callback callback) {
+        if (!turns.requestStop(callback)) return;
         stopRequested.set(true);
         stopMicrophone();
     }
 
     @Override protected void onCancel(Callback callback) {
-        activeCallback = null;
+        if (!turns.retire(callback)) return;
         stopRequested.set(true);
         stopMicrophone();
     }
 
     @Override public void onDestroy() {
-        activeCallback = null;
+        turns.clear();
         stopRequested.set(true);
         stopMicrophone();
         super.onDestroy();
@@ -317,7 +332,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             if (!tailText.isEmpty()) finalText = tailText;
             if (finalText.isEmpty()) finalText = lastText;
             stopMicrophone();
-            if (activeCallback != callback) return;
+            if (!turns.owns(callback)) return;
             CommandEndpointPolicy.WindowEnd outcome = CommandEndpointPolicy.onWindowEnd(
                     stopRequested.get(), totalSamples, peakAbs, finalText);
             if (outcome == CommandEndpointPolicy.WindowEnd.SUPPRESSED) return;
@@ -344,7 +359,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         } finally {
             stopMicrophone();
             if (stream != null) try { stream.release(); } catch (Throwable ignored) { }
-            if (activeCallback == callback) activeCallback = null;
+            turns.retire(callback);
             // Only the worker that still owns the field may clear it. A turn that retires while a
             // successor is already running would otherwise null the successor's reference, the
             // ERROR_RECOGNIZER_BUSY guard in onStartListening would pass, and two AudioRecords
@@ -490,7 +505,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         String reason = safeProblem(problem);
         markUnhealthy(reason);
         Log.w(TAG, "Local command recognition failed; Android fallback may be used: " + reason);
-        if (activeCallback == callback) emitError(callback, code);
+        if (turns.owns(callback)) emitError(callback, code);
     }
 
     private static void markUnhealthy(String reason) {
