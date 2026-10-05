@@ -43,6 +43,16 @@ OpenCode's command-speech ownership fix and regression lab from PR #60 are integ
 
 Codex owns the direct self-check response and this lab runner. The self-check reports current state and unfinished work. It does not claim to repair a condition merely by reading it. Existing bounded recovery mechanisms remain separate.
 
+## Superseded turns cannot take the microphone
+
+A turn is admitted before it opens its `AudioRecord`, so the window between the two is where the owner's cancel arrives. Turn A parks in recognizer setup, the owner cancels and presses Talk again, turn B is admitted and opens the microphone, and turn A then resumes. Before this, A published its `AudioRecord` unconditionally: B's capture was replaced in the service's field, two turns contended for one device, and A — its own cancellation erased by B's admission — went on reporting `readyForSpeech`, levels and partials to a callback the owner had already walked away from.
+
+The claim is now published atomically with cancellation. A turn holds a claim from admission, before any microphone exists, and every path that takes the device away from a turn empties that claim first. A worker cancelled during setup therefore finds nothing to publish into and gives up the microphone it just opened. Stop intent and terminal-outcome ownership moved onto the turn as well, so admitting a successor has nothing shared left to disturb.
+
+A refused capture is silent and opens no cooldown, which is correct but made it indistinguishable from a broken recognizer in the field. `runtimeDetail()` now counts refusals and names the last reason, so a diagnostic export separates the two: `capture refused 4x (superseded)`. An unexpected refusal, where the claim vanished while the turn still looked live, is reported as `claim_lost` and logged at warning level.
+
+The property tests (`CommandSpeechCaptureClaimTest`) drive each interleaving by hand, since the defect was an ordering defect. `SageSherpaRecognitionServiceLifecycleTest` drives the real service through the reported sequence and through twenty mixed turns, asserting after each one that no turn reports twice, the device is free between turns, and the turn the platform is waiting on is the one that is live. Neither proves microphone hardware behaviour; that still needs a device.
+
 ## Delayed recovery regressions
 
 Recovery must not disappear merely because Sage is busy at startup. The scheduler checks at 1.2-second intervals for at most 25 checks, then records that no recovery attempt was made. An otherwise eligible task stays waiting; cancellation and completion are preserved. It does not consume a task recovery attempt while merely waiting for idle.
