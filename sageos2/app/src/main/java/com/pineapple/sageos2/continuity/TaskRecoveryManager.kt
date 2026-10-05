@@ -38,7 +38,8 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
                 updatedAtMs = nowMs,
                 metadata = task.metadata + mapOf(
                     "recovered" to "true",
-                    "recoveredAtMs" to nowMs.toString()
+                    "recoveredAtMs" to nowMs.toString(),
+                    "recoveryCheckpointAtMs" to task.updatedAtMs.toString()
                 )
             )
             store.upsert(updated)
@@ -50,7 +51,9 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
     fun autoResumeCandidate(): TaskCheckpoint? = store.active()
         .asSequence()
         .filter(::canAutoResume)
-        .maxByOrNull { it.updatedAtMs }
+        // Recovery marks every interrupted task at the same time. Select by its last actual
+        // checkpoint instead of making the winner depend on storage iteration order.
+        .maxByOrNull { it.metadata["recoveryCheckpointAtMs"]?.toLongOrNull() ?: it.updatedAtMs }
 
     fun markAutoResumeAttempted(
         taskId: String,
@@ -77,6 +80,7 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
         task.state == TaskState.WAITING &&
             task.metadata["kind"] == RUNTIME_TURN_KIND &&
             task.metadata["recovered"] == "true" &&
+            !task.metadata["ownerPrompt"].isNullOrBlank() &&
             task.metadata["autoResumeAttempted"] != "true" &&
             (task.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) < MAX_AUTO_RESUME_DEPTH
 
