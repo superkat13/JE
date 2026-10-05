@@ -772,6 +772,55 @@ class SageRuntimeTest {
         assertEquals(1, f.observer.textResponses.size)
     }
 
+    @Test fun stuckCapabilityReleasesConversationWithoutClaimingOrReplayingItsOutcome() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val returned = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val broker = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE))
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                entered.countDown()
+                // Model a broker that cannot be stopped by Thread.interrupt().
+                while (release.count > 0) {
+                    try { release.await() } catch (_: InterruptedException) { }
+                }
+                returned.countDown()
+                return CapabilityResult(true, "late completion")
+            }
+        }
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(capability = broker, scheduler = scheduler, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("restart the print service"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue("tool execution must retain a runtime deadline", scheduler.activeDelays().contains(310_000L))
+            scheduler.runLast(310_000L)
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+            val waiting = store.active().single()
+            assertEquals(TaskState.WAITING, waiting.state)
+            assertEquals("unknown", waiting.metadata["lastActionSuccess"])
+            assertTrue(RecoveryCompletionPolicy.replayGuards(waiting.metadata).isNotEmpty())
+            assertTrue(f.observer.textResponses.single().second.contains("could not confirm"))
+            f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+            release.countDown()
+            assertTrue(returned.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            waitUntil { f.observer.diagnostics.any { it.contains("stale capability result ignored") } }
+            assertEquals(2, f.brain.requests.size)
+            assertTrue(scheduler.activeDelays().contains(120_000L))
+            assertEquals(1, calls.get())
+            f.brain.respond(1, "Gravity attracts masses.")
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        } finally {
+            release.countDown()
+            f.runtime.stop()
+        }
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
