@@ -38,13 +38,13 @@ data class SelfCheckReport(
 ) {
     fun render(): String = buildString {
         append("I checked my current health without asking the language model.\n")
-        append("Local brain: ").append(if (snapshot.brainReady) "ready" else "not ready")
+        append("Local brain reported status: ").append(if (snapshot.brainReady) "available" else "not available")
         append(" — ").append(snapshot.brainDetail.ifBlank { "No additional detail." }).append('\n')
-        append("Wake listening: ").append(if (snapshot.wakeReady) "ready" else "not ready")
+        append("Wake service reported status: ").append(if (snapshot.wakeReady) "ready" else "not ready")
         append(" — ").append(snapshot.wakeDetail.ifBlank { "No additional detail." }).append('\n')
-        append("Offline command speech: ").append(when (snapshot.commandSpeechReady) {
-            true -> "ready"
-            false -> "not ready"
+        append("Command speech dependencies: ").append(when (snapshot.commandSpeechReady) {
+            true -> "present"
+            false -> "missing"
             null -> "not checked"
         })
         if (snapshot.commandSpeechDetail.isNotBlank()) append(" — ").append(snapshot.commandSpeechDetail)
@@ -59,6 +59,6 @@ data class SelfCheckReport(
                 append("\nNext step: ").append(it.nextStep)
             }
         }
-        append("\nThis is a status check, not an end-to-end task test. I haven't applied repairs or retried your tasks.")
+        append("\nInference, microphone capture, and speech recognition were not tested. This is a status check, not an end-to-end task test. I haven't applied repairs or retried your tasks.")
     }
 }

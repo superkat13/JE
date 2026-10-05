@@ -21,6 +21,8 @@ class SageSelfCheckResponderTest {
             val reply = responder.resolve(command) as SagePersonalResolution.Reply
             assertTrue(reply.text.contains("excluding health findings): $checks"))
             assertTrue(reply.text.contains("haven't applied repairs"))
+            assertTrue(reply.text.contains("Command speech dependencies: present"))
+            assertTrue(reply.text.contains("Inference, microphone capture, and speech recognition were not tested."))
         }
         assertEquals(5, checks)
     }
@@ -55,14 +57,14 @@ class SageSelfCheckResponderTest {
             SelfCheckReport(failed, SelfCarePolicy.evaluate(failed), 2)
         }
         val text = (responder.resolve("check yourself") as SagePersonalResolution.Reply).text
-        assertTrue(text.contains("Local brain: not ready — model missing"))
-        assertTrue(text.contains("Offline command speech: not ready — speech model missing"))
+        assertTrue(text.contains("Local brain reported status: not available — model missing"))
+        assertTrue(text.contains("Command speech dependencies: missing — speech model missing"))
         assertTrue(text.contains("Next step:"))
         assertTrue(text.contains("not an end-to-end task test"))
     }
 
     @Test fun unknownSpeechDoesNotClaimReadiness() {
         val report = SelfCheckReport(healthy.copy(commandSpeechReady = null, commandSpeechDetail = ""), emptyList(), 0)
-        assertTrue(report.render().contains("Offline command speech: not checked"))
+        assertTrue(report.render().contains("Command speech dependencies: not checked"))
     }
 }
