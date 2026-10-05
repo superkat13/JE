@@ -102,16 +102,15 @@ class CommandSpeechCaptureClaimTest {
         assertFalse("and it stays free", claim.publish(Any()))
     }
 
-    /** Two turns contending for one device: exactly one may hold it. */
+    /** An admitted turn can publish only one record; service admission arbitrates between turns. */
     @Test
-    fun onlyOneTurnCanHoldTheDevice() {
+    fun aClaimCannotReplaceItsPublishedRecord() {
         val first = CommandSpeechCaptureClaim()
-        val second = CommandSpeechCaptureClaim()
 
         assertTrue(first.publish(record))
         assertFalse(
-            "a second turn must not take a device that is already held",
-            second.publish(Any())
+            "a second publication must not overwrite this turn's microphone",
+            first.publish(Any())
         )
         assertTrue(first.holds(record))
     }

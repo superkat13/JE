@@ -64,5 +64,5 @@ class CommandSpeechCaptureClaim {
      * record back and no other turn's, because a successor could only have claimed after this slot
      * was emptied.
      */
-    fun release(): Any? = held.getAndSet(null)
+    fun release(): Any? = held.getAndSet(null).takeUnless { it === Pending }
 }
