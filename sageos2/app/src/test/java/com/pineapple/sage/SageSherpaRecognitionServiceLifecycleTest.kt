@@ -10,8 +10,13 @@ import android.speech.SpeechRecognizer
 import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership
 import java.lang.reflect.Field
 import java.lang.reflect.Method
+import java.io.File
+import java.io.RandomAccessFile
 import java.lang.reflect.Proxy
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit.SECONDS
+import java.util.concurrent.atomic.AtomicBoolean
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -191,6 +196,161 @@ class SageSherpaRecognitionServiceLifecycleTest {
         assertNull(field("microphone").get(service))
     }
 
+    // ---- admission after teardown ------------------------------------------------------------
+
+    /**
+     * A turn that has given the microphone back no longer blocks the next one.
+     *
+     * The owner stops or cancels and immediately asks again, which is the normal retry. The retiring
+     * worker may still be unwinding at that moment, so admission has to follow the capture rather
+     * than the thread: the thread can outlive its own turn for as long as it takes to clear the
+     * AudioRecord and the stream, and during that time it holds nothing.
+     *
+     * This drives onStartListening itself rather than the marker, so it fails against an admission
+     * rule that keys on the previous worker thread. The worker thread it starts is held inside
+     * obtainRecognizer, which leaves the turn owned and observable instead of racing the assertion.
+     */
+    @Test fun admissionFollowsTheCaptureRatherThanTheRetiringThread() {
+        fakeSherpaReady()
+
+        // A live capture held by a running worker: the request must be refused, and no turn may
+        // begin. The worker field is set as well, so this half holds under either admission rule.
+        val holding = CountDownLatch(1)
+        val live = Thread { takeMicrophone(detachedAudioRecord()); holding.countDown(); Thread.sleep(1_000) }
+        field("worker").set(service, live)
+        live.start()
+        assertTrue("the worker should have taken the microphone", holding.await(5, SECONDS))
+
+        val refused = newCallback(service)
+        onStartListening(refused)
+        assertEquals(
+            "a live capture must refuse the next turn",
+            listOf(SpeechRecognizer.ERROR_RECOGNIZER_BUSY),
+            errors.toList()
+        )
+        assertNull("a refused request must not begin a turn", turns().live)
+        live.join(5_000)
+
+        // The same request once the capture is gone, with a retiring thread still running. This is
+        // the half that decides which rule admission follows.
+        val slow = retiringThreadAfterRelease()
+        assertTrue("the retiring thread should still be running", slow.isAlive)
+
+        val successor = newCallback(service)
+        synchronized(recognizerLock()) {
+            onStartListening(successor)
+            assertSame(
+                "a released capture must admit the next turn even while its thread unwinds",
+                successor,
+                turns().live
+            )
+        }
+        stopWorker()
+    }
+
+    /**
+     * Teardown that finishes quickly admits the next turn too, so the bound is an optimisation
+     * rather than a requirement.
+     */
+    @Test fun promptTeardownAdmitsTheNextTurn() {
+        fakeSherpaReady()
+
+        val audio = detachedAudioRecord()
+        val finished = CountDownLatch(1)
+        Thread {
+            takeMicrophone(audio)
+            releaseMicrophone(audio)
+            finished.countDown()
+        }.start()
+        assertTrue(finished.await(5, SECONDS))
+
+        val successor = newCallback(service)
+        synchronized(recognizerLock()) {
+            onStartListening(successor)
+            assertSame(
+                "a finished teardown must admit the next turn",
+                successor,
+                turns().live
+            )
+        }
+        stopWorker()
+    }
+
+    /**
+     * A worker that dies without releasing must not wedge the service.
+     *
+     * The marker names the owning thread, so a thread that vanishes still has to leave admission
+     * open; otherwise one dead worker would refuse every later request.
+     */
+    @Test fun aDeadOwnerDoesNotWedgeAdmission() {
+        fakeSherpaReady()
+
+        val dead = CountDownLatch(1)
+        Thread { takeMicrophone(detachedAudioRecord()); dead.countDown() }.start()
+        assertTrue(dead.await(5, SECONDS))
+
+        val successor = newCallback(service)
+        synchronized(recognizerLock()) {
+            onStartListening(successor)
+            assertSame(
+                "an owner that died without releasing must not keep refusing requests",
+                successor,
+                turns().live
+            )
+        }
+        stopWorker()
+    }
+
+    // ---- exactly one terminal outcome --------------------------------------------------------
+
+    /**
+     * A turn gets one terminal outcome, never a second one after it.
+     *
+     * A stopped turn still owns the session and is owed an outcome. The finished window and the
+     * failure path are both reachable for one turn, because emitting the window outcome is followed
+     * by more work inside the same try, and anything that throws there falls into the catch that
+     * reports an error. Without the guard the caller could receive an error after the transcript it
+     * already had.
+     */
+    @Test fun aTurnReportsOnlyOneTerminalOutcome() {
+        turns().begin(callback)
+
+        fail(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, IllegalStateException("first"))
+        fail(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, IllegalStateException("second"))
+        emitTerminalError(callback, SpeechRecognizer.ERROR_NO_MATCH)
+
+        assertEquals(
+            "a turn must report exactly one terminal signal",
+            1,
+            terminalCount()
+        )
+    }
+
+    /**
+     * The guard is per turn, so the turn after a delivered outcome is owed one of its own.
+     */
+    @Test fun eachTurnGetsItsOwnTerminalOutcome() {
+        turns().begin(callback)
+        fail(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, IllegalStateException("first"))
+        assertEquals(1, terminalCount())
+
+        // The first turn ends the way a worker's finally block ends it, and onStartListening clears
+        // the guard as it admits the successor. An unavailable engine never reaches that point here,
+        // so the reset is applied the way admission applies it.
+        turns().retire(callback)
+        terminalEmitted().set(false)
+
+        val successor = newCallback(service)
+        assertTrue(turns().begin(successor))
+        fail(successor, SpeechRecognizer.ERROR_NO_MATCH, IllegalStateException("second"))
+
+        assertEquals(
+            "a later turn must still report an outcome of its own",
+            2,
+            terminalCount()
+        )
+    }
+
     // ---- helpers -------------------------------------------------------------------------------
 
     private fun terminalCount(): Int = errors.size + results.size
@@ -203,7 +363,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
      */
     private fun runRecognition() {
         try {
-            method("runRecognition", arrayOf(RecognitionService.Callback::class.java))
+            method("runRecognition", RecognitionService.Callback::class.java)
                 .invoke(service, callback)
         } catch (thrown: java.lang.reflect.InvocationTargetException) {
             // The worker catches Throwable internally, so anything escaping is a real fault.
@@ -215,9 +375,126 @@ class SageSherpaRecognitionServiceLifecycleTest {
         field("turns").get(service) as CommandSpeechTurnOwnership
 
     private fun releaseMicrophone(audio: AudioRecord) =
-        method("releaseMicrophone", arrayOf(AudioRecord::class.java)).invoke(service, audio)
+        method("releaseMicrophone", AudioRecord::class.java).invoke(service, audio)
 
-    private fun method(name: String, types: Array<Class<*>> = emptyArray()): Method =
+    private fun takeMicrophone(audio: AudioRecord) =
+        method("takeMicrophone", AudioRecord::class.java).invoke(service, audio)
+
+    private fun microphoneCaptured(): Boolean =
+        method("microphoneCaptured").invoke(service) as Boolean
+
+    /** The real admission path, including its capture, availability and ownership gates. */
+    private fun onStartListening(callback: RecognitionService.Callback) =
+        method("onStartListening", android.content.Intent::class.java, RecognitionService.Callback::class.java)
+            .invoke(service, null, callback)
+
+    private fun stopMicrophone() = method("stopMicrophone").invoke(service)
+
+    private fun recognizerLock(): Any =
+        SageSherpaRecognitionService::class.java.getDeclaredField("RECOGNIZER_LOCK")
+            .apply { isAccessible = true }.get(null)
+
+    /**
+     * A thread that has released its capture and is still running, which is what a slow teardown
+     * looks like from admission's point of view.
+     */
+    private fun retiringThreadAfterRelease(): Thread {
+        val released = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        val thread = Thread {
+            takeMicrophone(detachedAudioRecord())
+            releaseMicrophone(microphoneField())
+            released.countDown()
+            // Unwinding after the capture is gone, which is what a slow teardown looks like: the
+            // thread is alive and still registered as the worker, but it holds nothing.
+            finish.await()
+        }
+        // Installed as the worker, so an admission rule that reads thread liveness sees a live one.
+        field("worker").set(service, thread)
+        thread.start()
+        assertTrue("the worker should have released its capture", released.await(5, SECONDS))
+        finish.countDownAfter(thread)
+        return thread
+    }
+
+    /**
+     * Lets a retiring test thread finish on a timer, so it outlives the assertion without leaking.
+     */
+    private fun CountDownLatch.countDownAfter(thread: Thread) {
+        Thread {
+            Thread.sleep(1_000)
+            countDown()
+            thread.join(5_000)
+        }.apply { isDaemon = true }.start()
+    }
+
+    private fun microphoneField(): AudioRecord =
+        field("microphone").get(service) as AudioRecord
+
+    /**
+     * Stops the worker onStartListening started. It is parked inside obtainRecognizer by the test's
+     * own monitor, and this lets it out to fail and retire itself.
+     */
+    private fun stopWorker() {
+        shadowOf(Looper.getMainLooper()).idle()
+        val worker = field("worker").get(service) as Thread?
+        worker?.join(5_000)
+    }
+
+    /**
+     * Robolectric leaves nativeLibraryDir unset, so it is filled in first: the readiness check looks
+     * for the two native libraries there before falling back to scanning the APK.
+     */
+    private fun nativeLibraryDirectory(): File {
+        val info = RuntimeEnvironment.getApplication().applicationInfo
+        if (info.nativeLibraryDir != null) return File(info.nativeLibraryDir)
+        val created = File(RuntimeEnvironment.getApplication().filesDir, "native-libs").apply { mkdirs() }
+        info.nativeLibraryDir = created.absolutePath
+        return created
+    }
+
+    /**
+     * Presents a ready backend so onStartListening reaches its capture and ownership gates.
+     *
+     * The engine and model are native, so without this every request is refused at the availability
+     * gate and the admission rules below would never be reached. Only the readiness files are
+     * staged: the worker that runs once admitted still fails to build a recognizer and leaves
+     * through the real failure path.
+     */
+    private fun fakeSherpaReady() {
+        val model = SageSpeechBackendState.modelDirectory(RuntimeEnvironment.getApplication())
+        model.mkdirs()
+        File(model, "verified.properties").writeText("ok")
+        // exactFile compares lengths, so the weights are staged at their verified sizes as sparse
+        // files rather than being written out.
+        mapOf(
+            "tokens.txt" to 5_048L,
+            "encoder-epoch-99-avg-1.int8.onnx" to 42_845_182L,
+            "decoder-epoch-99-avg-1.onnx" to 2_092_272L,
+            "joiner-epoch-99-avg-1.int8.onnx" to 259_572L
+        ).forEach { (name, size) ->
+            RandomAccessFile(File(model, name), "rw").apply { setLength(size) }.close()
+        }
+        // The java API comes from the real AAR on the test classpath; only the native libraries
+        // have to be staged, and only their presence is checked.
+        val nativeDir = nativeLibraryDirectory()
+        nativeDir.mkdirs()
+        File(nativeDir, "libsherpa-onnx-jni.so").writeText("")
+        File(nativeDir, "libonnxruntime.so").writeText("")
+    }
+
+    private fun terminalEmitted(): AtomicBoolean =
+        field("terminalEmitted").get(service) as AtomicBoolean
+
+    private fun emitTerminalError(callback: RecognitionService.Callback, code: Int) =
+        method("emitTerminalError", RecognitionService.Callback::class.java, java.lang.Integer.TYPE)
+            .invoke(service, callback, code)
+
+    private fun fail(callback: RecognitionService.Callback, code: Int, problem: Throwable) =
+        method("fail", RecognitionService.Callback::class.java, java.lang.Integer.TYPE, Throwable::class.java)
+            .invoke(service, callback, code, problem)
+
+    private fun method(name: String, vararg types: Class<*>): Method =
         SageSherpaRecognitionService::class.java
             .getDeclaredMethod(name, *types)
             .apply { isAccessible = true }
@@ -266,6 +543,14 @@ class SageSherpaRecognitionServiceLifecycleTest {
             null
         }
     }
+
+    /**
+     * A standalone AudioRecord, not the service's live field.
+     *
+     * The admission tests need a capture that the service is not already holding, so this is used
+     * where the test is about the marker rather than about releasing the live microphone.
+     */
+    private fun detachedAudioRecord(): AudioRecord = newAudioRecord()
 
     /** Robolectric supplies the AudioRecord object; no host device is opened. */
     private fun newAudioRecord(): AudioRecord =

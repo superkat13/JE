@@ -30,6 +30,7 @@ import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Private, bounded streaming RecognitionService recovered from Sage 1.33.4.
@@ -72,6 +73,25 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     private final AtomicBoolean stopRequested = new AtomicBoolean(false);
     private volatile Thread worker;
     private volatile AudioRecord microphone;
+    /**
+     * The worker that currently owns the microphone, or null while none does.
+     *
+     * Admission reads this rather than whether a worker thread is still alive. A worker that has
+     * already released its AudioRecord no longer holds the device, so the next request may open its
+     * own while the retiring thread finishes unwinding. Waiting for the thread to die instead made
+     * admission depend on how quickly teardown happened to finish.
+     */
+    private final AtomicReference<Thread> capturing = new AtomicReference<>(null);
+    /**
+     * Guards the live turn's terminal outcome so exactly one is ever delivered.
+     *
+     * The finished window and the failure path can both be reached by one turn: emitting the window
+     * outcome is followed by more work inside the same try, and anything that throws there falls into
+     * the catch that reports an error. Without this guard a caller could receive an error after the
+     * transcript it already has, which for a stopped turn is a second outcome rather than the one
+     * the caller is waiting for.
+     */
+    private final AtomicBoolean terminalEmitted = new AtomicBoolean(false);
     private final CommandSpeechTurnOwnership turns = new CommandSpeechTurnOwnership();
 
     public static ComponentName primaryComponent(Context context) {
@@ -138,7 +158,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     }
 
     @Override protected void onStartListening(android.content.Intent intent, Callback callback) {
-        if (worker != null && worker.isAlive()) {
+        if (microphoneCaptured()) {
             emitError(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
             return;
         }
@@ -152,6 +172,8 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             emitError(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
             return;
         }
+        // Reset per admitted turn. The rejections above belong to no turn and must not consume it.
+        terminalEmitted.set(false);
         worker = new Thread(() -> runRecognition(callback), "SageSherpaPrimaryASR");
         worker.start();
     }
@@ -205,7 +227,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             recognizer = obtainRecognizer(this);
             stream = recognizer.createStream("");
             audio = createMicrophone();
-            microphone = audio;
+            takeMicrophone(audio);
             if (audio.getState() != AudioRecord.STATE_INITIALIZED)
                 throw new IllegalStateException("AudioRecord not initialized");
             audio.startRecording();
@@ -352,12 +374,12 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             emitEnd(callback);
             if (outcome == CommandEndpointPolicy.WindowEnd.AUDIO_ERROR) {
                 markUnhealthy("microphone produced no usable PCM energy");
-                emitError(callback, SpeechRecognizer.ERROR_AUDIO);
+                emitTerminalError(callback, SpeechRecognizer.ERROR_AUDIO);
             } else if (outcome == CommandEndpointPolicy.WindowEnd.NO_MATCH) {
-                emitError(callback, SpeechRecognizer.ERROR_NO_MATCH);
+                emitTerminalError(callback, SpeechRecognizer.ERROR_NO_MATCH);
             } else {
                 lastFailure = "";
-                emitResults(callback, resultBundle(finalText));
+                emitTerminalResults(callback, resultBundle(finalText));
             }
         } catch (SecurityException problem) {
             fail(callback, SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS, problem);
@@ -501,11 +523,31 @@ public final class SageSherpaRecognitionService extends RecognitionService {
 
     /**
      * Releases the live microphone unconditionally, for callers acting on behalf of the live turn.
+     *
+     * Calling on behalf of the live turn is the one case where the field cannot already belong to a
+     * successor, so dropping it outright is correct, and [capturing] goes with it.
      */
     private void stopMicrophone() {
         AudioRecord value = microphone;
         microphone = null;
+        capturing.set(null);
         releaseAudioRecord(value);
+    }
+
+    /**
+     * Publishes [audio] as the live capture and names this worker as the owner holding it.
+     *
+     * [capturing] is published before [microphone], not after. This runs on the worker thread while
+     * onStartListening reads the marker on the main thread, and the two writes cannot be atomic. The
+     * order is chosen so that the only interleaving reachable in between refuses a successor: a
+     * marker published one instruction early makes [microphoneCaptured] answer true while the capture
+     * field is still null, which costs a momentary ERROR_RECOGNIZER_BUSY. The reverse order opens a
+     * window in which both the marker and the capture look free while this worker is about to hold
+     * the device, which would let two turns contend for it.
+     */
+    private void takeMicrophone(AudioRecord audio) {
+        capturing.set(Thread.currentThread());
+        microphone = audio;
     }
 
     /**
@@ -517,11 +559,15 @@ public final class SageSherpaRecognitionService extends RecognitionService {
      * releasing keeps a retiring worker from touching its successor's microphone. The identity check
      * in the worker's finally block does the same for the worker field; SherpaWakeWordEngine already
      * guards both this way.
+     *
+     * Clearing [capturing] here is safe for the same reason: the field still holds [expected], so no
+     * successor has published its own capture and no marker can be dropped out from under it.
      */
     private void releaseMicrophone(AudioRecord expected) {
         AudioRecord value = microphone;
         if (value != expected) return;
         microphone = null;
+        capturing.set(null);
         releaseAudioRecord(value);
     }
 
@@ -533,14 +579,37 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     }
 
     /**
+     * True while a worker still owns the microphone, which is the only state in which two turns would
+     * contend for the device.
+     *
+     * This is deliberately not "is the retiring worker thread still alive". A worker that has
+     * released its AudioRecord is no longer holding the microphone, so a successor may open its own
+     * while that thread finishes unwinding. A worker that dies without releasing is cleared here so
+     * the marker cannot wedge the service.
+     */
+    private boolean microphoneCaptured() {
+        Thread owner = capturing.get();
+        if (owner == null) return false;
+        if (owner.isAlive()) return true;
+        capturing.compareAndSet(owner, null);
+        return false;
+    }
+
+    /**
      * Ends the turn's teardown before returning, so the owner's next request is not refused while
      * this worker is still clearing the AudioRecord it was asked to release.
      *
      * Releasing the microphone unblocks the pending read with an error; the worker then unwinds,
-     * retires the turn and nulls its own thread reference. onStartListening rejects any request
-     * while [worker] is alive, so without this wait an immediate retry races the teardown the caller
-     * just requested and is answered ERROR_RECOGNIZER_BUSY. Bounded, because the worker is not
-     * guaranteed to return promptly, and the next request is still rejected once the bound expires.
+     * retires the turn and nulls its own thread reference. The wait is an optimisation that usually
+     * finishes teardown before the next request arrives. It is not what admits that request:
+     * admission reads [capturing], so a teardown that outlives the bound still lets the next turn
+     * open its own microphone instead of being answered ERROR_RECOGNIZER_BUSY. Bounded, because the
+     * worker is not guaranteed to return promptly and these callbacks run on the main thread, so a
+     * longer bound would be charged to the caller on every stop.
+     *
+     * The wait also no longer has to keep [capturing] honest. That marker is cleared by the release
+     * that stops the microphone, not by the thread's exit, so a worker that unwinds slowly no longer
+     * holds admission shut after it has given the device back.
      */
     private void awaitRetiredWorker() {
         Thread retiring = worker;
@@ -560,7 +629,21 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             markUnhealthy(reason);
         }
         Log.w(TAG, "Local command recognition failed; Android fallback may be used: " + reason);
-        if (CommandSpeechFailurePolicy.shouldEmitError(ownsTurn)) emitError(callback, code);
+        if (CommandSpeechFailurePolicy.shouldEmitError(ownsTurn)) emitTerminalError(callback, code);
+    }
+
+    /**
+     * Delivers the turn's terminal outcome unless one was already delivered.
+     *
+     * A cancelled turn owns nothing by the time its failure arrives, so it stays silent; a stopped
+     * turn still owns the session and is owed exactly one outcome.
+     */
+    private void emitTerminalError(Callback callback, int code) {
+        if (terminalEmitted.compareAndSet(false, true)) emitError(callback, code);
+    }
+
+    private void emitTerminalResults(Callback callback, Bundle value) {
+        if (terminalEmitted.compareAndSet(false, true)) emitResults(callback, value);
     }
 
     private static void markUnhealthy(String reason) {
