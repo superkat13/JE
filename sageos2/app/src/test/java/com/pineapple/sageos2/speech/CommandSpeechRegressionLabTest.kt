@@ -28,8 +28,8 @@ class CommandSpeechRegressionLabTest {
      * Mirrors the service's callback sequence for one turn: onStartListening opens ownership and
      * the worker opens the microphone, the turn reaches a terminal outcome and releases both, and
      * the platform's stop and cancel arrive afterwards. Capture is represented by [capturing],
-     * which only the owner of the live turn may release, matching stopMicrophone()'s reach in
-     * SageSherpaRecognitionService.
+     * which only the owner of the live turn may release, matching the reach of
+     * SageSherpaRecognitionService.releaseCapture().
      */
     private class TurnHarness {
         val turns = CommandSpeechTurnOwnership()

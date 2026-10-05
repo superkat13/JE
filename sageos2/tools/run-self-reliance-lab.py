@@ -22,19 +22,33 @@ CLASSES = [
     'speech.CommandRecognizerPolicyTest',
     'speech.CommandSpeechRegressionLabTest',
     'speech.CommandSpeechTurnOwnershipTest',
+    'speech.CommandSpeechFailurePolicyTest',
+    'speech.CommandSpeechCaptureClaimTest',
     'speech.RecognitionSessionGateTest',
     'speech.WakeRecoveryBudgetTest',
     'speech.WakeReconnectPolicyTest',
     'localapi.SageLocalApiServerTest',
+    'SageSherpaRecognitionServiceLifecycleTest',
 ]
 PREFIX = 'com.pineapple.sageos2.'
+# SageSherpaRecognitionServiceLifecycleTest is listed without a package because it is not under
+# PREFIX. It lives in com.pineapple.sage, beside the service it drives, which is what lets it call
+# RecognitionService's protected lifecycle callbacks on a real service instance. Every other entry
+# resolves against PREFIX.
+PACKAGE_OVERRIDES = {
+    'SageSherpaRecognitionServiceLifecycleTest': 'com.pineapple.sage.',
+}
+
+
+def qualified(name):
+    return PACKAGE_OVERRIDES.get(name, PREFIX) + name
 
 
 def summarize(reports, started):
     totals = dict(tests=0, failures=0, errors=0, skipped=0)
     problems = []
     for name in CLASSES:
-        path = reports / ('TEST-' + PREFIX + name + '.xml')
+        path = reports / ('TEST-' + qualified(name) + '.xml')
         if not path.is_file() or path.stat().st_mtime < started - 2:
             problems.append('Missing or stale report: ' + name)
             continue
@@ -63,7 +77,7 @@ def main():
     gradle = args.gradle or shutil.which('gradle') or str(root / 'gradlew')
     command = [gradle, '-p', str(project), ':app:testDebugUnitTest', '--rerun-tasks', '--no-build-cache']
     for name in CLASSES:
-        command += ['--tests', PREFIX + name]
+        command += ['--tests', qualified(name)]
     started = time.time()
     result = {'scope': 'Automated JVM/Robolectric runtime lab',
               'device_acceptance': 'NOT RUN', 'command': command,
