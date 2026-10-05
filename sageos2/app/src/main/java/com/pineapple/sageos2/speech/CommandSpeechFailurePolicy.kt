@@ -31,6 +31,46 @@ object CommandSpeechFailurePolicy {
     fun shouldEmitError(ownsTurn: Boolean): Boolean = ownsTurn
 
     /**
+     * Why a turn was refused the microphone after being admitted.
+     *
+     * A turn is admitted before it opens its AudioRecord, so the window between the two is where a
+     * cancel can retire it. If the turn resumes there it must not take the device, and the owner is
+     * owed a way to tell that refusal apart from a genuine fault: a refused capture opens no
+     * cooldown and reports no error, so without this the run looks exactly like a recognizer that
+     * failed for no reason.
+     *
+     * Carried as a name in the diagnostic export only. It names no callback, no audio and no text.
+     */
+    enum class CaptureRefusal {
+        /** The turn had already been stopped, cancelled or superseded. Expected, and silent. */
+        SUPERSEDED,
+
+        /**
+         * The claim was gone while the turn still looked live. Not reachable from the admission and
+         * teardown paths, so it is reported as an anomaly rather than treated as ordinary.
+         */
+        CLAIM_LOST
+    }
+
+    /**
+     * True when the refusal is the expected consequence of the turn having been retired, and False
+     * when the claim disappeared without one.
+     */
+    @JvmStatic
+    fun isExpectedCaptureRefusal(refusal: CaptureRefusal): Boolean =
+        refusal == CaptureRefusal.SUPERSEDED
+
+    /**
+     * Classifies a refused claim from what the service still knows about the turn.
+     *
+     * [stopped] and [ownsTurn] are read after the claim was refused, because that is the only point
+     * at which the refusal is known and the only information needed to explain it.
+     */
+    @JvmStatic
+    fun classifyCaptureRefusal(stopped: Boolean, ownsTurn: Boolean): CaptureRefusal =
+        if (stopped || !ownsTurn) CaptureRefusal.SUPERSEDED else CaptureRefusal.CLAIM_LOST
+
+    /**
      * How long onStopListening and onCancel wait for the worker they are retiring.
      *
      * The worker clears the microphone, retires the turn and nulls its own thread reference on the
