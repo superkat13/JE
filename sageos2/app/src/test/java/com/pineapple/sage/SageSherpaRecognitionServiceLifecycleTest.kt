@@ -7,7 +7,6 @@ import android.media.MediaRecorder
 import android.os.Looper
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
-import androidx.test.core.app.ApplicationProvider
 import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership
 import java.lang.reflect.Field
 import java.lang.reflect.Method
@@ -19,6 +18,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -61,7 +61,9 @@ class SageSherpaRecognitionServiceLifecycleTest {
         setStatic("lastFailure", "")
         setStatic("unhealthyUntilMs", 0L)
         setStatic("lastCompletion", "")
-        shadowOf(ApplicationProvider.getApplicationContext<android.app.Application>())
+        // RuntimeEnvironment, not androidx.test:core: the app declares only junit and robolectric as
+        // test dependencies.
+        shadowOf(RuntimeEnvironment.getApplication())
             .grantPermissions(Manifest.permission.RECORD_AUDIO)
         service = Robolectric.buildService(SageSherpaRecognitionService::class.java).create().get()
         callback = newCallback(service)
