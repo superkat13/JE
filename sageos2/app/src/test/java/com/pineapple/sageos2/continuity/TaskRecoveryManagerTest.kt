@@ -140,6 +140,41 @@ class TaskRecoveryManagerTest {
         assertFalse(text.contains("<SAGE_TOOL>"))
     }
 
+    @Test fun delayedResumeRechecksCancellationCompletionAndDepthWithoutChangingTask() {
+        val original = TaskCheckpoint("runtime:turn:10", "Recovered", TaskState.WAITING,
+            "recovered", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true", "ownerPrompt" to "finish this"))
+        val invalidated = listOf(
+            original.copy(state = TaskState.CANCELLED),
+            original.copy(state = TaskState.COMPLETED),
+            original.copy(state = TaskState.ACTIVE),
+            original.copy(metadata = original.metadata + ("autoResumeAttempted" to "true")),
+            original.copy(metadata = original.metadata + ("recoveryDepth" to "3")),
+            original.copy(metadata = original.metadata + ("recovered" to "false")),
+            original.copy(metadata = original.metadata + ("kind" to "self_care"))
+        )
+        invalidated.forEach { changed ->
+            val store = MemoryTaskStore()
+            store.upsert(original)
+            val manager = TaskRecoveryManager(store)
+            assertEquals(original.taskId, manager.autoResumeCandidate()?.taskId)
+            store.upsert(changed) // Change after selection, before the delayed callback.
+            assertEquals(null, manager.markAutoResumeAttempted(original.taskId, 100))
+            assertEquals(changed, store.get(original.taskId))
+        }
+    }
+
+    @Test fun delayedResumeCannotConsumeTheSameAttemptTwice() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint("runtime:turn:11", "Recovered", TaskState.WAITING,
+            "recovered", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true")))
+        val manager = TaskRecoveryManager(store)
+        val first = manager.markAutoResumeAttempted("runtime:turn:11", 100)!!
+        assertEquals(null, manager.markAutoResumeAttempted(first.taskId, 200))
+        assertEquals(first, store.get(first.taskId))
+    }
+
     private class MemoryTaskStore : TaskContinuityStore {
         private val tasks = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { tasks[checkpoint.taskId] = checkpoint }

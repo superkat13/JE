@@ -42,3 +42,9 @@ No timed reboot or device failure injection is required for this pass.
 OpenCode owns the command-speech failure lab in issue #58: genuine no-match, no-audio boundary, timeout, cancellation, stale callbacks and capture cleanup. That issue is queued; it is not proof that an OpenCode process is running. Preserve `MAX_UTTERANCE_MS=15000`, modelType, identity, signing and the 217 recovery guard.
 
 Codex owns the direct self-check response and this lab runner. The self-check reports current state and unfinished work. It does not claim to repair a condition merely by reading it. Existing bounded recovery mechanisms remain separate.
+
+## Delayed recovery regressions
+
+Recovery must not disappear merely because Sage is busy at startup. The scheduler checks at 1.2-second intervals for at most 25 checks, then records that no recovery attempt was made. An otherwise eligible task stays waiting; cancellation and completion are preserved. It does not consume a task recovery attempt while merely waiting for idle.
+
+The task is re-read before an actual attempt. Cancellation, completion, supersession, an already-consumed attempt, an ineligible task kind, and the recovery-depth ceiling prevent execution. Scheduler tests cover busy-to-idle, exhaustion, shutdown, replacement, and stale callback delivery. Existing mutation replay protection remains in force.

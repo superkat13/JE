@@ -217,21 +217,32 @@ class SageRuntimeHost private constructor(context: Context) {
         }
     }
 
+    private val recoveredResumeScheduler by lazy {
+        RecoveredResumeScheduler(
+            scheduler = AndroidRuntimeScheduler(selfCareHandler),
+            isStarted = { started.get() && runtime.snapshot().state != SageRuntimeState.STOPPED },
+            isIdle = { runtime.snapshot().state == SageRuntimeState.IDLE_WAKE },
+            onExhausted = {
+                traces.record("recovery", "auto-resume polling stopped after bounded busy checks; no recovery attempt made")
+            },
+            delayMs = RECOVERY_RESUME_DELAY_MS,
+            synchronizationLock = runtime
+        )
+    }
+
     private fun scheduleRecoveredResume(candidate: TaskCheckpoint?) {
-        if (candidate == null) return
-        selfCareHandler.postDelayed({
-            if (!started.get()) return@postDelayed
-            if (runtime.snapshot().state != SageRuntimeState.IDLE_WAKE) {
-                traces.record("recovery", "auto-resume deferred because Sage is busy; task=${candidate.taskId}")
-                return@postDelayed
-            }
-            val marked = recovery.markAutoResumeAttempted(candidate.taskId) ?: return@postDelayed
+        if (candidate == null) {
+            recoveredResumeScheduler.cancel()
+            return
+        }
+        recoveredResumeScheduler.schedule {
+            val marked = recovery.markAutoResumeAttempted(candidate.taskId) ?: return@schedule
             traces.record(
                 "recovery",
                 "auto-resuming task=${marked.taskId} depth=${marked.metadata["recoveryDepth"] ?: "1"}"
             )
             runtime.resumeRecoveredTask(marked)
-        }, RECOVERY_RESUME_DELAY_MS)
+        }
     }
 
     private fun runSelfCareCheck() {
