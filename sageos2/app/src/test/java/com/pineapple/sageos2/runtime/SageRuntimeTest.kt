@@ -8,6 +8,8 @@ import com.pineapple.sageos2.continuity.*
 import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.identity.*
 import com.pineapple.sageos2.memory.*
+import com.pineapple.sageos2.maintenance.*
+import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
 import com.pineapple.sageos2.speech.*
@@ -658,6 +660,29 @@ class SageRuntimeTest {
         Thread.sleep(80)
         assertEquals(4, capability.actions.size)
         assertEquals(5, f.brain.requests.size)
+    }
+
+    @Test fun selfCheckReportsCurrentFailureWithoutBrainAndNextRequestStillWorks() {
+        val snapshot = SelfCareSnapshot(false, "model unavailable", false, "remote wake disconnected", 2, true)
+        var checks = 0
+        val personal = SageSelfCheckResponder(EmptySagePersonalResponder) {
+            checks++
+            SelfCheckReport(snapshot, SelfCarePolicy.evaluate(snapshot), 1)
+        }
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("check yourself"))
+        assertEquals(1, checks)
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(f.fast.requests.isEmpty())
+        val response = f.observer.textResponses.single()
+        assertTrue(response.second.contains("model unavailable"))
+        assertTrue(response.second.contains("remote wake disconnected"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        assertEquals(1, f.brain.requests.size)
+        assertTrue(f.brain.requests.single().turnId != response.first)
+        f.runtime.stop()
     }
 
     private class Fixture(
