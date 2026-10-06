@@ -127,6 +127,7 @@ class DiagnosticReportTest {
         ownerAppsRevision = 3L,
         ownerAppsCount = 4,
         chickenTonightScopeStatus = "READY",
+        recoverableTasks = emptyList(),
         traces = emptyList()
     )
 }

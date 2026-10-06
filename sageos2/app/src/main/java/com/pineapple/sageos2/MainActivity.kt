@@ -1071,19 +1071,19 @@ open class MainActivity : Activity() {
         val current = host.chickenTonightScope.current()
         content.addView(sectionTitle("Chicken Tonight"))
         content.addView(TextView(this).apply {
-            text = "The phrase trigger stays silent. A configured, unexpired scope is required before the workflow can become ACTIVE. This screen defines scope only; it does not perform an assessment by itself."
+            text = "Choose what Sage may examine and record your permission below. Sage creates the internal tracking ID automatically. Saving these settings does not run an assessment."
             textSize = 14f
         })
-        content.addView(info("Scope status", when {
+        content.addView(info("Setup status", when {
             current == null -> "NOT CONFIGURED"
             current.isExpired() -> "EXPIRED"
             current.isUsable() -> "READY"
             else -> "INCOMPLETE"
         }))
 
-        val scopeId = editor("Scope ID", current?.scopeId.orEmpty(), 1)
-        val auth = editor("Authorization reference", current?.authorizationReference.orEmpty(), 2)
-        val target = editor("Target / environment summary", current?.targetSummary.orEmpty(), 3)
+        val scopeId = current?.scopeId?.takeIf { it.isNotBlank() } ?: UUID.randomUUID().toString()
+        val auth = editor("Your permission or authorization reference", current?.authorizationReference.orEmpty(), 2)
+        val target = editor("What may Sage examine?", current?.targetSummary.orEmpty(), 3)
         val hoursRemaining = current?.expiresAtMs?.let { expiry ->
             ((expiry - System.currentTimeMillis()).coerceAtLeast(0L) / 3_600_000L).toString()
         }.orEmpty()
@@ -1091,7 +1091,7 @@ open class MainActivity : Activity() {
             inputType = InputType.TYPE_CLASS_NUMBER
         }
         val notes = editor("Scope notes", current?.notes.orEmpty(), 4)
-        listOf(scopeId, auth, target, expiryHours, notes).forEach(content::addView)
+        listOf(auth, target, expiryHours, notes).forEach(content::addView)
 
         content.addView(TextView(this).apply { text = "Allowed read-only evidence modules"; textSize = 17f; setPadding(0, dp(10), 0, dp(4)) })
         val moduleChecks = ChickenTonightModule.entries.associateWith { module ->
@@ -1105,12 +1105,12 @@ open class MainActivity : Activity() {
         content.addView(Button(this).apply {
             text = "Save Chicken Tonight scope"
             setOnClickListener {
-                val id = scopeId.text.toString().trim()
+                val id = scopeId
                 val authorization = auth.text.toString().trim()
                 val targetSummary = target.text.toString().trim()
                 val modules = moduleChecks.filterValues { it.isChecked }.keys
-                if (id.isEmpty() || authorization.isEmpty() || targetSummary.isEmpty() || modules.isEmpty()) {
-                    Toast.makeText(this@MainActivity, "Scope ID, authorization, target, and at least one module are required", Toast.LENGTH_LONG).show()
+                if (authorization.isEmpty() || targetSummary.isEmpty() || modules.isEmpty()) {
+                    Toast.makeText(this@MainActivity, "Add your permission, what Sage may examine, and at least one module", Toast.LENGTH_LONG).show()
                 } else {
                     val hours = expiryHours.text.toString().trim().toLongOrNull()
                     val expiresAt = hours?.takeIf { it > 0 }?.let { System.currentTimeMillis() + it * 3_600_000L }

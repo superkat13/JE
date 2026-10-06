@@ -597,7 +597,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
 
     private fun detail(): String = SageSherpaRecognitionService.runtimeDetail()
 
-    private fun eventsFor(callback: RecognitionService.Callback): List<String> =
+    private fun eventsFor(callback: RecognitionService.Callback): MutableList<String> =
         perCallback.getOrPut(callback) { mutableListOf() }
 
     private fun turns(): CommandSpeechTurnOwnership =
