@@ -73,6 +73,18 @@ class SelfCareManagerTest {
         assertEquals(cancelled, store.get(cancelled.taskId))
     }
 
+    @Test fun speechFailurePersistsAndClearsOnlyAfterReadinessReturns() {
+        val store = FakeStore()
+        val manager = SelfCareManager(store)
+        val failed = SelfCareSnapshot(true, "ready", true, "ready", 2, true,
+            commandSpeechReady = false, commandSpeechDetail = "model missing")
+        manager.reconcile(failed, 100L)
+        assertEquals(TaskState.WAITING, store.get("selfcare:command_speech_not_ready")!!.state)
+        assertTrue(store.get("selfcare:command_speech_not_ready")!!.nextStep.contains("Use text chat"))
+        manager.reconcile(failed.copy(commandSpeechReady = true), 200L)
+        assertEquals(TaskState.COMPLETED, store.get("selfcare:command_speech_not_ready")!!.state)
+    }
+
     private class FakeStore : TaskContinuityStore {
         private val values = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { values[checkpoint.taskId] = checkpoint }

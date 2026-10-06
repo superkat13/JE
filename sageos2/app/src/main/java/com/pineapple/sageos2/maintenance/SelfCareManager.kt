@@ -11,7 +11,9 @@ data class SelfCareSnapshot(
     val wakeDetail: String,
     val coreRevision: Long,
     val legacyCorePresent: Boolean,
-    val migrationErrors: List<String> = emptyList()
+    val migrationErrors: List<String> = emptyList(),
+    val commandSpeechReady: Boolean? = null,
+    val commandSpeechDetail: String = ""
 )
 
 data class SelfCareFinding(
@@ -54,6 +56,16 @@ object SelfCarePolicy {
                 title = "Offline wake needs attention",
                 summary = snapshot.wakeDetail.ifBlank { "Offline wake is not ready." },
                 nextStep = "Use bounded automatic wake-process recovery. If retries pause, keep diagnostics and escalate the exact wake failure instead of looping.",
+                severity = "medium"
+            )
+        )
+
+        if (snapshot.commandSpeechReady == false) add(
+            SelfCareFinding(
+                code = "command_speech_not_ready",
+                title = "Offline command speech needs attention",
+                summary = snapshot.commandSpeechDetail.ifBlank { "Offline command speech is not ready." },
+                nextStep = "Use text chat while inspecting speech readiness and microphone diagnostics. Do not clear speech models or Sage data.",
                 severity = "medium"
             )
         )

@@ -23,7 +23,8 @@ sealed interface SageEvent {
         val lastActionSignature: String?,
         val lastActionSuccess: String?,
         val completedToolCalls: Int,
-        val recoveryDepth: Int
+        val recoveryDepth: Int,
+        val replayGuardMetadata: Map<String, String> = emptyMap()
     ) : SageEvent
     data class ResponseReady(val turnId: Long, val text: String, val allowFollowUp: Boolean = true) : SageEvent
     data class BrainFailed(val turnId: Long, val reason: String) : SageEvent

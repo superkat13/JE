@@ -57,4 +57,31 @@ class RecoveryCompletionPolicyTest {
         assertFalse(RecoveryCompletionPolicy.isMutating("root.health"))
         assertTrue(RecoveryCompletionPolicy.isMutating("forge.start_job"))
     }
+
+    @Test fun persistedGuardsSurviveReadOnlyLastActionAndKeepEveryMutation() {
+        val first = DeviceAction("root.restart_service", mapOf("service" to "print"))
+        val second = DeviceAction("root.restart_service", mapOf("service" to "other"))
+        val guards = listOf(first, second).map {
+            RecoveryCompletionPolicy.replayGuard(it.name, RecoveryCompletionPolicy.actionSignature(it))!!
+        }
+        val metadata = RecoveryCompletionPolicy.replayGuardMetadata(guards) + mapOf(
+            "lastAction" to "root.health",
+            "lastActionSignature" to "root.health",
+            "lastActionSuccess" to "true"
+        )
+
+        val restored = RecoveryCompletionPolicy.replayGuards(metadata)
+        assertTrue(restored == guards)
+        assertTrue(restored.any { RecoveryCompletionPolicy.shouldBlockReplay(it, first) })
+        assertTrue(restored.any { RecoveryCompletionPolicy.shouldBlockReplay(it, second) })
+    }
+
+    @Test fun legacyCheckpointMigrationPreservesNameOnlyGuard() {
+        val guards = RecoveryCompletionPolicy.replayGuards(mapOf("lastAction" to "root.restart_service"))
+        val restored = RecoveryCompletionPolicy.replayGuards(RecoveryCompletionPolicy.replayGuardMetadata(guards))
+        assertTrue(restored.single().actionSignature == null)
+        assertTrue(RecoveryCompletionPolicy.shouldBlockReplay(
+            restored.single(), DeviceAction("root.restart_service", mapOf("service" to "print"))
+        ))
+    }
 }

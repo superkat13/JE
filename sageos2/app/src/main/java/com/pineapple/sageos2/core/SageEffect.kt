@@ -18,7 +18,8 @@ sealed interface SageEffect {
         val lastActionSignature: String?,
         val lastActionSuccess: String?,
         val completedToolCalls: Int,
-        val recoveryDepth: Int
+        val recoveryDepth: Int,
+        val replayGuardMetadata: Map<String, String> = emptyMap()
     ) : SageEffect
     data class LaunchOwnerWorkflow(val turnId: Long, val workflowId: String) : SageEffect
     data class StartEchoGuard(val turnId: Long) : SageEffect
