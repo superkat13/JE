@@ -22,6 +22,7 @@ import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
+import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.core.SageRuntimeState
@@ -41,6 +42,8 @@ import com.pineapple.sageos2.memory.SharedPreferencesConversationHistoryStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.maintenance.SelfCareManager
 import com.pineapple.sageos2.maintenance.SelfCareSnapshot
+import com.pineapple.sageos2.maintenance.SageSelfCheckResponder
+import com.pineapple.sageos2.maintenance.SelfCheckReport
 import com.pineapple.sageos2.migration.LegacyPersonalityContinuityMigration
 import com.pineapple.sageos2.migration.LegacySageMigration
 import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
@@ -156,7 +159,24 @@ class SageRuntimeHost private constructor(context: Context) {
     val runtime = SageRuntime(
         coordinator = SageTurnCoordinator(
             com.pineapple.sageos2.core.SageCommandRouter(
-                personal = personalCommands,
+                personal = SageTaskFollowThroughResponder(
+                    inner = SageSelfCheckResponder(personalCommands) {
+                    try {
+                        val snapshot = selfCareSnapshot()
+                        val findings = selfCare.reconcile(snapshot)
+                        traces.record("self_care", "owner check; findings=${findings.joinToString(",") { it.code }}")
+                        SelfCheckReport(snapshot, findings, tasks.active().count {
+                            it.metadata["kind"] != SelfCareManager.KIND
+                        })
+                    } catch (error: Exception) {
+                        traces.record("self_care", "owner check failed: ${error.message ?: error::class.java.simpleName}")
+                        throw error
+                    }
+                },
+                    store = tasks,
+                    resume = { task -> queueOwnerTask(task) },
+                    onEvent = { detail -> traces.record("follow_through", detail.take(800)) }
+                ),
                 ownerApps = ownerApps
             )
         ),
@@ -203,44 +223,61 @@ class SageRuntimeHost private constructor(context: Context) {
         }
     }
 
+    private val recoveredResumeScheduler by lazy {
+        RecoveredResumeScheduler(
+            scheduler = AndroidRuntimeScheduler(selfCareHandler),
+            isStarted = { started.get() && runtime.snapshot().state != SageRuntimeState.STOPPED },
+            isIdle = { runtime.snapshot().state == SageRuntimeState.IDLE_WAKE },
+            onExhausted = {
+                traces.record("recovery", "auto-resume polling stopped after bounded busy checks; no recovery attempt made")
+            },
+            delayMs = RECOVERY_RESUME_DELAY_MS,
+            synchronizationLock = runtime
+        )
+    }
+
     private fun scheduleRecoveredResume(candidate: TaskCheckpoint?) {
-        if (candidate == null) return
-        selfCareHandler.postDelayed({
-            if (!started.get()) return@postDelayed
-            if (runtime.snapshot().state != SageRuntimeState.IDLE_WAKE) {
-                traces.record("recovery", "auto-resume deferred because Sage is busy; task=${candidate.taskId}")
-                return@postDelayed
-            }
-            val marked = recovery.markAutoResumeAttempted(candidate.taskId) ?: return@postDelayed
+        if (candidate == null) {
+            recoveredResumeScheduler.cancel()
+            return
+        }
+        recoveredResumeScheduler.schedule {
+            val marked = recovery.markAutoResumeAttempted(candidate.taskId) ?: return@schedule
             traces.record(
                 "recovery",
                 "auto-resuming task=${marked.taskId} depth=${marked.metadata["recoveryDepth"] ?: "1"}"
             )
             runtime.resumeRecoveredTask(marked)
-        }, RECOVERY_RESUME_DELAY_MS)
+        }
     }
 
     private fun runSelfCareCheck() {
         legacyMigrationReport = runLegacyMigration()
         legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
-        val brainHealth = brainStatus()
-        val wakeHealth = wakeStatus()
-        val findings = selfCare.reconcile(
-            SelfCareSnapshot(
-                brainReady = brainHealth.ready,
-                brainDetail = brainHealth.detail,
-                wakeReady = wakeHealth.ready,
-                wakeDetail = wakeHealth.detail,
-                coreRevision = core.current().revision,
-                legacyCorePresent = legacyMigrationReport.legacyCorePresent,
-                migrationErrors = legacyMigrationReport.errors
-            )
-        )
+        val snapshot = selfCareSnapshot()
+        val findings = selfCare.reconcile(snapshot)
         traces.record(
             "self_care",
             if (findings.isEmpty()) "healthy; no unresolved self-care findings"
             else "findings=${findings.joinToString(",") { it.code }}" +
-                if (!wakeHealth.ready) "; wake=${wakeHealth.detail.take(500)}" else ""
+                if (!snapshot.wakeReady) "; wake=${snapshot.wakeDetail.take(500)}" else ""
+        )
+    }
+
+    /** Read existing status; an owner check never restarts services or replays tasks. */
+    private fun selfCareSnapshot(): SelfCareSnapshot {
+        val brainHealth = brainStatus()
+        val wakeHealth = wakeStatus()
+        return SelfCareSnapshot(
+            brainReady = brainHealth.ready,
+            brainDetail = brainHealth.detail,
+            wakeReady = wakeHealth.ready,
+            wakeDetail = wakeHealth.detail,
+            coreRevision = core.current().revision,
+            legacyCorePresent = legacyMigrationReport.legacyCorePresent,
+            migrationErrors = legacyMigrationReport.errors,
+            commandSpeechReady = SageSpeechBackendState.sherpaReady(appContext),
+            commandSpeechDetail = SageSpeechBackendState.readinessDetail(appContext)
         )
     }
 
@@ -409,4 +446,6 @@ class SageRuntimeHost private constructor(context: Context) {
             instance ?: SageRuntimeHost(context).also { instance = it }
         }
     }
+
+    private fun queueOwnerTask(task: TaskCheckpoint): String? = runtime.queueOwnerResume(task)
 }

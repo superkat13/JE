@@ -3,11 +3,12 @@ package com.pineapple.sageos2.continuity
 class TaskRecoveryManager(private val store: TaskContinuityStore) {
     fun supersedeOlderRuntimeTasks(
         keepTaskId: String,
-        nowMs: Long = System.currentTimeMillis()
+        nowMs: Long = System.currentTimeMillis(),
+        onlyTaskId: String? = null
     ): List<TaskCheckpoint> {
         val superseded = mutableListOf<TaskCheckpoint>()
         store.active().forEach { task ->
-            if (task.taskId == keepTaskId) return@forEach
+            if (task.taskId == keepTaskId || (onlyTaskId != null && task.taskId != onlyTaskId)) return@forEach
             if (task.metadata["kind"] != RUNTIME_TURN_KIND) return@forEach
             if (task.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return@forEach
             val updated = task.copy(
@@ -38,7 +39,8 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
                 updatedAtMs = nowMs,
                 metadata = task.metadata + mapOf(
                     "recovered" to "true",
-                    "recoveredAtMs" to nowMs.toString()
+                    "recoveredAtMs" to nowMs.toString(),
+                    "recoveryCheckpointAtMs" to task.updatedAtMs.toString()
                 )
             )
             store.upsert(updated)
@@ -49,18 +51,19 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
 
     fun autoResumeCandidate(): TaskCheckpoint? = store.active()
         .asSequence()
-        .filter { it.state == TaskState.WAITING }
-        .filter { it.metadata["kind"] == RUNTIME_TURN_KIND }
-        .filter { it.metadata["recovered"] == "true" }
-        .filter { it.metadata["autoResumeAttempted"] != "true" }
-        .filter { (it.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) < MAX_AUTO_RESUME_DEPTH }
-        .maxByOrNull { it.updatedAtMs }
+        .filter(::canAutoResume)
+        // Recovery marks every interrupted task at the same time. Select by its last actual
+        // checkpoint instead of making the winner depend on storage iteration order.
+        .maxByOrNull { it.metadata["recoveryCheckpointAtMs"]?.toLongOrNull() ?: it.updatedAtMs }
 
     fun markAutoResumeAttempted(
         taskId: String,
         nowMs: Long = System.currentTimeMillis()
     ): TaskCheckpoint? {
         val task = store.get(taskId) ?: return null
+        // Selection and execution are separated by a delay. Respect cancellation, completion,
+        // supersession and an already-consumed retry budget at the moment of execution.
+        if (!canAutoResume(task)) return null
         val depth = (task.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) + 1
         val updated = task.copy(
             updatedAtMs = nowMs,
@@ -73,6 +76,14 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
         store.upsert(updated)
         return updated
     }
+
+    private fun canAutoResume(task: TaskCheckpoint): Boolean =
+        task.state == TaskState.WAITING &&
+            task.metadata["kind"] == RUNTIME_TURN_KIND &&
+            task.metadata["recovered"] == "true" &&
+            !task.metadata["ownerPrompt"].isNullOrBlank() &&
+            task.metadata["autoResumeAttempted"] != "true" &&
+            (task.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) < MAX_AUTO_RESUME_DEPTH
 
     companion object {
         const val RUNTIME_TURN_KIND = "runtime_turn"

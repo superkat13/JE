@@ -62,4 +62,72 @@ class DiagnosticReportTest {
         assertFalse(report.contains("authorizationReference"))
         assertFalse(report.contains("ownerPrompt"))
     }
+
+    /**
+     * A turn refused the microphone because it was superseded has to be distinguishable in an export
+     * from a turn refused because the recognizer is broken.
+     *
+     * Both are silent and neither opens a cooldown, so without the refusal count the two are
+     * indistinguishable in the field and a device with a working recognizer reads exactly like a
+     * device with a broken one. This is the line that tells them apart, so it is asserted here rather
+     * than only in the service test that produces it.
+     */
+    @Test
+    fun exportSeparatesASupersededTurnFromABrokenRecognizer() {
+        val superseded = DiagnosticReportRenderer.render(
+            snapshot(commandSpeechDetail = "recognizer warm in 40ms, capture refused 4x (superseded)")
+        )
+        assertTrue(superseded.contains("Command speech: ready"))
+        assertTrue(
+            "a superseded turn must be visible in the export",
+            superseded.contains("capture refused 4x (superseded)")
+        )
+
+        val broken = DiagnosticReportRenderer.render(
+            snapshot(commandSpeechDetail = "recognizer not warm: verified sherpa engine/model unavailable")
+        )
+        assertTrue(broken.contains("Command speech: fallback"))
+        assertTrue(broken.contains("verified sherpa engine/model unavailable"))
+        assertFalse(
+            "a genuine fault must not be reported as a refused capture",
+            broken.contains("capture refused")
+        )
+    }
+
+    /** A turn that was never refused must not carry the note at all. */
+    @Test
+    fun exportOmitsTheRefusalNoteWhenNothingWasRefused() {
+        val report = DiagnosticReportRenderer.render(
+            snapshot(commandSpeechDetail = "recognizer warm in 40ms, last turn ended by endpoint")
+        )
+        assertFalse(report.contains("capture refused"))
+    }
+
+    /** The whole snapshot is rebuilt per case; only the command speech line varies. */
+    private fun snapshot(commandSpeechDetail: String) = DiagnosticReportSnapshot(
+        createdAtMs = 1234L,
+        appVersion = "2.0.0 (200)",
+        packageName = "com.pineapple.sagecommander.stable",
+        device = "VASOUN L10_T05",
+        android = "13 (API 33)",
+        runtimeState = "IDLE",
+        listeningMode = "WAKE",
+        brainReady = true,
+        brainDetail = "local model ready",
+        brainLastLatencyMs = 1200L,
+        wakeReady = true,
+        wakeEngine = "Sherpa",
+        wakeDetail = "offline wake ready",
+        commandSpeechReady = !commandSpeechDetail.contains("not warm"),
+        commandSpeechDetail = commandSpeechDetail,
+        capabilities = mapOf("SAGEOS_ROOT_BROKER" to "UNAVAILABLE"),
+        sageCoreRevision = 7L,
+        profileId = "sage",
+        modeId = null,
+        ownerAppsRevision = 3L,
+        ownerAppsCount = 4,
+        chickenTonightScopeStatus = "READY",
+        recoverableTasks = emptyList(),
+        traces = emptyList()
+    )
 }

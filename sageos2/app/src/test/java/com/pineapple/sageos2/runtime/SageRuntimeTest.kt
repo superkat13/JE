@@ -8,6 +8,8 @@ import com.pineapple.sageos2.continuity.*
 import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.identity.*
 import com.pineapple.sageos2.memory.*
+import com.pineapple.sageos2.maintenance.*
+import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
 import com.pineapple.sageos2.speech.*
@@ -446,7 +448,7 @@ class SageRuntimeTest {
         assertTrue(store.active().any { it.metadata["phase"] == "verification_waiting" })
     }
 
-    @Test fun readOnlyRecoveryEvidenceClearsReplayGuardBeforeCorrectiveAction() {
+    @Test fun successfulHealthCheckDoesNotAuthorizeInterruptedMutationReplay() {
         val store = MemoryTaskStore()
         val interrupted = DeviceAction("root.restart_service", mapOf("service" to "print"))
         val task = TaskCheckpoint(
@@ -481,20 +483,127 @@ class SageRuntimeTest {
             1,
             "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>"
         )
-        waitUntil { capability.actions.size == 2 && f.brain.requests.size == 3 }
-        assertEquals("root.restart_service", capability.actions[1].name)
-
-        f.brain.respond(2, "The corrective restart returned.")
-        waitUntil { f.brain.requests.size == 4 }
-        assertTrue(f.brain.requests[3].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+        waitUntil { f.brain.requests.size == 3 }
+        assertEquals(listOf("root.health"), capability.actions.map { it.name })
+        assertTrue(f.brain.requests[2].prompt.contains("SAGE_RECOVERY_REPLAY_BLOCKED"))
 
         f.brain.respond(
-            3,
-            "${GoalCompletionPolicy.VERIFIED_MARKER}\nPrinting is responding after recovery."
+            2,
+            "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nThe broker is healthy, but I cannot prove whether printing restarted."
         )
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Printing is responding after recovery.", f.observer.textResponses.last().second)
+        assertTrue(f.observer.textResponses.last().second.contains("cannot prove"))
+        assertTrue(store.active().any { it.metadata["phase"] == "verification_waiting" })
     }
+
+    @Test fun readOnlyChecksCannotClearReplayGuardOrResetReplayLimit() {
+        for (readOnly in listOf("root.health", "forge.health", "forge.tools", "forge.job", "device.screenshot", "device.read_notifications")) {
+            val store = MemoryTaskStore()
+            val task = interruptedPrintTask()
+            store.upsert(task)
+            val capability = FakeCapabilityBroker(rootActive = true)
+            val f = Fixture(capability = capability, taskContinuity = store)
+            f.runtime.start()
+            f.runtime.resumeRecoveredTask(task)
+            var request = 0
+            repeat(RecoveryCompletionPolicy.MAX_REPLAY_BLOCKS + 1) { attempt ->
+                f.brain.respond(request++, "<SAGE_TOOL>\nname=$readOnly\n</SAGE_TOOL>")
+                waitUntil { f.brain.requests.size == request + 1 }
+                f.brain.respond(request++, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+                if (attempt < RecoveryCompletionPolicy.MAX_REPLAY_BLOCKS) {
+                    waitUntil { f.brain.requests.size == request + 1 }
+                }
+            }
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+            assertEquals(readOnly, listOf(readOnly, readOnly, readOnly), capability.actions.map { it.name })
+            assertTrue(f.observer.textResponses.last().second.contains("did not repeat"))
+            assertTrue(store.active().any { it.metadata["phase"] == "recovery_waiting" })
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun replayGuardSurvivesSecondRestartAfterHealthCheck() {
+        val store = MemoryTaskStore()
+        val task = interruptedPrintTask()
+        store.upsert(task)
+        val first = Fixture(capability = FakeCapabilityBroker(rootActive = true), taskContinuity = store)
+        first.runtime.start()
+        first.runtime.resumeRecoveredTask(task)
+        first.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { first.brain.requests.size == 2 }
+        val checkpoint = store.active().single { it.metadata["phase"] == "brain_after_capability" }
+        assertEquals("root.health", checkpoint.metadata["lastAction"])
+        first.runtime.stop()
+
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val second = Fixture(capability = capability, taskContinuity = store)
+        second.runtime.start()
+        second.runtime.resumeRecoveredTask(checkpoint)
+        second.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+        waitUntil { second.brain.requests.size == 2 }
+        assertTrue(capability.actions.isEmpty())
+        assertTrue(second.brain.requests[1].prompt.contains("SAGE_RECOVERY_REPLAY_BLOCKED"))
+        second.runtime.stop()
+    }
+
+    @Test fun differentRecoveryActionIsAllowedAndBothMutationsStayProtected() {
+        val store = MemoryTaskStore()
+        val task = interruptedPrintTask()
+        store.upsert(task)
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.resumeRecoveredTask(task)
+        f.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=other\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 2 }
+        assertEquals("other", capability.actions.single().arguments["service"])
+        val checkpoint = store.active().single { it.metadata["phase"] == "brain_after_capability" }
+        assertEquals(2, RecoveryCompletionPolicy.replayGuards(checkpoint.metadata).size)
+        f.brain.respond(1, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 3 }
+        assertEquals(1, capability.actions.size)
+        f.runtime.stop()
+    }
+
+    @Test fun normalTurnRecordsMutationHistoryWithoutApplyingRecoveryReplayRules() {
+        val store = MemoryTaskStore()
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("restart printing twice then check health"))
+        repeat(2) { index ->
+            f.brain.respond(index, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == index + 2 }
+        }
+        f.brain.respond(2, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 4 }
+        assertEquals(listOf("root.restart_service", "root.restart_service", "root.health"), capability.actions.map { it.name })
+        val checkpoint = store.active().single()
+        assertEquals("root.health", checkpoint.metadata["lastAction"])
+        assertEquals("root.restart_service", RecoveryCompletionPolicy.replayGuards(checkpoint.metadata).single().actionName)
+        f.runtime.stop()
+    }
+
+    private fun interruptedPrintTask() = TaskCheckpoint(
+        taskId = "runtime:turn:92",
+        title = "Fix printing",
+        state = TaskState.WAITING,
+        summary = "Interrupted while restarting print service.",
+        nextStep = "Recover safely.",
+        updatedAtMs = 100,
+        metadata = mapOf(
+            "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+            "ownerPrompt" to "restart printing and make sure it works",
+            "phase" to "capability",
+            "lastAction" to "root.restart_service",
+            "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(
+                DeviceAction("root.restart_service", mapOf("service" to "print"))
+            ),
+            "toolCount" to "1",
+            "recovered" to "true",
+            "recoveryDepth" to "1"
+        )
+    )
 
     @Test fun normalBrainProseMentioningToolNameNeverExecutesCapability() {
         val capability = FakeCapabilityBroker(rootActive = true)
@@ -553,6 +662,204 @@ class SageRuntimeTest {
         assertEquals(5, f.brain.requests.size)
     }
 
+    @Test fun selfCheckReportsCurrentFailureWithoutBrainAndNextRequestStillWorks() {
+        val snapshot = SelfCareSnapshot(false, "model unavailable", false, "remote wake disconnected", 2, true)
+        var checks = 0
+        val personal = SageSelfCheckResponder(EmptySagePersonalResponder) {
+            checks++
+            SelfCheckReport(snapshot, SelfCarePolicy.evaluate(snapshot), 1)
+        }
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("check yourself"))
+        assertEquals(1, checks)
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(f.fast.requests.isEmpty())
+        val response = f.observer.textResponses.single()
+        assertTrue(response.second.contains("model unavailable"))
+        assertTrue(response.second.contains("remote wake disconnected"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        assertEquals(1, f.brain.requests.size)
+        assertTrue(f.brain.requests.single().turnId != response.first)
+        f.runtime.stop()
+    }
+
+    @Test fun newRuntimeDoesNotOverwriteCompletedTaskWithReusedTurnNumber() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        first.brain.respond(0, "Gravity attracts masses.")
+        val completed = store.recent(10).single()
+        assertEquals(TaskState.COMPLETED, completed.state)
+        first.runtime.stop()
+
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        assertEquals("turn counters restart; persisted IDs must not", first.brain.requests[0].turnId,
+            second.brain.requests[0].turnId)
+        assertEquals("previous outcome must survive a runtime restart", completed, store.get(completed.taskId))
+        assertEquals(2, store.recent(10).size)
+        second.runtime.stop()
+    }
+
+    @Test fun recoveryAcrossRuntimeRestartPreservesItsSourceCheckpoint() {
+        val store = MemoryTaskStore()
+        val first = Fixture(taskContinuity = store)
+        first.runtime.start()
+        first.runtime.submit(SageEvent.TextSubmitted("research the interrupted goal"))
+        val original = store.active().single()
+        // Simulate abrupt loss of the runtime: its active checkpoint survives unchanged.
+        val recovery = TaskRecoveryManager(store)
+        recovery.recoverInterruptedRuntimeTasks()
+        val candidate = recovery.markAutoResumeAttempted(original.taskId)!!
+        val second = Fixture(taskContinuity = store)
+        second.runtime.start()
+        second.runtime.resumeRecoveredTask(candidate)
+
+        val resumed = store.active().single()
+        assertTrue("recovery must create a distinct checkpoint", resumed.taskId != original.taskId)
+        assertEquals(original.taskId, resumed.metadata["recoveredFrom"])
+        val source = store.get(original.taskId)!!
+        assertEquals("true", source.metadata["autoResumeAttempted"])
+        assertEquals(resumed.taskId, source.metadata["supersededBy"])
+        assertEquals(original.metadata["ownerPrompt"], source.metadata["ownerPrompt"])
+        first.runtime.stop()
+        second.runtime.stop()
+    }
+
+    @Test fun lateBrainResponseCannotRemoveNextTurnsWatchdog() {
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        f.brain.respond(0, "Gravity attracts masses.")
+        f.runtime.submit(SageEvent.TextSubmitted("explain sunlight"))
+        f.brain.respond(0, "Late duplicate")
+        assertTrue(scheduler.activeDelays().contains(120_000L))
+        scheduler.runLast(120_000L)
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
+    @Test fun duplicateBrainResultCannotCompleteANewerAttemptInSameTurn() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        f.runtime.start()
+        f.runtime.resumeRecoveredTask(interruptedPrintTask())
+        f.brain.respond(0, "Checking the recovered result.")
+        assertEquals(2, f.brain.requests.size)
+        f.brain.respond(0, "${GoalCompletionPolicy.VERIFIED_MARKER}\nStale completion")
+        assertTrue(f.observer.textResponses.isEmpty())
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        f.brain.respond(1, "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nNeed current evidence.")
+        assertEquals(1, f.observer.textResponses.size)
+        assertTrue(store.active().any { it.state == TaskState.WAITING })
+    }
+
+    @Test fun timedOutBrainResponseCannotOverwriteFailedCheckpoint() {
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(scheduler = scheduler, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+        scheduler.runLast(120_000L)
+        val failed = store.recent(10).single()
+        assertEquals(TaskState.FAILED, failed.state)
+        f.brain.respond(0, "Late success")
+        assertEquals(failed, store.get(failed.taskId))
+        assertEquals(1, f.observer.textResponses.size)
+    }
+
+    @Test fun stuckCapabilityReleasesConversationWithoutClaimingOrReplayingItsOutcome() {
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val release = java.util.concurrent.CountDownLatch(1)
+        val returned = java.util.concurrent.CountDownLatch(1)
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val broker = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE))
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                entered.countDown()
+                // Model a broker that cannot be stopped by Thread.interrupt().
+                while (release.count > 0) {
+                    try { release.await() } catch (_: InterruptedException) { }
+                }
+                returned.countDown()
+                return CapabilityResult(true, "late completion")
+            }
+        }
+        val store = MemoryTaskStore()
+        val scheduler = ManualScheduler()
+        val f = Fixture(capability = broker, scheduler = scheduler, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("restart the print service"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+            assertTrue(entered.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue("tool execution must retain a runtime deadline", scheduler.activeDelays().contains(310_000L))
+            scheduler.runLast(310_000L)
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+            val waiting = store.active().single()
+            assertEquals(TaskState.WAITING, waiting.state)
+            assertEquals("unknown", waiting.metadata["lastActionSuccess"])
+            assertTrue(RecoveryCompletionPolicy.replayGuards(waiting.metadata).isNotEmpty())
+            assertTrue(f.observer.textResponses.single().second.contains("could not confirm"))
+            f.runtime.submit(SageEvent.TextSubmitted("explain gravity"))
+            release.countDown()
+            assertTrue(returned.await(2, java.util.concurrent.TimeUnit.SECONDS))
+            waitUntil { f.observer.diagnostics.any { it.contains("stale capability result ignored") } }
+            assertEquals(2, f.brain.requests.size)
+            assertTrue(scheduler.activeDelays().contains(120_000L))
+            assertEquals(1, calls.get())
+            f.brain.respond(1, "Gravity attracts masses.")
+            assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        } finally {
+            release.countDown()
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun localContinueQueuesRecoveryUntilTheCommandHasFinished() {
+        val store = MemoryTaskStore()
+        fun saved(id: String) = TaskCheckpoint(id, "Saved $id", TaskState.WAITING, "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "original goal $id"))
+        store.upsert(saved("old")); store.upsert(saved("other"))
+        lateinit var runtime: SageRuntime
+        val personal = SageTaskFollowThroughResponder(EmptySagePersonalResponder, store,
+            resume = { runtime.queueOwnerResume(it) })
+        val f = Fixture(taskContinuity = store, coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        runtime = f.runtime
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        assertTrue(f.brain.requests.isEmpty())
+        runtime.submit(SageEvent.TextSubmitted("Saved old"))
+        assertEquals(1, f.brain.requests.size)
+        assertEquals(SageRuntimeState.THINKING_DEEP, runtime.snapshot().state)
+        assertTrue(f.brain.requests.single().prompt.contains("original goal old"))
+        assertEquals(TaskState.WAITING, store.get("other")!!.state)
+        assertEquals(TaskState.COMPLETED, store.get("old")!!.state)
+        f.brain.respond(0, "Finished the original goal")
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+    }
+
+    @Test fun localContinueWithUnavailableBrainKeepsTheTaskAvailable() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint("old", "Saved task", TaskState.WAITING, "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "original goal")))
+        lateinit var runtime: SageRuntime
+        val personal = SageTaskFollowThroughResponder(EmptySagePersonalResponder, store,
+            resume = { runtime.queueOwnerResume(it) })
+        val f = Fixture(taskContinuity = store, coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        runtime = f.runtime; f.brain.ready = false; runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        assertTrue(f.brain.requests.isEmpty())
+        assertEquals(TaskState.WAITING, store.get("old")!!.state)
+        assertFalse(store.get("old")!!.metadata.containsKey("followThroughInFlight"))
+        assertTrue(f.observer.textResponses.any { it.second.contains("unavailable") })
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
@@ -596,10 +903,11 @@ class SageRuntimeTest {
 
     private class FakeBrain:BrainEngine {
         override val name="fake"
+        var ready = true
         val requests=mutableListOf<BrainRequest>()
         private val callbacks=mutableListOf<(Result<BrainResponse>)->Unit>()
         private var successfulLatencyMs:Long?=null
-        override fun health()=BrainHealth(true,"ready",lastLatencyMs=successfulLatencyMs)
+        override fun health()=BrainHealth(ready,if (ready) "ready" else "model missing",lastLatencyMs=successfulLatencyMs)
         override fun start(request:BrainRequest,callback:(Result<BrainResponse>)->Unit):BrainJob {
             requests += request; callbacks += callback
             return object:BrainJob{override val turnId=request.turnId;override fun cancel()=Unit}

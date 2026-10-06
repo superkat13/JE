@@ -158,7 +158,8 @@ class SageTurnCoordinator(
                 lastActionSignature = event.lastActionSignature,
                 lastActionSuccess = event.lastActionSuccess,
                 completedToolCalls = event.completedToolCalls.coerceAtLeast(0),
-                recoveryDepth = event.recoveryDepth.coerceAtLeast(1)
+                recoveryDepth = event.recoveryDepth.coerceAtLeast(1),
+                replayGuardMetadata = event.replayGuardMetadata
             )
         )
     }
