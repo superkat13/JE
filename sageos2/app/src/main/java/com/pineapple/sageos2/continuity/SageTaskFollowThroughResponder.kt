@@ -29,7 +29,7 @@ class SageTaskFollowThroughResponder(
 
     override fun resolve(rawText: String): SagePersonalResolution? {
         // Teaching, memory capture and owner-learned phrases keep their existing precedence.
-        inner.resolve(rawText)?.let { return it }
+        inner.resolve(rawText)?.let { pending = null; return it }
         val command = normalize(rawText)
         val open = pending
         pending = null

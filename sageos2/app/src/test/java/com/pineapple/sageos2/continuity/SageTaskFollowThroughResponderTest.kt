@@ -289,6 +289,25 @@ class SageTaskFollowThroughResponderTest {
         assertTrue(events.any { it.startsWith("owner resume requested task=1") })
     }
 
+    @Test fun unknownDeviceOutcomeCannotBeResumedWithoutEvidence() {
+        store.upsert(task("1", metadata = mapOf("lastActionSuccess" to "unknown")))
+        assertTrue(reply(responder(), "continue that task").contains("not running it again"))
+        assertTrue(resumed.isEmpty())
+    }
+
+    @Test fun anotherLocalConversationClearsThePendingSelection() {
+        store.upsert(task("1")); store.upsert(task("2"))
+        val inner = object : com.pineapple.sageos2.personal.SagePersonalResponder {
+            override fun resolve(rawText: String): SagePersonalResolution? =
+                if (rawText == "check yourself") SagePersonalResolution.Reply("health report") else null
+        }
+        val subject = responder(inner)
+        reply(subject, "cancel that task")
+        reply(subject, "check yourself")
+        assertNull(subject.resolve("1"))
+        assertEquals(2, store.active().size)
+    }
+
     private class MemoryTaskStore : TaskContinuityStore {
         private val tasks = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { tasks[checkpoint.taskId] = checkpoint }
