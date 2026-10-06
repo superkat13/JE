@@ -99,7 +99,43 @@ class SageRuntime(
     }
 
     @Synchronized fun start() { submit(SageEvent.Start) }
-    @Synchronized fun stop() { submit(SageEvent.Stop); speech.shutdown() }
+    @Synchronized fun stop() {
+        val queuedId = pendingOwnerResumeId
+        pendingOwnerResumeId = null
+        queuedId?.let { id ->
+            taskContinuity?.get(id)?.let { task ->
+                taskContinuity.upsert(task.copy(metadata = task.metadata - "followThroughInFlight" -
+                    "followThroughInFlightAtMs" - "ownerResumeRequestedAtMs"))
+            }
+        }
+        submit(SageEvent.Stop)
+        speech.shutdown()
+    }
+
+    private var pendingOwnerResumeId: String? = null
+
+    /** Called by local routing: queue only, never re-enter the coordinator during route(). */
+    @Synchronized fun queueOwnerResume(task: TaskCheckpoint): String? {
+        if (pendingOwnerResumeId != null) return "another saved task is already queued."
+        val current = taskContinuity?.get(task.taskId) ?: return "the saved task is missing."
+        if (current.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return "that task is already settled."
+        if (current.metadata["ownerPrompt"].isNullOrBlank()) return "its original request is missing."
+        if (current.metadata["lastActionSuccess"] == "unknown") return "the previous action's outcome is unknown."
+        val health = brain.health()
+        if (!health.ready) return "my reasoning model is unavailable: ${health.detail}. The task is still saved."
+        pendingOwnerResumeId = current.taskId
+        return null
+    }
+
+    private fun drainOwnerResume() {
+        if (coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        val id = pendingOwnerResumeId ?: return
+        pendingOwnerResumeId = null
+        val current = taskContinuity?.get(id) ?: return
+        if (current.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return
+        if (current.metadata["lastActionSuccess"] == "unknown") return
+        resumeRecoveredTask(current)
+    }
 
     fun resumeRecoveredTask(task: TaskCheckpoint) {
         val metadata = task.metadata
@@ -125,6 +161,7 @@ class SageRuntime(
     @Synchronized fun submit(event: SageEvent) {
         process(coordinator.handle(event))
         observer.onStateChanged(coordinator.snapshot())
+        drainOwnerResume()
     }
     fun snapshot() = coordinator.snapshot()
 
@@ -667,7 +704,7 @@ class SageRuntime(
     ) {
         val store = taskContinuity ?: return
         val id = runtimeTaskId(turnId)
-        TaskRecoveryManager(store).supersedeOlderRuntimeTasks(id)
+        TaskRecoveryManager(store).supersedeOlderRuntimeTasks(id, onlyTaskId = effect.recoveredTaskId)
         val cleanPrompt = effect.ownerPrompt.replace(Regex("\\s+"), " ").trim().take(4_000)
         val metadata = mutableMapOf(
             "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
@@ -733,6 +770,7 @@ class SageRuntime(
         val store = taskContinuity ?: return
         val id = runtimeTaskId(turnId)
         val existing = store.get(id) ?: return
+        if (existing.state == TaskState.CANCELLED) return
         store.upsert(
             existing.copy(
                 state = state,

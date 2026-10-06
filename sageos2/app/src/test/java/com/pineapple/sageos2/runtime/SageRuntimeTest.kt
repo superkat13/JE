@@ -821,6 +821,45 @@ class SageRuntimeTest {
         }
     }
 
+    @Test fun localContinueQueuesRecoveryUntilTheCommandHasFinished() {
+        val store = MemoryTaskStore()
+        fun saved(id: String) = TaskCheckpoint(id, "Saved $id", TaskState.WAITING, "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "original goal $id"))
+        store.upsert(saved("old")); store.upsert(saved("other"))
+        lateinit var runtime: SageRuntime
+        val personal = SageTaskFollowThroughResponder(EmptySagePersonalResponder, store,
+            resume = { runtime.queueOwnerResume(it) })
+        val f = Fixture(taskContinuity = store, coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        runtime = f.runtime
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        assertTrue(f.brain.requests.isEmpty())
+        runtime.submit(SageEvent.TextSubmitted("Saved old"))
+        assertEquals(1, f.brain.requests.size)
+        assertEquals(SageRuntimeState.THINKING_DEEP, runtime.snapshot().state)
+        assertTrue(f.brain.requests.single().prompt.contains("original goal old"))
+        assertEquals(TaskState.WAITING, store.get("other")!!.state)
+        assertEquals(TaskState.COMPLETED, store.get("old")!!.state)
+        f.brain.respond(0, "Finished the original goal")
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+    }
+
+    @Test fun localContinueWithUnavailableBrainKeepsTheTaskAvailable() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint("old", "Saved task", TaskState.WAITING, "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "original goal")))
+        lateinit var runtime: SageRuntime
+        val personal = SageTaskFollowThroughResponder(EmptySagePersonalResponder, store,
+            resume = { runtime.queueOwnerResume(it) })
+        val f = Fixture(taskContinuity = store, coordinator = SageTurnCoordinator(SageCommandRouter(personal = personal)))
+        runtime = f.runtime; f.brain.ready = false; runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        assertTrue(f.brain.requests.isEmpty())
+        assertEquals(TaskState.WAITING, store.get("old")!!.state)
+        assertFalse(store.get("old")!!.metadata.containsKey("followThroughInFlight"))
+        assertTrue(f.observer.textResponses.any { it.second.contains("unavailable") })
+    }
+
     private class Fixture(
         capability: CapabilityBroker = EmptyCapabilityBroker,
         maxToolCallsPerTurn: Int = GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS,
@@ -864,10 +903,11 @@ class SageRuntimeTest {
 
     private class FakeBrain:BrainEngine {
         override val name="fake"
+        var ready = true
         val requests=mutableListOf<BrainRequest>()
         private val callbacks=mutableListOf<(Result<BrainResponse>)->Unit>()
         private var successfulLatencyMs:Long?=null
-        override fun health()=BrainHealth(true,"ready",lastLatencyMs=successfulLatencyMs)
+        override fun health()=BrainHealth(ready,if (ready) "ready" else "model missing",lastLatencyMs=successfulLatencyMs)
         override fun start(request:BrainRequest,callback:(Result<BrainResponse>)->Unit):BrainJob {
             requests += request; callbacks += callback
             return object:BrainJob{override val turnId=request.turnId;override fun cancel()=Unit}

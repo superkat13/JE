@@ -22,6 +22,7 @@ import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
+import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
 import com.pineapple.sageos2.core.SageRuntimeState
@@ -158,7 +159,8 @@ class SageRuntimeHost private constructor(context: Context) {
     val runtime = SageRuntime(
         coordinator = SageTurnCoordinator(
             com.pineapple.sageos2.core.SageCommandRouter(
-                personal = SageSelfCheckResponder(personalCommands) {
+                personal = SageTaskFollowThroughResponder(
+                    inner = SageSelfCheckResponder(personalCommands) {
                     try {
                         val snapshot = selfCareSnapshot()
                         val findings = selfCare.reconcile(snapshot)
@@ -171,6 +173,10 @@ class SageRuntimeHost private constructor(context: Context) {
                         throw error
                     }
                 },
+                    store = tasks,
+                    resume = { task -> queueOwnerTask(task) },
+                    onEvent = { detail -> traces.record("follow_through", detail.take(800)) }
+                ),
                 ownerApps = ownerApps
             )
         ),
@@ -440,4 +446,6 @@ class SageRuntimeHost private constructor(context: Context) {
             instance ?: SageRuntimeHost(context).also { instance = it }
         }
     }
+
+    private fun queueOwnerTask(task: TaskCheckpoint): String? = runtime.queueOwnerResume(task)
 }

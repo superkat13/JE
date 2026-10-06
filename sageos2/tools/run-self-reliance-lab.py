@@ -17,6 +17,7 @@ CLASSES = [
     'runtime.RecoveryCompletionPolicyTest',
     'runtime.RecoveredResumeSchedulerTest',
     'continuity.TaskRecoveryManagerTest',
+    'continuity.SageTaskFollowThroughResponderTest',
     'core.SageTurnCoordinatorTest',
     'speech.CommandEndpointPolicyTest',
     'speech.CommandRecognizerPolicyTest',
