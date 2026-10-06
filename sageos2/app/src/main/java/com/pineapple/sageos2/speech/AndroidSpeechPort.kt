@@ -329,7 +329,16 @@ class AndroidSpeechPort(
         }
     }
 
-    private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
+    override fun resetRecognizer(reason: String) {
+        main.post {
+            listener?.onSpeechDiagnostic("recognizer reset: $reason")
+            sessions.invalidate()
+            runCatching { recognizer?.cancel() }
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+            recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
+        }
+    }
 
     companion object {
         private val LOCAL_BACKEND_FAILURES = setOf(
