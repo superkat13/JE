@@ -592,6 +592,24 @@ class SageSherpaRecognitionServiceLifecycleTest {
         )
     }
 
+    @Test fun stoppedSetupExitCompletesExactlyOnceWithoutCooldown() {
+        val state = admit(callback)
+        service.onStopListening(callback)
+        method("completeStoppedTurn", CommandSpeechTurnState::class.java).invoke(service, state)
+        method("completeStoppedTurn", CommandSpeechTurnState::class.java).invoke(service, state)
+        assertEquals(listOf(SpeechRecognizer.ERROR_NO_MATCH), errors.toList())
+        assertFalse(detail().startsWith("recognizer not warm:"))
+    }
+
+    @Test fun cancelledSetupExitStaysSilentAndStopped() {
+        val state = admit(callback)
+        service.onCancel(callback)
+        assertTrue(state.stopped)
+        method("completeStoppedTurn", CommandSpeechTurnState::class.java).invoke(service, state)
+        assertEquals(0, terminalCount())
+        assertFalse(state.capture.isHeld())
+    }
+
     // ---- helpers -------------------------------------------------------------------------------
 
     private fun terminalCount(): Int = errors.size + results.size

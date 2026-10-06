@@ -251,7 +251,10 @@ public final class SageSherpaRecognitionService extends RecognitionService {
     @Override protected void onCancel(Callback callback) {
         if (!turns.retire(callback)) return;
         CommandSpeechTurnState state = turnFor(callback);
-        if (state != null) retireTurn(state);
+        if (state != null) {
+            state.requestStop();
+            retireTurn(state);
+        }
         awaitRetiredWorker();
     }
 
@@ -518,6 +521,7 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         } finally {
             // Read before the claim is released, because releasing it is not what decides this and
             // the reason has to describe the turn rather than its teardown.
+            completeStoppedTurn(state);
             String completion = lastCompletionFor(endpointReached, state);
             retireTurn(state);
             if (stream != null) try { stream.release(); } catch (Throwable ignored) { }
@@ -759,6 +763,13 @@ public final class SageSherpaRecognitionService extends RecognitionService {
      * turn still owns the session and is owed exactly one outcome. The guard is the turn's own, so
      * admitting a successor cannot re-arm a retired turn's second outcome.
      */
+    // Stop keeps session ownership even when setup or capture exits early. Cancel does not.
+    private void completeStoppedTurn(CommandSpeechTurnState state) {
+        if (state.getStopped() && turns.owns((Callback) state.getCallback())) {
+            emitTerminalError(state, SpeechRecognizer.ERROR_NO_MATCH);
+        }
+    }
+
     private void emitTerminalError(CommandSpeechTurnState state, int code) {
         if (state.claimTerminalOutcome()) emitError((Callback) state.getCallback(), code);
     }
