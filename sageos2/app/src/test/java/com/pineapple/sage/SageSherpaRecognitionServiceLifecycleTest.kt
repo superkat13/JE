@@ -465,7 +465,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
             listOf(SpeechRecognizer.ERROR_RECOGNIZER_BUSY),
             errors.toList()
         )
-        assertNull("a refused request must not begin a turn", turns().live)
+        assertSame("a refused request must preserve the current owner", callback, turns().live)
 
         // The same request once the device is gone, with the turn still unwinding. This is the half
         // that decides which rule admission follows.
@@ -578,6 +578,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
         fail(first, SpeechRecognizer.ERROR_RECOGNIZER_BUSY, IllegalStateException("first"))
         assertEquals(1, terminalCount())
         retireTurn(first)
+        turns().retire(callback) // Match the worker finally block after releasing capture.
 
         // No reset: the successor's guard was never touched by the first turn's outcome.
         val successor = newCallback(service)
@@ -604,7 +605,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
         field("turns").get(service) as CommandSpeechTurnOwnership
 
     private fun liveTurnOrNull(): CommandSpeechTurnState? =
-        field("liveTurn").get(service) as CommandSpeechTurnState?
+        (field("liveTurn").get(service) as java.util.concurrent.atomic.AtomicReference<*>).get() as CommandSpeechTurnState?
 
     /** The claim of whichever turn is live, for asserting what the device is currently held by. */
     private fun liveClaim(): com.pineapple.sageos2.speech.CommandSpeechCaptureClaim =
@@ -719,7 +720,7 @@ class SageSherpaRecognitionServiceLifecycleTest {
         mapOf(
             "tokens.txt" to 5_048L,
             "encoder-epoch-99-avg-1.int8.onnx" to 42_845_182L,
-            "decoder-epoch-99-avg-1.int8.onnx" to 2_092_272L,
+            "decoder-epoch-99-avg-1.onnx" to 2_092_272L,
             "joiner-epoch-99-avg-1.int8.onnx" to 259_572L
         ).forEach { (name, size) ->
             RandomAccessFile(File(model, name), "rw").apply { setLength(size) }.close()
