@@ -1,28 +1,21 @@
 # Voice repair progress
 
-Status: Implemented scaffolding for capture→repair→retest (orchestrator with correlated tracking, explicit test export), added integration test, registered in lab runner. Kotlin host compilation succeeded (:app:compileDebugKotlin UP-TO-DATE). Full Android/JVM unit tests cannot run in this environment due to AAPT2 (x86-64 binary on aarch64 Termux) — known limitation; tests should run in CI.
+Base reviewed: opencode/voice-self-repair at 6e5f22941feed87f45be6e54ed3ed41aebae5ea1.
+Target release remains release/sage-219; installed APK 219 has not changed.
 
-Base: release/sage-219 at 1498d57a3896be072e0d4ae360be7c76a5935512
-Branch: opencode/voice-self-repair
-Current SHA: c821881 (with additional commits merged/integrated; latest is c821881 on branch prior to this push? actual latest is 5831ca4 merged through chain; see commits)
-Actual latest: 5831ca4 (voice-repair: register integration test). Orchestrator/integration added in fc09563, a6f6dc0, dc5c78e, 5831ca4.
+## Completed in Codex controller implementation
 
-Draft PR: https://github.com/superkat13/JE/pull/65 (targeting release/sage-219)
+Replaced the placeholder orchestrator with an executable controller using a dedicated VoiceDiagnosticPort contract. It acquires an idle window, invokes capture, classifies results, requests exactly one reset for supported lifecycle faults, waits for reset completion, and invokes a same-phrase retest. Only a matching retest is verified repair. An initial match is HEALTHY with no repair claimed. Cancellation, scheduled deadline, interruption, duplicate callbacks and retired-session callbacks invalidate ownership and release the adapter.
 
-Completed:
-- Merged codex/voice-repair-review (73215cc) with routing/readiness/guards corrections
-- Domain/types/policy, session manager with guards, responder wired into host chain
-- AndroidSpeechPort reset + VoiceRepairCapable + fault injector
-- VoiceRepairOrchestrator with resetRequested/resetCompleted, explicit test export, test/retest scaffolding
-- Unit tests (manager, responder) and integration test scaffold
-- Lab runner registration for all voice-repair tests
-- Kotlin host compilation: BUILD SUCCESSFUL
+Validation: Kotlin host compilation succeeded. JUnitCore: 111 tests, zero failures (35 voice-repair tests including 16 controller/adapter contract tests; 76 existing runtime/task tests). These are injected-adapter tests, NOT Android microphone acceptance or full Gradle CI. The earlier two integration scaffold tests have been replaced with actual capture/reset/retest assertions.
 
-Actual test runs: compileDebugKotlin succeeded. Android unit test execution blocked in this environment by AAPT2 x86_64/aarch64 mismatch (same as before). Cannot claim full CI pass locally.
+## Exact next implementation boundary for OpenCode
 
-Hardware self-repair evidence: none yet (pending owner procedure; simulated only).
+1. Implement VoiceDiagnosticPort on the Android side. This is an exclusive diagnostic channel, not a second call to SpeechPort.attach (which would replace the runtime listener). Acquire only an idle runtime/microphone window. Suspend wake during that window. Correlate capture/reset/release callbacks on the main thread and ensure release restores the previous listening mode without stealing a successor's microphone. reset must call actual recognizer teardown/recreation and report completion/failure. Do not map completion to posting a Handler runnable.
+2. Connect typed repair entry to expected-phrase input and the controller after the local reply finishes. Show readiness before the owner speaks, a visible cancellation action, actual before/after words/error/timing, and explicit export. Test phrases must never reach SageCommandRouter or normal speech listeners. The current host still has no startRepair callback and must remain honest until this wiring works.
+3. Persist interrupted/unverified state and bounded history; the in-memory controller does not implement process-restart persistence. onChanged provides a session snapshot, not proof that persistence occurred.
+4. Compile the actual Android adapter and host. Add Android integration tests for listener isolation, actual reset/recreation and mic ownership. Run full CI. Then provide one tablet acceptance procedure. Do not publish this intermediate controller-only state as a numbered APK.
 
-Remaining hardware checks: owner runs short tablet procedure as specified in handoff; hardware acceptance pending. 
-Implementation gaps vs full spec: orchestrator repair/retest path can be extended with real adapter reset invocation and full correlated completion contract (scaffolding present). Comprehensive integration tests for all cases (fault→reset→retest verified, mismatch, late callbacks, cancel/timeout, busy admission, restart interruption, command-shaped isolation) are scaffolded; CI will validate.
+Controller API: startRepair(expectedPhrase) returns false when admission is busy; cancel() and interrupt() release ownership; createExport() returns explicit test evidence. Constructor requires VoiceDiagnosticPort, VoiceRepairSessionManager and RuntimeScheduler; the scheduler must execute its deadline on the same serialized thread as the port. No Brain is required. Expected phrases are immutable within a session (cancel and start another to change one).
 
-Blockers: none (environmental only - AAPT2). Evidence: compile successful, code structure matches acceptance requirements.
+No hardware evidence or successful self-repair on the owner's tablet has been claimed. The original ASR accuracy problem remains unverified.

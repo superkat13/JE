@@ -75,6 +75,6 @@ class VoiceRepairSessionManager(
     @Synchronized fun clear() { session = null }
 
     companion object {
-        private val TERMINAL = setOf(VoiceRepairState.SUCCESS, VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)
+        private val TERMINAL = setOf(VoiceRepairState.HEALTHY, VoiceRepairState.SUCCESS, VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)
     }
 }

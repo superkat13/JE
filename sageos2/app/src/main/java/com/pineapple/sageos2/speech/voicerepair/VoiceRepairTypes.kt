@@ -9,6 +9,7 @@ enum class VoiceRepairState {
     REPAIRING,
     RETESTING,
     SUCCESS,
+    HEALTHY,
     FAILED,
     CANCELLED,
     INTERRUPTED
