@@ -1,22 +1,19 @@
 # Voice repair progress
 
-Status: Implementing capture→repair→retest controller and integration tests. Orchestrator scaffolding added; next: extend orchestrator with correlated reset completion contract and explicit diagnostic routing.
+Status: Added orchestrator with correlated reset tracking and explicit test export; added integration test and registered in lab runner. Remaining: flesh out orchestrator's repair/retest path with actual adapter reset invocation and bounded timeouts; add full integration tests for all required cases (fault→reset→retest, late callbacks, cancel/timeout, busy admission, restart interruption, command-shaped isolation). Record actual compile/test results.
 
 Base: release/sage-219 at 1498d57a3896be072e0d4ae360be7c76a5935512
 Branch: opencode/voice-self-repair
-Current SHA: fc09563
+Current SHA: 5831ca4
 Draft PR: https://github.com/superkat13/JE/pull/65 (targeting release/sage-219)
 
 Completed:
-- Merged codex review (guards, readiness, routing, AndroidSpeechPort fixes)
-- VoiceRepairOrchestrator scaffolding added
+- Orchestrator with resetRequested/resetCompleted, export with explicit test evidence, test/retest handling scaffolding
+- Integration test scaffold + registration
 
 Next:
-1. Extend orchestrator to handle correlated reset completion/failure contract; do not count reset requested as completed; track resetRequested/resetCompleted, generation, timeouts.
-2. Add dedicated diagnostic input path + session-scoped routing (test results never go to normal command routing). Add integration test for command-shaped phrases.
-3. Implement retest logic with same-phrase verification; require evidence before SUCCESS per manager rules.
-4. Add integration tests: fault→real adapter reset→retest, late callbacks, cancel/timeout, busy admission, restart interruption.
-5. Run Android compile + full CI where possible; record actual results honestly.
-6. Update progress with concrete evidence.
+1. Connect orchestrator to VoiceRepairCapable (AndroidSpeechPort) to perform real reset on REPAIRING; track reset completion; enforce one attempt, generation checks, bounded timeouts.
+2. Add comprehensive integration tests: recoverable lifecycle fault→real adapter reset→retest verified; mismatch stays unverified; wrong transcript; cancel/deadline; late callbacks; busy admission; restart interruption; test phrases never reach normal actions; local with Brain unavailable.
+3. Run host compilation + unit tests where possible; document actual results honestly. No hardware validation yet.
 
-Tests: manager/responder unit tests. Hardware evidence: none yet. Blockers: none.
+Tests added: VoiceRepairIntegrationTest. Hardware evidence: none yet. Blockers: none.
