@@ -1,29 +1,23 @@
 # Voice repair progress
 
-Status: Scaffolding implemented. Draft PR created. Next: complete orchestration (test+repair+retest), add comprehensive tests, and capture before/after evidence.
+Status: Merged codex/voice-repair-review (73215cc) into branch. Review corrected routing/readiness/guards and added review doc. Next: implement capture→repair→retest controller and connect properly, with correlated completion/failure contracts and explicit test routing.
 
-Base SHA: 1498d57a3896be072e0d4ae360be7c76a5935512
+Base: release/sage-219 at 1498d57a3896be072e0d4ae360be7c76a5935512
 Branch: opencode/voice-self-repair
-Current SHA: 252c34e
+Current SHA: b93e0e1
 Draft PR: https://github.com/superkat13/JE/pull/65 (targeting release/sage-219)
 
-Completed:
-- Voice repair domain (types, policy, export renderer)
-- Session manager with deadline/cancel/interrupt semantics
-- VoiceRepairResponder for local typed commands; wired into host personal chain
-- Fault injector and AndroidSpeechPort reset/recreate hook + VoiceRepairCapable
-- Unit tests (manager, responder); lab runner registration
-- Progress tracking updated throughout
+Completed (merged review):
+- Routing/readiness corrections in VoiceRepairResponder; clearer "workflow not connected" behavior
+- Session manager guards for retired callbacks/terminal-state revival, one-session rule, deadlines, retest evidence before SUCCESS
+- AndroidSpeechPort fixes (reset interface, PendingSpeech preserved, guards)
+- Policy updated; tests adjusted
 
-Next:
-1. Implement VoiceRepairOrchestrator coordinating speech port, manager, expected phrase capture, test/repair/retest, explicit test export.
-2. Add tests for all required acceptance cases (lifecycle fault->repair->verified, mismatch unverified, wrong transcript, cancel/deadline, late callbacks, busy, restart interruption, test phrases never reach actions, local with Brain unavailable).
-3. Run relevant tests where possible; document actual compile/test results and blockers.
-4. Update progress with concrete before/after evidence.
+Next (per Codex review):
+1. Implement capture/repair/retest controller; connect startRepair only when runnable; reserve idle runtime window; defer mic changes; prevent wake/normal turns from taking diagnostic mic; explain busy blockers.
+2. Dedicated diagnostic input path for expected phrase; route test results to that session only (never normal routing); add integration test for command-shaped phrases isolation.
+3. Replace fire-and-forget reset with correlated completion/failure contract on main thread; generation checks, bounded timeouts, one attempt, cancellation, shutdown guards, resource release, listening-mode restoration; do not count reset requested as completed.
+4. Persist interrupted/unverified sessions + bounded history; perform same-phrase retest; report words/error/backend/timing; export only explicit test evidence (no transcripts in ordinary traces).
+5. Add integration tests for fault→real adapter reset→retest, late callbacks, cancel/timeout, busy admission, restart; run Android compile + full CI where possible; document actual results.
 
-Tests: VoiceRepairSessionManagerTest, VoiceRepairResponderTest added. Hardware evidence: none yet. Blockers: none.
-
-
-## Codex review checkpoint
-
-See VOICE_REPAIR_CODEX_REVIEW.md for corrections, 95 passing host tests, and the exact implementation continuation. The repair controller remains unimplemented and the host now responds honestly instead of announcing a nonexistent repair. No new APK or hardware validation.
+Tests: existing voice-repair unit tests included. Hardware evidence: none yet. Blockers: none.
