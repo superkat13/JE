@@ -22,6 +22,9 @@ import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
 import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -50,6 +53,7 @@ import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.personal.SagePersonalCommandEngine
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
+import com.pineapple.sageos2.speech.VoiceDiagnosticAdapter
 import com.pineapple.sageos2.speech.RemoteWakeWordEngine
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
@@ -73,6 +77,12 @@ class SageRuntimeHost private constructor(context: Context) {
     val traces = SharedPreferencesTraceStore(appContext)
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
     val recovery = TaskRecoveryManager(tasks)
+    private val voiceRepairManager = VoiceRepairSessionManager()
+    private val voiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
+        port = VoiceDiagnosticAdapter(speech),
+        manager = voiceRepairManager,
+        scheduler = AndroidRuntimeScheduler()
+    ) }
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
@@ -159,23 +169,26 @@ class SageRuntimeHost private constructor(context: Context) {
     val runtime = SageRuntime(
         coordinator = SageTurnCoordinator(
             com.pineapple.sageos2.core.SageCommandRouter(
-                personal = SageTaskFollowThroughResponder(
-                    inner = SageSelfCheckResponder(personalCommands) {
-                    try {
-                        val snapshot = selfCareSnapshot()
-                        val findings = selfCare.reconcile(snapshot)
-                        traces.record("self_care", "owner check; findings=${findings.joinToString(",") { it.code }}")
-                        SelfCheckReport(snapshot, findings, tasks.active().count {
-                            it.metadata["kind"] != SelfCareManager.KIND
-                        })
-                    } catch (error: Exception) {
-                        traces.record("self_care", "owner check failed: ${error.message ?: error::class.java.simpleName}")
-                        throw error
-                    }
-                },
-                    store = tasks,
-                    resume = { task -> queueOwnerTask(task) },
-                    onEvent = { detail -> traces.record("follow_through", detail.take(800)) }
+                personal = VoiceRepairResponder(
+                    inner = SageTaskFollowThroughResponder(
+                        inner = SageSelfCheckResponder(personalCommands) {
+                            try {
+                                val snapshot = selfCareSnapshot()
+                                val findings = selfCare.reconcile(snapshot)
+                                traces.record("self_care", "owner check; findings=${findings.joinToString(",") { it.code }}")
+                                SelfCheckReport(snapshot, findings, tasks.active().count {
+                                    it.metadata["kind"] != SelfCareManager.KIND
+                                })
+                            } catch (error: Exception) {
+                                traces.record("self_care", "owner check failed: ${error.message ?: error::class.java.simpleName}")
+                                throw error
+                            }
+                        },
+                        store = tasks,
+                        resume = { task -> queueOwnerTask(task) },
+                        onEvent = { detail -> traces.record("follow_through", detail.take(800)) }
+                    ),
+                    manager = voiceRepairManager
                 ),
                 ownerApps = ownerApps
             )

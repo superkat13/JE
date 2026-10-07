@@ -22,7 +22,7 @@ class AndroidSpeechPort(
     context: Context,
     private val wakeWordEngine: WakeWordEngine,
     private val wakeProfiles: WakeProfileProvider = SharedPreferencesWakeProfileStore(context)
-) : SpeechPort, TextToSpeech.OnInitListener {
+) : SpeechPort, TextToSpeech.OnInitListener, com.pineapple.sageos2.speech.voicerepair.VoiceRepairCapable {
     private val appContext = context.applicationContext
     private val main = Handler(Looper.getMainLooper())
     private var listener: SpeechInputListener? = null
@@ -330,6 +330,23 @@ class AndroidSpeechPort(
     }
 
     private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
+
+    override fun resetRecognizer(reason: String) {
+        main.post {
+            if (destroyed) return@post
+            // A caller must first reserve an idle diagnostic window. Never cancel a live command.
+            if (desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) {
+                listener?.onSpeechDiagnostic("recognizer reset refused: command capture active")
+                return@post
+            }
+            listener?.onSpeechDiagnostic("recognizer reset requested")
+            sessions.invalidate()
+            runCatching { recognizer?.cancel() }
+            runCatching { recognizer?.destroy() }
+            recognizer = null
+            recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
+        }
+    }
 
     companion object {
         private val LOCAL_BACKEND_FAILURES = setOf(
