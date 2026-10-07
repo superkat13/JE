@@ -22,3 +22,8 @@ Next:
 4. Update progress with concrete before/after evidence.
 
 Tests: VoiceRepairSessionManagerTest, VoiceRepairResponderTest added. Hardware evidence: none yet. Blockers: none.
+
+
+## Codex review checkpoint
+
+See VOICE_REPAIR_CODEX_REVIEW.md for corrections, 95 passing host tests, and the exact implementation continuation. The repair controller remains unimplemented and the host now responds honestly instead of announcing a nonexistent repair. No new APK or hardware validation.

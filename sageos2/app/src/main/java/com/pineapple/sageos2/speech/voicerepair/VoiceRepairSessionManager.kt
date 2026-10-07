@@ -1,76 +1,80 @@
 package com.pineapple.sageos2.speech.voicerepair
 
 import java.util.UUID
-import java.util.concurrent.atomic.AtomicReference
 
+/** Serializes session ownership; retired callbacks cannot overwrite a successor or terminal result. */
 class VoiceRepairSessionManager(
     private val clockMs: () -> Long = System::currentTimeMillis
 ) {
-    private val currentRef = AtomicReference<VoiceRepairSession?>(null)
+    private var session: VoiceRepairSession? = null
 
-    fun current(): VoiceRepairSession? = currentRef.get()
+    @Synchronized fun current(): VoiceRepairSession? {
+        expire()
+        return session
+    }
 
-    fun startSession(testPhrase: String, timeoutMs: Long = VoiceRepairPolicy.DEFAULT_TIMEOUT_MS): VoiceRepairSession {
-        val id = UUID.randomUUID().toString()
+    @Synchronized fun startSession(testPhrase: String, timeoutMs: Long = VoiceRepairPolicy.DEFAULT_TIMEOUT_MS): VoiceRepairSession {
+        require(timeoutMs > 0) { "timeout must be positive" }
+        expire()
+        check(session == null || session!!.state in TERMINAL) { "voice repair already active" }
         val now = clockMs()
-        val session = VoiceRepairSession(
-            id = id,
-            state = VoiceRepairState.DIAGNOSING,
-            cause = VoiceRepairCause.NONE,
-            maxAttempts = VoiceRepairPolicy.MAX_ATTEMPTS,
-            startedAtMs = now,
-            deadlineMs = now + timeoutMs,
-            testPhrase = testPhrase.trim(),
+        return VoiceRepairSession(
+            id = UUID.randomUUID().toString(), state = VoiceRepairState.DIAGNOSING,
+            cause = VoiceRepairCause.NONE, maxAttempts = VoiceRepairPolicy.MAX_ATTEMPTS,
+            startedAtMs = now, deadlineMs = now + timeoutMs, testPhrase = testPhrase.trim(),
             steps = listOf(VoiceRepairStep("start", now, "session started"))
-        )
-        currentRef.set(session)
-        return session
+        ).also { session = it }
     }
 
-    fun update(session: VoiceRepairSession): VoiceRepairSession {
-        val now = clockMs()
-        if (session.deadlineMs != null && now > session.deadlineMs && session.state !in setOf(VoiceRepairState.SUCCESS, VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)) {
-            val updated = session.copy(
-                state = VoiceRepairState.FAILED,
-                cause = VoiceRepairCause.DEADLINE_EXCEEDED,
-                endedAtMs = now,
-                steps = session.steps + VoiceRepairStep("deadline", now, "exceeded")
-            )
-            currentRef.set(updated)
-            return updated
+    @Synchronized fun update(candidate: VoiceRepairSession): VoiceRepairSession {
+        expire()
+        val current = checkNotNull(session) { "no voice repair session" }
+        if (current.id != candidate.id || current.state in TERMINAL) return current
+        if (candidate.state.ordinal < current.state.ordinal) return current
+        require(candidate.deadlineMs == current.deadlineMs) { "deadline cannot be extended by callbacks" }
+        require(candidate.attemptCount in current.attemptCount..current.maxAttempts) { "repair attempt budget exceeded" }
+        if (candidate.state == VoiceRepairState.SUCCESS) {
+            require(candidate.secondTest?.errorCode == null && candidate.secondTest != null &&
+                candidate.repairAppliedAtMs != null && candidate.attemptCount == 1 &&
+                candidate.secondTest.expected == current.testPhrase &&
+                candidate.secondTest.recognized?.trim()?.equals(current.testPhrase.trim(), ignoreCase = true) == true) {
+                "repair success requires a matching retest after a repair"
+            }
         }
-        currentRef.set(session)
-        return session
+        session = candidate
+        return candidate
     }
 
-    fun cancel(): VoiceRepairSession? {
-        val current = currentRef.get() ?: return null
+    @Synchronized fun cancel(): VoiceRepairSession? = finish(VoiceRepairState.CANCELLED)
+    @Synchronized fun markInterrupted(): VoiceRepairSession? = finish(VoiceRepairState.INTERRUPTED)
+
+    private fun finish(state: VoiceRepairState): VoiceRepairSession? {
+        expire()
+        val current = session ?: return null
+        if (current.state in TERMINAL) return null
         val now = clockMs()
-        val cancelled = current.copy(
-            state = VoiceRepairState.CANCELLED,
-            cause = VoiceRepairCause.CANCELLED_BY_OWNER,
-            cancelled = true,
+        return current.copy(state = state,
+            cause = if (state == VoiceRepairState.CANCELLED) VoiceRepairCause.CANCELLED_BY_OWNER else current.cause,
+            cancelled = state == VoiceRepairState.CANCELLED,
+            interrupted = state == VoiceRepairState.INTERRUPTED,
             endedAtMs = now,
-            steps = current.steps + VoiceRepairStep("cancel", now, "owner cancelled")
-        )
-        currentRef.set(cancelled)
-        return cancelled
+            steps = current.steps + VoiceRepairStep(state.name.lowercase(), now)
+        ).also { session = it }
     }
 
-    fun markInterrupted(): VoiceRepairSession? {
-        val current = currentRef.get() ?: return null
+    private fun expire() {
+        val current = session ?: return
+        val deadline = current.deadlineMs ?: return
         val now = clockMs()
-        val interrupted = current.copy(
-            state = VoiceRepairState.INTERRUPTED,
-            interrupted = true,
-            endedAtMs = now,
-            steps = current.steps + VoiceRepairStep("interrupt", now, "interrupted by app")
-        )
-        currentRef.set(interrupted)
-        return interrupted
+        if (current.state !in TERMINAL && now >= deadline) {
+            session = current.copy(state = VoiceRepairState.FAILED, cause = VoiceRepairCause.DEADLINE_EXCEEDED,
+                endedAtMs = now, steps = current.steps + VoiceRepairStep("deadline", now, "exceeded"))
+        }
     }
 
-    fun clear() {
-        currentRef.set(null)
+    @Synchronized fun clear() { session = null }
+
+    companion object {
+        private val TERMINAL = setOf(VoiceRepairState.SUCCESS, VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)
     }
 }

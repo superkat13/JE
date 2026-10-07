@@ -1,6 +1,6 @@
 package com.pineapple.sageos2.speech.voicerepair
 
-import com.pineapple.sageos2.speech.SpeechRecognizer
+import android.speech.SpeechRecognizer
 
 object VoiceRepairPolicy {
     const val DEFAULT_TIMEOUT_MS = 30000L
@@ -18,7 +18,7 @@ object VoiceRepairPolicy {
 
     fun canApplyRepair(cause: VoiceRepairCause): Boolean = when (cause) {
         VoiceRepairCause.RECOGNIZER_LIFECYCLE_FAILURE -> true
-        VoiceRepairCause.NO_SPEECH -> true
+        VoiceRepairCause.NO_SPEECH -> false
         else -> false
     }
 
