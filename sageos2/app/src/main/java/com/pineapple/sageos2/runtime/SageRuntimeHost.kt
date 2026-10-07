@@ -24,6 +24,7 @@ import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
 import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -52,6 +53,7 @@ import com.pineapple.sageos2.mode.SharedPreferencesSageModeController
 import com.pineapple.sageos2.personal.SagePersonalCommandEngine
 import com.pineapple.sageos2.root.SocketRootBrokerClient
 import com.pineapple.sageos2.speech.AndroidSpeechPort
+import com.pineapple.sageos2.speech.VoiceDiagnosticAdapter
 import com.pineapple.sageos2.speech.RemoteWakeWordEngine
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.workflow.SharedPreferencesChickenTonightScopeStore
@@ -76,6 +78,11 @@ class SageRuntimeHost private constructor(context: Context) {
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
     val recovery = TaskRecoveryManager(tasks)
     private val voiceRepairManager = VoiceRepairSessionManager()
+    private val voiceRepairOrchestrator = VoiceRepairOrchestrator(
+        port = VoiceDiagnosticAdapter(speech),
+        manager = voiceRepairManager,
+        scheduler = AndroidRuntimeScheduler()
+    )
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
