@@ -78,11 +78,11 @@ class SageRuntimeHost private constructor(context: Context) {
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
     val recovery = TaskRecoveryManager(tasks)
     private val voiceRepairManager = VoiceRepairSessionManager()
-    private val voiceRepairOrchestrator = VoiceRepairOrchestrator(
+    private val voiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
         port = VoiceDiagnosticAdapter(speech),
         manager = voiceRepairManager,
         scheduler = AndroidRuntimeScheduler()
-    )
+    ) }
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
     val history = SharedPreferencesConversationHistoryStore(appContext)
