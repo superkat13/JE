@@ -1,0 +1,262 @@
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/MainActivity.java b/app/src/main/java/com/pineapple/sage/MainActivity.java
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-08-08 22:23:54.882971673 -0500
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-08-08 22:28:17.396552381 -0500
+@@ -75,0 +76 @@
++    private TextView surpriseSummary;
+@@ -340,0 +342,31 @@
++        TextView createTitle = new TextView(this);
++        createTitle.setText("Create");
++        createTitle.setTextSize(23);
++        createTitle.setTextColor(Color.rgb(31, 41, 55));
++        createTitle.setPadding(4, 18, 4, 4);
++        root.addView(createTitle, spaced());
++
++        TextView surpriseTitle = new TextView(this);
++        surpriseTitle.setText("Surprise Me");
++        surpriseTitle.setTextSize(18);
++        surpriseTitle.setTextColor(Color.rgb(31, 41, 55));
++        surpriseTitle.setPadding(8, 8, 8, 2);
++        root.addView(surpriseTitle, matchWrap());
++        LinearLayout surpriseRowOne = surpriseRow();
++        addSurpriseButton(surpriseRowOne,"Surprise Me","surprise me");
++        addSurpriseButton(surpriseRowOne,"YouTube","surprise me on YouTube");
++        addSurpriseButton(surpriseRowOne,"Weird","find me something weird");
++        root.addView(surpriseRowOne,spacedSmall());
++        LinearLayout surpriseRowTwo = surpriseRow();
++        addSurpriseButton(surpriseRowTwo,"Rabbit Hole","send me down a rabbit hole");
++        addSurpriseButton(surpriseRowTwo,"Another","another one");
++        addSurpriseButton(surpriseRowTwo,"Stop","stop");
++        root.addView(surpriseRowTwo,spacedSmall());
++        surpriseSummary = new TextView(this);
++        surpriseSummary.setTextSize(14);
++        surpriseSummary.setTextColor(Color.rgb(55,65,81));
++        surpriseSummary.setPadding(12,8,12,10);
++        surpriseSummary.setContentDescription("Last surprise selection and route");
++        root.addView(surpriseSummary,matchWrap());
++        refreshSurpriseSummary();
++
+@@ -1281,0 +1314,4 @@
++    private LinearLayout surpriseRow(){LinearLayout row=new LinearLayout(this);row.setOrientation(LinearLayout.HORIZONTAL);return row;}
++    private void addSurpriseButton(LinearLayout row,String label,String command){Button button=makeButton(label);button.setMinHeight(dp(44));button.setContentDescription(label+" surprise discovery");button.setOnClickListener(v->{dispatchTypedCommand(command);button.postDelayed(this::refreshSurpriseSummary,1200L);});row.addView(button,new LinearLayout.LayoutParams(0,ViewGroup.LayoutParams.WRAP_CONTENT,1f));}
++    private void refreshSurpriseSummary(){if(surpriseSummary!=null)surpriseSummary.setText(SageSurpriseManager.summary(this));}
++
+@@ -1432,0 +1469 @@
++        refreshSurpriseSummary();
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java
+--- a/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java	2026-08-08 22:23:54.914971318 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageAccessibilityService.java	2026-08-08 22:31:50.527124036 -0500
+@@ -37,0 +38,4 @@
++    static final class SurpriseSelection {
++        final boolean opened; final String title, uri, provider, identity, rejection;
++        SurpriseSelection(boolean opened,String title,String uri,String provider,String identity,String rejection){this.opened=opened;this.title=title;this.uri=uri;this.provider=provider;this.identity=identity;this.rejection=rejection;}
++    }
+@@ -38,0 +43 @@
++    private View surpriseStopView;
+@@ -99,0 +105 @@
++        hideSurpriseStopControl();
+@@ -108,0 +115 @@
++        SageSurpriseManager.onAccessibilityEvent(this, event);
+@@ -277,0 +285,49 @@
++
++    static SurpriseSelection selectSurpriseVideo(long seed, Set<String> recent) {
++        return selectSurprise(seed, recent, "video", true);
++    }
++
++    static SurpriseSelection selectSurpriseCurrent(long seed, Set<String> recent) {
++        return selectSurprise(seed, recent, "generic", false);
++    }
++
++    private static SurpriseSelection selectSurprise(long seed, Set<String> recent,
++                                                     String type, boolean requireYouTube) {
++        SageAccessibilityService service=instance;
++        if(service==null)return new SurpriseSelection(false,"","","","","accessibility_unavailable");
++        AccessibilityNodeInfo root=service.getRootInActiveWindow();
++        if(root==null)return new SurpriseSelection(false,"","","","","no_active_window");
++        String provider=root.getPackageName()==null?"":root.getPackageName().toString();
++        if(requireYouTube&&!provider.toLowerCase(Locale.US).contains("youtube"))return new SurpriseSelection(false,"","",provider,"","youtube_not_visible");
++        DisplayMetrics metrics=service.getResources().getDisplayMetrics();
++        List<ScreenTarget> targets=findInteractiveTargets(root,type,metrics.widthPixels,metrics.heightPixels);
++        List<SageSurprisePolicy.Candidate> candidates=new ArrayList<>();
++        for(ScreenTarget target:targets)candidates.add(surpriseCandidate(target,provider,type));
++        SageSurprisePolicy.Candidate selected=SageSurprisePolicy.choose(candidates,recent,seed,provider,"");
++        if(selected==null)return new SurpriseSelection(false,"","",provider,"","no_safe_nonrepeat_candidate");
++        ScreenTarget saved=null;for(ScreenTarget target:targets)if(surpriseCandidate(target,provider,type).identity().equals(selected.identity())){saved=target;break;}
++        if(saved==null)return new SurpriseSelection(false,"","",provider,"","candidate_lost");
++        AccessibilityNodeInfo refreshedRoot=service.getRootInActiveWindow();
++        if(refreshedRoot==null)return new SurpriseSelection(false,"","",provider,"","stale_window");
++        String refreshedProvider=refreshedRoot.getPackageName()==null?"":refreshedRoot.getPackageName().toString();
++        List<ScreenTarget> refreshed=findInteractiveTargets(refreshedRoot,type,metrics.widthPixels,metrics.heightPixels);
++        ScreenTarget current=null;for(ScreenTarget target:refreshed){SageSurprisePolicy.Candidate candidate=surpriseCandidate(target,refreshedProvider,type);if(candidate.identity().equals(selected.identity())){current=target;break;}}
++        if(current==null||!semanticIdentityMatches(saved,current))return new SurpriseSelection(false,selected.title,selected.uri,provider,selected.identity(),"immediate_revalidation_failed");
++        SageSurprisePolicy.Candidate currentCandidate=surpriseCandidate(current,refreshedProvider,type);
++        if(!SageSurprisePolicy.revalidate(selected,currentCandidate))return new SurpriseSelection(false,selected.title,selected.uri,provider,selected.identity(),"policy_revalidation_failed");
++        boolean opened=service.clickNodeOrTap(current.node,current.bounds);
++        SageDiagnostics.appendEvent(service,"SURPRISE TARGET","seed="+seed+" identity="+selected.identity()+" revalidated=true opened="+opened+" source=standard_visible_semantics");
++        return new SurpriseSelection(opened,selected.title,selected.uri,provider,selected.identity(),opened?"":"action_failed");
++    }
++
++    private static SageSurprisePolicy.Candidate surpriseCandidate(ScreenTarget target,String provider,String type){
++        String title=target==null?"":target.text;String normalized=normalizeTargetText(title);
++        boolean advertising=normalized.contains("sponsored")||normalized.matches("(^|.* )ad( |$).*")||normalized.contains("advertisement");
++        boolean navigation=normalized.equals("home")||normalized.equals("shorts")||normalized.equals("subscriptions")||normalized.equals("library")||normalized.equals("search")||normalized.equals("you");
++        boolean related=type.equals("generic")||target.score>0;
++        return new SageSurprisePolicy.Candidate(title,"",provider,type,"standard_accessibility_tree",true,target!=null&&target.node!=null&&target.node.isEnabled(),false,advertising,navigation,related,true);
++    }
++
++    static void showSurpriseStopControl(){SageAccessibilityService service=instance;if(service==null||service.windowManager==null||service.surpriseStopView!=null)return;TextView stop=new TextView(service);stop.setText("Stop");stop.setContentDescription("Stop surprise discovery and media");stop.setTextColor(Color.WHITE);stop.setTextSize(17f);stop.setGravity(Gravity.CENTER);stop.setPadding(28,18,28,18);stop.setBackgroundColor(0xE6B91C1C);stop.setOnClickListener(v->SageSurpriseManager.execute(service,"stop"));WindowManager.LayoutParams params=new WindowManager.LayoutParams(WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.WRAP_CONTENT,WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,android.graphics.PixelFormat.TRANSLUCENT);params.gravity=Gravity.BOTTOM|Gravity.END;params.x=24;params.y=48;try{service.windowManager.addView(stop,params);service.surpriseStopView=stop;SageDiagnostics.appendEvent(service,"SURPRISE UI","visible_stop=true standard_safe=true");}catch(RuntimeException error){SageDiagnostics.appendEvent(service,"SURPRISE UI","visible_stop=false reason="+error.getClass().getSimpleName());}}
++    private void hideSurpriseStopControl(){if(surpriseStopView!=null&&windowManager!=null){try{windowManager.removeView(surpriseStopView);}catch(RuntimeException ignored){}surpriseStopView=null;}}
++    static void cancelSurprise(){SageAccessibilityService service=instance;if(service!=null){service.mainHandler.removeCallbacksAndMessages(null);service.clearNumberOverlayInternal("surprise_stop",null);service.hideSurpriseStopControl();}}
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-08 22:23:54.934971096 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-08 22:27:45.224803437 -0500
+@@ -128,0 +129,6 @@
++        SageSurpriseManager.Outcome surprise=SageSurpriseManager.execute(context,raw);
++        if(surprise.matched){
++            pendingAction="";
++            SageDiagnostics.appendEvent(context,"SURPRISE RESULT","route="+surprise.route+" opened="+surprise.opened+" pending="+surprise.pending+" duplicate_dispatch=false");
++            return surprise.quiet?Result.quiet(surprise.message):new Result(surprise.message);
++        }
+@@ -142,3 +148 @@
+-        if (isAny(lower, "surprise me", "sage surprise me", "i am bored", "im bored",
+-                "cure boredom", "sage cure boredom")
+-                || lower.contains("video idea") || lower.contains("image prompt")
++        if (lower.contains("video idea") || lower.contains("image prompt")
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java b/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java
+--- a/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java	2026-08-08 22:23:54.902971451 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageMediaSessionBridge.java	2026-08-08 22:27:35.448881888 -0500
+@@ -157,0 +158,11 @@
++    boolean stopPlayback() {
++        List<MediaController> active=controllers();
++        if(!active.isEmpty()){
++            MediaController controller=active.get(0);PlaybackState state=controller.getPlaybackState();
++            long actions=state==null?0L:state.getActions();
++            if((actions&PlaybackState.ACTION_STOP)!=0L){controller.getTransportControls().stop();SageDiagnostics.appendEvent(context,"MEDIA CONTROL","stop via MediaSession");return true;}
++            if((actions&PlaybackState.ACTION_PAUSE)!=0L){controller.getTransportControls().pause();SageDiagnostics.appendEvent(context,"MEDIA CONTROL","pause fallback for stop via MediaSession");return true;}
++        }
++        return isPlaybackActive()&&control("pause");
++    }
++
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java b/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java
+--- a/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageSurpriseManager.java	2026-08-08 22:31:50.811122364 -0500
+@@ -0,0 +1,67 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.Intent;
++import android.content.SharedPreferences;
++import android.net.Uri;
++import android.os.Handler;
++import android.os.Looper;
++import android.view.accessibility.AccessibilityEvent;
++
++import java.util.Locale;
++import java.util.Set;
++
++/** Real Standard-Sage discovery coordinator. It never touches Red Queen storage. */
++final class SageSurpriseManager {
++    private static final String PREFS="sage_surprise_standard_v1";
++    private static final long PENDING_TTL_MS=20_000L;
++    static final class Outcome {
++        final boolean matched, opened, pending, quiet; final String message, route;
++        Outcome(boolean matched,boolean opened,boolean pending,boolean quiet,String message,String route){this.matched=matched;this.opened=opened;this.pending=pending;this.quiet=quiet;this.message=message;this.route=route;}
++    }
++    private SageSurpriseManager(){}
++    static Outcome execute(Context context,String spoken){return execute(context,spoken,0L);}
++    static Outcome execute(Context context,String spoken,long injectedSeed){
++        SageSurprisePolicy.Command command=SageSurprisePolicy.parse(spoken);if(command==SageSurprisePolicy.Command.NONE)return new Outcome(false,false,false,false,"","");
++        SharedPreferences p=prefs(context);long seed=injectedSeed!=0L?injectedSeed:p.getLong("session_seed",0L);
++        if(seed==0L){seed=System.currentTimeMillis()^System.nanoTime();p.edit().putLong("session_seed",seed).commit();}
++        if(command==SageSurprisePolicy.Command.STOP)return stop(context,seed);
++        String provider=command==SageSurprisePolicy.Command.ANOTHER?p.getString("last_provider",""):"";
++        String topic=command==SageSurprisePolicy.Command.ANOTHER?p.getString("last_topic",""):topic(command);
++        if(command==SageSurprisePolicy.Command.YOUTUBE||command==SageSurprisePolicy.Command.WEIRD||command==SageSurprisePolicy.Command.BORED||command==SageSurprisePolicy.Command.RABBIT_HOLE)provider="youtube";
++        if(command==SageSurprisePolicy.Command.ANOTHER&&provider.isEmpty())return outcome(context,seed,false,false,false,"I need a current provider before I can choose another one.","unsupported","standard_safe_context_only");
++        if(provider.equals("youtube")){SageAccessibilityService.SurpriseSelection immediate=SageAccessibilityService.selectSurpriseVideo(seed,recent(p));
++            if(immediate.opened)return selected(context,p,seed,immediate.title,immediate.uri,"youtube",topic,"accessibility_fallback");
++            return launchYouTubeSearch(context,p,seed,topic.isEmpty()?"unexpected fascinating videos":topic);}
++        SageMediaSessionBridge media=new SageMediaSessionBridge(context);SageMediaSessionBridge.Snapshot snapshot=media.snapshot();
++        if(snapshot.activePlayback&&!"unavailable".equals(snapshot.packageName)&&media.control("next"))return selected(context,p,seed,"Next from "+snapshot.title,"",snapshot.packageName,"current media","media_session");
++        SageAccessibilityService.SurpriseSelection current=SageAccessibilityService.selectSurpriseCurrent(seed,recent(p));
++        if(current.opened)return selected(context,p,seed,current.title,current.uri,current.provider,"current page","accessibility_fallback");
++        return outcome(context,seed,false,false,false,"What should I surprise you in—YouTube or the current page?","clarification","standard_safe_context_only");
++    }
++    private static Outcome launchYouTubeSearch(Context context,SharedPreferences p,long seed,String topic){String query=topic.isEmpty()?"unexpected fascinating videos":topic;
++        String encoded=Uri.encode(query);Intent intent=new Intent(Intent.ACTION_VIEW,Uri.parse("https://www.youtube.com/results?search_query="+encoded)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
++        if(context.getPackageManager().getLaunchIntentForPackage("com.google.android.youtube")!=null)intent.setPackage("com.google.android.youtube");
++        if(intent.resolveActivity(context.getPackageManager())==null)return outcome(context,seed,false,false,false,"YouTube is unavailable, and no browser can open the search.","unsupported","standard_safe_context_only");
++        p.edit().putBoolean("pending",true).putBoolean("opening",false).putLong("pending_seed",seed).putLong("pending_created",System.currentTimeMillis()).putString("last_provider","youtube").putString("last_topic",query).putString("last_route","pending_semantic_selection").commit();SageAccessibilityService.showSurpriseStopControl();
++        context.startActivity(intent);record(context,seed,"pending_semantic_selection","youtube",query,"standard_safe_visible_semantics");
++        return new Outcome(true,false,true,false,"Searching YouTube; I’ll open one verified result when it appears.","pending_semantic_selection");}
++    static void onAccessibilityEvent(Context context,AccessibilityEvent event){if(event==null)return;SharedPreferences p=prefs(context);if(!p.getBoolean("pending",false)||p.getBoolean("opening",false))return;
++        long created=p.getLong("pending_created",0L);if(System.currentTimeMillis()-created>PENDING_TTL_MS){p.edit().putBoolean("pending",false).putString("last_route","unsupported").commit();record(context,p.getLong("pending_seed",0L),"unsupported","youtube","expired","standard_safe_timeout");return;}
++        String pkg=event.getPackageName()==null?"":event.getPackageName().toString().toLowerCase(Locale.US);if(!pkg.contains("youtube"))return;
++        int type=event.getEventType();if(type!=AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED&&type!=AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED&&type!=AccessibilityEvent.TYPE_VIEW_SCROLLED)return;
++        if(!p.edit().putBoolean("opening",true).commit())return;new Handler(Looper.getMainLooper()).postDelayed(()->{SurpriseCompletion completion=completePending(context);if(!completion.finished)prefs(context).edit().putBoolean("opening",false).commit();},450L);}
++    private static SurpriseCompletion completePending(Context context){SharedPreferences p=prefs(context);if(!p.getBoolean("pending",false))return new SurpriseCompletion(true);
++        long seed=p.getLong("pending_seed",0L);SageAccessibilityService.SurpriseSelection selected=SageAccessibilityService.selectSurpriseVideo(seed,recent(p));
++        if(!selected.opened)return new SurpriseCompletion(false);p.edit().putBoolean("pending",false).putBoolean("opening",false).putString("last_title",selected.title).putString("last_uri",selected.uri).putString("last_provider","youtube").putString("last_route","accessibility_fallback").putString("recent",appendRecent(p,selected.identity)).commit();record(context,seed,"accessibility_fallback","youtube",selected.title,"standard_safe_visible_semantics_revalidated");return new SurpriseCompletion(true);}
++    private static Outcome stop(Context context,long seed){SharedPreferences p=prefs(context);boolean hadPending=p.getBoolean("pending",false);p.edit().putBoolean("pending",false).putBoolean("opening",false).putString("last_route","cancelled").commit();SageAccessibilityService.cancelSurprise();boolean media=new SageMediaSessionBridge(context).stopPlayback();record(context,seed,"cancelled","standard",hadPending?"pending cancelled":"idle", "standard_safe_no_private_read");return new Outcome(true,false,false,true,"",media?"media_session":"cancelled");}
++    private static Outcome selected(Context c,SharedPreferences p,long seed,String title,String uri,String provider,String topic,String route){String identity=new SageSurprisePolicy.Candidate(title,uri,provider,topic,"standard_context",true,true,false,false,false,true,true).identity();p.edit().putString("last_title",title).putString("last_uri",uri).putString("last_provider",provider).putString("last_topic",topic).putString("last_route",route).putString("recent",appendRecent(p,identity)).commit();SageAccessibilityService.showSurpriseStopControl();record(c,seed,route,provider,title,"standard_safe_context_only");return new Outcome(true,true,false,true,"",route);}
++    private static Outcome outcome(Context c,long seed,boolean opened,boolean pending,boolean quiet,String message,String route,String source){record(c,seed,route,"standard",message,source);return new Outcome(true,opened,pending,quiet,message,route);}
++    private static Set<String> recent(SharedPreferences p){return SageSurprisePolicy.recent(p.getString("recent",""));}
++    private static String appendRecent(SharedPreferences p,String identity){Set<String> values=recent(p);values.add(identity);while(values.size()>24)values.remove(values.iterator().next());return SageSurprisePolicy.encodeRecent(values);}
++    private static String topic(SageSurprisePolicy.Command command){if(command==SageSurprisePolicy.Command.WEIRD)return "weird obscure fascinating videos";if(command==SageSurprisePolicy.Command.RABBIT_HOLE)return "unexpected deep dive rabbit hole";if(command==SageSurprisePolicy.Command.BORED)return "short fascinating unexpected videos";return "";}
++    static String summary(Context c){SharedPreferences p=prefs(c);String title=p.getString("last_title","None yet");return "Last: "+title+"\nRoute: "+p.getString("last_route","idle");}
++    private static SharedPreferences prefs(Context c){return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
++    private static void record(Context c,long seed,String route,String provider,String selection,String source){SageDiagnostics.appendEvent(c,"SURPRISE","seed="+seed+" route="+route+" provider="+provider+" selection="+selection+" content_source="+source+" standard_safe=true red_queen_queried=false");}
++    private static final class SurpriseCompletion{final boolean finished;SurpriseCompletion(boolean value){finished=value;}}
++}
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java b/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java
+--- a/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageSurprisePolicy.java	2026-08-08 22:32:37.726853364 -0500
+@@ -0,0 +1,49 @@
++package com.pineapple.sage;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Locale;
++import java.util.Random;
++import java.util.Set;
++
++/** Android-free, seeded, Standard-safe surprise discovery policy. */
++final class SageSurprisePolicy {
++    enum Command { SURPRISE, YOUTUBE, WEIRD, BORED, RABBIT_HOLE, ANOTHER, STOP, NONE }
++    enum Route { DIRECT_DEEP_LINK, MEDIA_SESSION, PENDING_SEMANTIC_SELECTION,
++        ACCESSIBILITY_FALLBACK, CLARIFICATION, CANCELLED, UNSUPPORTED }
++    static final class Candidate {
++        final String title, uri, provider, topic, source;
++        final boolean visible, enabled, stale, advertising, navigation, related, standardSafe;
++        Candidate(String title,String uri,String provider,String topic,String source,
++                boolean visible,boolean enabled,boolean stale,boolean advertising,
++                boolean navigation,boolean related,boolean standardSafe) {
++            this.title=clean(title);this.uri=clean(uri);this.provider=clean(provider);
++            this.topic=clean(topic);this.source=clean(source);this.visible=visible;
++            this.enabled=enabled;this.stale=stale;this.advertising=advertising;
++            this.navigation=navigation;this.related=related;this.standardSafe=standardSafe;
++        }
++        String identity(){return normalize(provider)+"|"+normalize(title)+"|"+normalize(uri);}
++    }
++    static Command parse(String raw){String v=normalize(raw).replaceFirst("^(hey )?sage ","");
++        if(v.equals("stop"))return Command.STOP;if(v.equals("another")||v.equals("another one"))return Command.ANOTHER;
++        if(v.contains("surprise me on youtube"))return Command.YOUTUBE;if(v.contains("rabbit hole"))return Command.RABBIT_HOLE;
++        if(v.contains("something weird")||v.equals("weird"))return Command.WEIRD;
++        if(v.contains("cure my boredom")||v.contains("cure boredom")||v.equals("i am bored")||v.equals("i m bored")||v.equals("im bored"))return Command.BORED;
++        if(v.equals("surprise me"))return Command.SURPRISE;return Command.NONE;}
++    static Candidate choose(List<Candidate> candidates,Set<String> recent,long seed,String provider,String topic){
++        List<Candidate> eligible=new ArrayList<>();String wantedProvider=normalize(provider),wantedTopic=normalize(topic);
++        for(Candidate c:candidates){if(!eligible(c))continue;if(!wantedProvider.isEmpty()&&!normalize(c.provider).equals(wantedProvider))continue;
++            if(!wantedTopic.isEmpty()&&!normalize(c.topic).contains(wantedTopic))continue;if(recent!=null&&recent.contains(c.identity()))continue;eligible.add(c);}
++        if(eligible.isEmpty()&&recent!=null&&!recent.isEmpty()){for(Candidate c:candidates)if(eligible(c)&&(wantedProvider.isEmpty()||normalize(c.provider).equals(wantedProvider)))eligible.add(c);}
++        if(eligible.isEmpty())return null;Collections.sort(eligible,(a,b)->a.identity().compareTo(b.identity()));
++        return eligible.get(new Random(seed).nextInt(eligible.size()));}
++    static boolean eligible(Candidate c){return c!=null&&c.standardSafe&&c.visible&&c.enabled&&!c.stale&&!c.advertising&&!c.navigation&&c.related&&!c.title.isEmpty()&&!redQueenText(c.source)&&!redQueenText(c.title);}
++    static boolean revalidate(Candidate saved,Candidate current){return saved!=null&&current!=null&&saved.identity().equals(current.identity())&&eligible(current);}
++    static Set<String> recent(String encoded){Set<String> out=new HashSet<>();if(encoded!=null)for(String value:encoded.split("\\n"))if(!value.trim().isEmpty())out.add(value.trim());return out;}
++    static String encodeRecent(Set<String> values){List<String> sorted=new ArrayList<>(values);Collections.sort(sorted);StringBuilder out=new StringBuilder();for(String value:sorted){if(out.length()>0)out.append('\n');out.append(value);}return out.toString();}
++    static boolean redQueenText(String value){String v=normalize(value);return v.contains("red queen")||v.contains("red_queen")||v.contains("private vault")||v.contains("investigation");}
++    private static String clean(String value){return value==null?"":value.trim();}
++    private static String normalize(String value){return clean(value).toLowerCase(Locale.US).replaceAll("[^a-z0-9]+"," ").replaceAll("\\s+"," ").trim();}
++}

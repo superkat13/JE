@@ -1,0 +1,446 @@
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/build.gradle.kts sage_build_129/app/build.gradle.kts
+--- sage_build_129_base/app/build.gradle.kts	2026-08-08 18:45:54.177898167 -0500
++++ sage_build_129/app/build.gradle.kts	2026-08-08 18:44:59.414224955 -0500
+@@ -14,2 +14,2 @@
+-        versionCode = 40
+-        versionName = "1.28.0"
++        versionCode = 41
++        versionName = "1.29.0"
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/cpp/sage_brain.cpp sage_build_129/app/src/main/cpp/sage_brain.cpp
+--- sage_build_129_base/app/src/main/cpp/sage_brain.cpp	2026-08-08 18:45:54.097898646 -0500
++++ sage_build_129/app/src/main/cpp/sage_brain.cpp	2026-08-08 18:50:40.856164965 -0500
+@@ -25,0 +26,2 @@
++std::atomic<long long> g_last_prompt_prefill_duration_ms{-1};
++std::atomic<int> g_last_prompt_token_count{0};
+@@ -254,0 +257,4 @@
++    context_params.abort_callback = [](void *) {
++        return g_cancel_requested.load(std::memory_order_acquire);
++    };
++    context_params.abort_callback_data = nullptr;
+@@ -277 +283,2 @@
+-        jint requested_tokens
++        jint requested_tokens,
++        jboolean deterministic
+@@ -281,0 +289,2 @@
++    g_last_prompt_prefill_duration_ms.store(-1, std::memory_order_release);
++    g_last_prompt_token_count.store(0, std::memory_order_release);
+@@ -307,0 +317 @@
++    g_last_prompt_token_count.store(static_cast<int>(prompt_tokens.size()), std::memory_order_release);
+@@ -323,7 +333,10 @@
+-    llama_sampler * sampler = llama_sampler_chain_init(
+-            llama_sampler_chain_default_params()
+-    );
+-    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
+-    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
+-    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
+-    llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
++    llama_sampler * sampler;
++    if (deterministic == JNI_TRUE) {
++        sampler = llama_sampler_init_greedy();
++    } else {
++        sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
++        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
++        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
++        llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
++        llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
++    }
+@@ -332,0 +346 @@
++    bool prompt_prefilled = false;
+@@ -340,0 +355,10 @@
++        if (!prompt_prefilled) {
++            const auto prefill_finished = std::chrono::steady_clock::now();
++            const auto prefill_duration = std::chrono::duration_cast<std::chrono::milliseconds>(
++                    prefill_finished - generation_start
++            ).count();
++            g_last_prompt_prefill_duration_ms.store(
++                    std::max<long long>(0, prefill_duration), std::memory_order_release
++            );
++            prompt_prefilled = true;
++        }
+@@ -341,0 +366,5 @@
++            if (decode_result == 2
++                    && g_cancel_requested.load(std::memory_order_acquire)) {
++                cancelled = true;
++                break;
++            }
+@@ -425,0 +455,14 @@
++}
++
++extern "C"
++JNIEXPORT jlong JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeLastPromptPrefillDurationMs(JNIEnv *, jclass) {
++    return static_cast<jlong>(
++            g_last_prompt_prefill_duration_ms.load(std::memory_order_acquire)
++    );
++}
++
++extern "C"
++JNIEXPORT jint JNICALL
++Java_com_pineapple_sage_SageBrainManager_nativeLastPromptTokenCount(JNIEnv *, jclass) {
++    return static_cast<jint>(g_last_prompt_token_count.load(std::memory_order_acquire));
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/java/com/pineapple/sage/MainActivity.java sage_build_129/app/src/main/java/com/pineapple/sage/MainActivity.java
+--- sage_build_129_base/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-08-08 18:45:54.081898741 -0500
++++ sage_build_129/app/src/main/java/com/pineapple/sage/MainActivity.java	2026-08-08 18:50:40.876164844 -0500
+@@ -312 +312 @@
+-        Button downloadBrainModel = makeButton("Download recommended Qwen brain (1.83 GB)");
++        Button downloadBrainModel = makeButton("Open verified model manager (Qwen Q4_K_M)");
+@@ -334 +334 @@
+-        brainStorageHelp.setText("The model is copied into Sage's private storage. After Sage says it is verified, delete the original download to reclaim about 1.83 GB. Other instruction-tuned GGUF models up to 3.5 GB can be added later.");
++        brainStorageHelp.setText("The model manager downloads only after you press Download, resumes a partial file, shows progress, supports cancellation, checks storage, and requires the pinned byte size and SHA-256 before replacing the active model. Manual GGUF import remains available.");
+@@ -787,17 +787 @@
+-        try {
+-            startActivity(new Intent(
+-                    Intent.ACTION_VIEW,
+-                    Uri.parse(SageBrainManager.RECOMMENDED_MODEL_URL)
+-            ));
+-            Toast.makeText(
+-                    this,
+-                    "Download the 1.83 GB GGUF file, then return and tap Choose downloaded GGUF model.",
+-                    Toast.LENGTH_LONG
+-            ).show();
+-        } catch (Exception error) {
+-            Toast.makeText(
+-                    this,
+-                    "Android could not open the official Qwen download.",
+-                    Toast.LENGTH_LONG
+-            ).show();
+-        }
++        startActivity(new Intent(this, SageBrainTestActivity.class));
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainHealth.java sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainHealth.java
+--- sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 18:45:54.097898646 -0500
++++ sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainHealth.java	2026-08-08 18:50:40.880164819 -0500
+@@ -78 +78,2 @@
+-                                   long generationDurationMs) {
++                                   long generationDurationMs, long promptPrefillDurationMs,
++                                   int promptTokenCount) {
+@@ -84,0 +86,2 @@
++                .putLong("prompt_prefill_duration_ms", promptPrefillDurationMs)
++                .putInt("prompt_token_count", Math.max(0, promptTokenCount))
+@@ -140,0 +144,2 @@
++                + "\nPrompt token count: " + p.getInt("prompt_token_count", 0)
++                + "\nPrompt-prefill duration: " + p.getLong("prompt_prefill_duration_ms", -1L) + " ms"
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainManager.java sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+--- sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 18:45:54.101898622 -0500
++++ sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 18:50:40.888164770 -0500
+@@ -72 +72 @@
+-    public static final String RECOMMENDED_MODEL_NAME = "Qwen3-1.7B-Q8_0.gguf";
++    public static final String RECOMMENDED_MODEL_NAME = "Qwen_Qwen3-1.7B-Q4_K_M.gguf";
+@@ -74,3 +74,3 @@
+-            "https://huggingface.co/Qwen/Qwen3-1.7B-GGUF/resolve/main/"
+-                    + RECOMMENDED_MODEL_NAME
+-                    + "?download=true";
++            "https://huggingface.co/bartowski/Qwen_Qwen3-1.7B-GGUF/resolve/"
++                    + "88c7b586e13a4c53ef5e16e10a4ec1cda921b3c9/"
++                    + RECOMMENDED_MODEL_NAME + "?download=true";
+@@ -78,2 +78,2 @@
+-            "061b54daade076b5d3362dac252678d17da8c68f07560be70818cace6590cb1a";
+-    public static final long RECOMMENDED_MODEL_BYTES = 1_830_000_000L;
++            "72c5c3cb38fa32d5256e2fe30d03e7a64c6c79e668ad84057e3bd66e250b24fb";
++    public static final long RECOMMENDED_MODEL_BYTES = 1_282_439_584L;
+@@ -192 +192 @@
+-                    + " (1.83 GB). Free app storage: "
++                    + " (1.28 GB). Free app storage: "
+@@ -328,0 +329,52 @@
++    /** Runs only the fixed health prompt, without memories, history, actions, or fallback text. */
++    public void testBrainAsync(ReplyCallback callback) {
++        synchronized (generationLock) {
++            if (generationScheduled) {
++                postReplyError(callback, "A Sage Brain generation is already running.");
++                return;
++            }
++            generationScheduled = true;
++        }
++        worker.execute(() -> {
++            try {
++                postReplyStatus(callback, isReady() ? "Running exact Brain health prompt"
++                        : "Loading Sage Brain for exact health prompt");
++                boolean loadRequired = !isReady();
++                if (loadRequired) SageBrainHealth.loadStarted(context);
++                String loadError = ensureLoadedOnWorker();
++                if (!loadError.isEmpty()) {
++                    postReplyError(callback, loadError);
++                    return;
++                }
++                if (loadRequired) SageBrainHealth.loadFinished(context);
++                SageBrainHealth.promptStarted(context);
++                String raw = nativeGenerate(
++                        "Return only the literal answer requested by the user. /no_think",
++                        "Reply with exactly: Brain online.", 16, true);
++                String answer = cleanModelOutput(raw);
++                if (answer.isEmpty() || nativeLastGeneratedTokenCount() <= 0) {
++                    String error = nativeErrorOr("The local model generated zero real tokens.")
++                            + " [stage=" + lastNativeStage()
++                            + ", prompt_tokens=" + lastPromptTokenCount()
++                            + ", generated_tokens=" + lastGeneratedTokenCount() + "]";
++                    state = State.ERROR;
++                    lastError = error;
++                    SageBrainHealth.setStatus(context, SageBrainHealth.Status.ERROR,
++                            "tablet Brain", lastNativeStage(), error);
++                    postReplyError(callback, error);
++                    return;
++                }
++                SageBrainHealth.generationFinished(context, answer,
++                        nativeLastFirstTokenLatencyMs(), nativeLastGeneratedTokenCount(),
++                        nativeLastGenerationDurationMs(), nativeLastPromptPrefillDurationMs(),
++                        nativeLastPromptTokenCount());
++                postReply(callback, Reply.answer(answer));
++            } catch (Throwable problem) {
++                postReplyError(callback, "Brain health generation failed: " + safeProblem(problem)
++                        + " [stage=" + lastNativeStage() + "]");
++            } finally {
++                synchronized (generationLock) { generationScheduled = false; }
++            }
++        });
++    }
++
+@@ -347 +399 @@
+-            raw = nativeGenerate(systemPrompt, userPrompt, MAX_REPLY_TOKENS);
++            raw = nativeGenerate(systemPrompt, userPrompt, MAX_REPLY_TOKENS, false);
+@@ -374 +426,2 @@
+-                nativeLastGenerationDurationMs());
++                nativeLastGenerationDurationMs(), nativeLastPromptPrefillDurationMs(),
++                nativeLastPromptTokenCount());
+@@ -393,0 +447,44 @@
++    public int lastPromptTokenCount() {
++        if (!NATIVE_AVAILABLE) return 0;
++        try { return nativeLastPromptTokenCount(); } catch (Throwable ignored) { return 0; }
++    }
++
++    void installVerifiedDownloadAsync(File verified, String name, long size, String sha256,
++                                      LoadCallback callback) {
++        worker.execute(() -> {
++            if (verified == null || !verified.isFile() || verified.length() != size
++                    || !RECOMMENDED_MODEL_SHA256.equalsIgnoreCase(sha256)) {
++                postLoadError(callback, "Verified model handoff did not match the pinned catalog entry.");
++                return;
++            }
++            File directory = brainDirectory();
++            if (!directory.exists() && !directory.mkdirs()) {
++                postLoadError(callback, "Android could not create Sage's private brain folder.");
++                return;
++            }
++            if (NATIVE_AVAILABLE) nativeUnloadModel();
++            try {
++                Files.move(verified.toPath(), modelFile().toPath(),
++                        StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
++            } catch (Exception first) {
++                try {
++                    Files.move(verified.toPath(), modelFile().toPath(),
++                            StandardCopyOption.REPLACE_EXISTING);
++                } catch (Exception second) {
++                    postLoadError(callback, "Verified model could not be activated: "
++                            + safeProblem(second));
++                    return;
++                }
++            }
++            preferences.edit().putBoolean(KEY_ENABLED, true).putString(KEY_MODEL_NAME, name)
++                    .putLong(KEY_MODEL_SIZE, size).putString(KEY_MODEL_SHA256, sha256).commit();
++            SageBrainHealth.recordModel(context, name, modelFile(), sha256);
++            state = State.NOT_CONFIGURED;
++            lastError = "";
++            postLoadReady(callback, "Pinned model verified and activated. " + modelSummary());
++        });
++    }
++
++    File downloadDirectory() { return brainDirectory(); }
++    long freeStorageBytes() { return availableStorageBytes(); }
++
+@@ -971 +1068,2 @@
+-    private static native String nativeGenerate(String systemPrompt, String userPrompt, int maxTokens);
++    private static native String nativeGenerate(String systemPrompt, String userPrompt,
++                                                int maxTokens, boolean deterministic);
+@@ -973,0 +1072,2 @@
++    private static native long nativeLastPromptPrefillDurationMs();
++    private static native int nativeLastPromptTokenCount();
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java
+--- sage_build_129_base/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java	2026-08-08 18:45:54.097898646 -0500
++++ sage_build_129/app/src/main/java/com/pineapple/sage/SageBrainTestActivity.java	2026-08-08 18:50:40.888164770 -0500
+@@ -20,0 +21 @@
++    private SageModelManager models;
+@@ -26,0 +28 @@
++        models = new SageModelManager(this, brain);
+@@ -46,0 +49,3 @@
++        Button download = button("Download verified Qwen3 1.7B Q4_K_M (1.28 GB)");
++        download.setOnClickListener(v -> downloadModel());
++        root.addView(download);
+@@ -49 +54 @@
+-        cancel.setOnClickListener(v -> cancel("owner_cancelled"));
++        cancel.setOnClickListener(v -> { models.cancel(); cancel("owner_cancelled"); });
+@@ -114 +119 @@
+-        brain.askAsync("Reply with exactly: Brain online.",
++        brain.testBrainAsync(
+@@ -142,0 +148,14 @@
++    }
++
++    private void downloadModel() {
++        generation++;
++        cancel.setEnabled(true);
++        models.downloadRecommended(new SageModelManager.Callback() {
++            @Override public void onProgress(String value) { status.setText(value); }
++            @Override public void onReady(String value) {
++                status.setText(value); cancel.setEnabled(false); refresh();
++            }
++            @Override public void onError(String value) {
++                status.setText(value); cancel.setEnabled(false); refresh();
++            }
++        });
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/java/com/pineapple/sage/SageModelManager.java sage_build_129/app/src/main/java/com/pineapple/sage/SageModelManager.java
+--- sage_build_129_base/app/src/main/java/com/pineapple/sage/SageModelManager.java	1969-12-31 18:00:00.000000000 -0600
++++ sage_build_129/app/src/main/java/com/pineapple/sage/SageModelManager.java	2026-08-08 18:50:40.892164746 -0500
+@@ -0,0 +1,150 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.os.Handler;
++import android.os.Looper;
++
++import java.io.File;
++import java.io.FileInputStream;
++import java.io.FileOutputStream;
++import java.io.InputStream;
++import java.net.HttpURLConnection;
++import java.net.URL;
++import java.security.MessageDigest;
++import java.util.Locale;
++import java.util.concurrent.ExecutorService;
++import java.util.concurrent.Executors;
++import java.util.concurrent.atomic.AtomicBoolean;
++
++/** Owner-started, resumable and exactly verified model catalog download. */
++final class SageModelManager {
++    interface Callback {
++        void onProgress(String value);
++        void onReady(String value);
++        void onError(String value);
++    }
++
++    private static final long STORAGE_HEADROOM = 256L * 1024L * 1024L;
++    private final SageBrainManager brain;
++    private final Handler main = new Handler(Looper.getMainLooper());
++    private final ExecutorService worker = Executors.newSingleThreadExecutor();
++    private final AtomicBoolean cancelled = new AtomicBoolean(false);
++
++    SageModelManager(Context context, SageBrainManager brain) { this.brain = brain; }
++
++    void downloadRecommended(Callback callback) {
++        cancelled.set(false);
++        worker.execute(() -> download(callback));
++    }
++
++    void cancel() { cancelled.set(true); }
++
++    private void download(Callback callback) {
++        File directory = brain.downloadDirectory();
++        if (!directory.exists() && !directory.mkdirs()) {
++            error(callback, "Model download failed: private model directory is unavailable.");
++            return;
++        }
++        File partial = new File(directory, "recommended-model.gguf.part");
++        long existing = partial.isFile() ? partial.length() : 0L;
++        long remaining = Math.max(0L, SageBrainManager.RECOMMENDED_MODEL_BYTES - existing);
++        long required = remaining + STORAGE_HEADROOM;
++        if (brain.freeStorageBytes() < required) {
++            error(callback, "Model download needs " + format(required)
++                    + " free including verification headroom; available "
++                    + format(brain.freeStorageBytes()) + ".");
++            return;
++        }
++        HttpURLConnection connection = null;
++        try {
++            connection = (HttpURLConnection) new URL(
++                    SageBrainManager.RECOMMENDED_MODEL_URL).openConnection();
++            connection.setConnectTimeout(15000);
++            connection.setReadTimeout(30000);
++            connection.setInstanceFollowRedirects(true);
++            if (existing > 0L) connection.setRequestProperty("Range", "bytes=" + existing + "-");
++            int response = connection.getResponseCode();
++            boolean resumed = existing > 0L && response == HttpURLConnection.HTTP_PARTIAL;
++            if (existing > 0L && !resumed) {
++                existing = 0L;
++                if (!partial.delete()) throw new IllegalStateException("stale partial download could not be reset");
++            }
++            if (response != HttpURLConnection.HTTP_OK
++                    && response != HttpURLConnection.HTTP_PARTIAL) {
++                throw new IllegalStateException("HTTPS response " + response);
++            }
++            long total = existing + Math.max(0L, connection.getContentLengthLong());
++            if (total != SageBrainManager.RECOMMENDED_MODEL_BYTES) {
++                throw new IllegalStateException("catalog size "
++                        + SageBrainManager.RECOMMENDED_MODEL_BYTES + " bytes but server reported "
++                        + total + " bytes");
++            }
++            progress(callback, resumed ? "Resuming verified model download" : "Starting verified model download");
++            try (InputStream input = connection.getInputStream();
++                 FileOutputStream output = new FileOutputStream(partial, resumed)) {
++                byte[] buffer = new byte[1024 * 1024];
++                long copied = existing;
++                int lastPercent = -1;
++                int count;
++                while ((count = input.read(buffer)) >= 0) {
++                    if (cancelled.get()) {
++                        progress(callback, "Model download cancelled; partial file retained for resume.");
++                        return;
++                    }
++                    if (count == 0) continue;
++                    output.write(buffer, 0, count);
++                    copied += count;
++                    int percent = (int) Math.min(100L,
++                            copied * 100L / SageBrainManager.RECOMMENDED_MODEL_BYTES);
++                    if (percent != lastPercent) {
++                        lastPercent = percent;
++                        progress(callback, "Downloading model: " + percent + "% ("
++                                + format(copied) + " / "
++                                + format(SageBrainManager.RECOMMENDED_MODEL_BYTES) + ")");
++                    }
++                }
++                output.getFD().sync();
++            }
++            if (partial.length() != SageBrainManager.RECOMMENDED_MODEL_BYTES) {
++                throw new IllegalStateException("download ended at " + partial.length() + " bytes");
++            }
++            progress(callback, "Download complete; verifying exact SHA-256");
++            String hash = sha256(partial);
++            if (!SageBrainManager.RECOMMENDED_MODEL_SHA256.equalsIgnoreCase(hash)) {
++                partial.delete();
++                throw new SecurityException("SHA-256 mismatch; received " + hash);
++            }
++            brain.installVerifiedDownloadAsync(partial, SageBrainManager.RECOMMENDED_MODEL_NAME,
++                    SageBrainManager.RECOMMENDED_MODEL_BYTES, hash,
++                    new SageBrainManager.LoadCallback() {
++                        @Override public void onStatus(String value) { progress(callback, value); }
++                        @Override public void onReady(String value) { ready(callback, value); }
++                        @Override public void onError(String value) { error(callback, value); }
++                    });
++        } catch (Exception problem) {
++            error(callback, "Model download failed: " + problem.getClass().getSimpleName()
++                    + ": " + String.valueOf(problem.getMessage()));
++        } finally {
++            if (connection != null) connection.disconnect();
++        }
++    }
++
++    private static String sha256(File file) throws Exception {
++        MessageDigest digest = MessageDigest.getInstance("SHA-256");
++        try (FileInputStream input = new FileInputStream(file)) {
++            byte[] buffer = new byte[1024 * 1024];
++            int count;
++            while ((count = input.read(buffer)) >= 0) if (count > 0) digest.update(buffer, 0, count);
++        }
++        StringBuilder value = new StringBuilder();
++        for (byte item : digest.digest()) value.append(String.format(Locale.US, "%02x", item));
++        return value.toString();
++    }
++
++    private void progress(Callback callback, String value) { main.post(() -> callback.onProgress(value)); }
++    private void ready(Callback callback, String value) { main.post(() -> callback.onReady(value)); }
++    private void error(Callback callback, String value) { main.post(() -> callback.onError(value)); }
++    private static String format(long bytes) {
++        return String.format(Locale.US, "%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
++    }
++}
+diff -rN -U 0 '--exclude=build' '--exclude=.gradle' '--exclude=.cxx' '--exclude=assets' '--exclude=third_party' sage_build_129_base/app/src/main/res/values/strings.xml sage_build_129/app/src/main/res/values/strings.xml
+--- sage_build_129_base/app/src/main/res/values/strings.xml	2026-08-08 18:45:54.177898167 -0500
++++ sage_build_129/app/src/main/res/values/strings.xml	2026-08-08 18:50:40.892164746 -0500
+@@ -3 +3 @@
+-    <string name="app_name">Sage Commander 1.28.0</string>
++    <string name="app_name">Sage Commander 1.29.0</string>

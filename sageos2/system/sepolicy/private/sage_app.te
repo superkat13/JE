@@ -1,0 +1,7 @@
+type sage_app, domain;
+app_domain(sage_app)
+
+# Only the platform-signed Sage package is mapped into sage_app by
+# seapp_contexts. SELinux then makes the root socket unreachable to other apps.
+allow sage_app sage_rootd_socket:sock_file { getattr open read write };
+allow sage_app sage_rootd:unix_stream_socket connectto;

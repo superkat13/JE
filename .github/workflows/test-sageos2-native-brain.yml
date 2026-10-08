@@ -1,0 +1,29 @@
+name: Test real Sage native Brain
+on:
+  workflow_call:
+jobs:
+  native-inference:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare exact production llama.cpp
+        run: |
+          set -euo pipefail
+          PIN=d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          DIR=sageos2/third_party/llama.cpp
+          mkdir -p "$DIR"
+          git -C "$DIR" init
+          git -C "$DIR" remote add origin https://github.com/ggerganov/llama.cpp.git
+          git -C "$DIR" fetch --depth=1 origin "$PIN"
+          git -C "$DIR" checkout --detach "$PIN"
+      - name: Execute production generation with AddressSanitizer and real test GGUF
+        run: |
+          set -euo pipefail
+          bash sageos2/tools/test-native-brain.sh 2>&1 | tee native-brain-test.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-brain-test-evidence
+          path: native-brain-test.log
+          if-no-files-found: error

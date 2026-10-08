@@ -1,0 +1,180 @@
+name: Verify Sage Commander 1.29 vertical slices
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - agent/sage-1-29-recovery-20260801
+      - agent/sage-monster-mode-additive-20260810
+      - agent/sage-one-executor-20260811
+      - sage-one-executor-20260811
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Reconstruct and test bounded 1.29 slice
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129
+          python3 sage_tests/test_brain_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_conversation_media_echo_v1_29.py sage_build_129
+          python3 sage_tests/test_intent_semantic_actions_v1_29.py sage_build_129
+          python3 sage_tests/test_confirmation_tone_v1_29.py sage_build_129
+          python3 sage_tests/test_surprise_discovery_v1_29.py sage_build_129
+          python3 sage_tests/test_brain_route_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_professional_brain_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_owner_home_categories_v1_29.py sage_build_129
+          python3 sage_tests/test_media_voice_repair_v1_29.py sage_build_129
+          python3 sage_tests/test_external_action_lifecycle_v1_29.py sage_build_129
+          python3 sage_tests/test_surprise_fun_reliability_v1_29.py sage_build_129
+          python3 sage_tests/test_monster_mode_v1_29.py sage_build_129
+          python3 sage_tests/test_one_sage_routing_v1_29.py sage_build_129
+          python3 sage_tests/test_easter_egg_personality_v1_29.py sage_build_129
+          python3 sage_tests/test_voice_tolerance_v1_29.py sage_build_129
+          python3 sage_tests/test_internal_specialist_routing_v1_29.py sage_build_129
+          python3 sage_tests/test_owner_authority_cleanup_v1_29.py sage_build_129
+          python3 sage_tests/test_red_queen_entry_v1_29.py sage_build_129
+          python3 sage_tests/test_device_authority_v1_29.py sage_build_129
+          python3 sage_tests/test_privilege_readiness_v1_29.py sage_build_129
+          python3 sage_tests/test_dell_evidence_import_v1_29.py sage_build_129
+          python3 sage_tests/test_capability_snapshot_v1_29.py sage_build_129
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py
+          python3 -m unittest -v sage_forge.tests.test_forge
+
+      - name: Run inherited suite against preserved 1.28 checkpoint
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_28.sh sage_build_128
+          for test_file in \
+            sage_tests/test_stabilization_v1_21.py \
+            sage_tests/test_android_compat_v1_21.py \
+            sage_tests/test_brain_watchdog_v1_22.py \
+            sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+            sage_tests/test_wake_profiles_compile_repair_v1_23.py \
+            sage_tests/test_continuity_report_v1_24.py \
+            sage_tests/test_number_overlay_release_v1_24_1.py \
+            sage_tests/test_sage_release_v1_24_2.py \
+            sage_tests/test_self_repair_v1_25.py \
+            sage_tests/test_workbench_v1_25.py \
+            sage_tests/test_sage_forge_v1_25.py \
+            sage_tests/test_reliability_toolbelt_v1_26.py \
+            sage_tests/test_continuity_finish_v1_26.py \
+            sage_tests/test_intelligence_memory_v1_27.py \
+            sage_tests/test_living_sage_v1_28.py \
+            sage_tests/test_red_queen_v1_28.py \
+            sage_tests/test_orchestrator_registry_v1_28.py \
+            sage_tests/test_package_file_labs_v1_28.py \
+            sage_tests/test_network_operations_v1_28.py \
+            sage_tests/test_automation_v1_28.py; do
+            python3 "$test_file" sage_build_128
+          done
+          python3 sage_tests/test_public_disclosure_v1_27.py
+
+      - name: Prove deterministic reconstruction
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_129_second
+          diff -qr --exclude=build --exclude=.gradle \
+            sage_build_129/app/src sage_build_129_second/app/src
+          cmp sage_build_129/app/build.gradle.kts sage_build_129_second/app/build.gradle.kts
+
+      - name: Add exact pinned llama.cpp
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_129/third_party/llama.cpp
+          git -C sage_build_129/third_party/llama.cpp init
+          git -C sage_build_129/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_129/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_129/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build_129/third_party/llama.cpp rev-parse HEAD)" = \
+            d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Verify and install permanent Sage signing identity for build continuity
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          ACTUAL="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" \
+            -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          test "$ACTUAL" = "99e0a7c655cdefb3bb4ac85e5961d19358ee0ffdb3dce9b3a145f9cbcda78d35"
+
+      - name: Install exact Android compile toolchain
+        run: |
+          sdkmanager \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile Java and native Brain, then lint
+        working-directory: sage_build_129
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Second full-system verification on finished reconstruction
+        run: |
+          set -euo pipefail
+          # Re-run every current 1.29 behavior gate against the independently reconstructed tree.
+          for test_file in \
+            sage_tests/test_brain_repair_v1_29.py \
+            sage_tests/test_conversation_media_echo_v1_29.py \
+            sage_tests/test_intent_semantic_actions_v1_29.py \
+            sage_tests/test_confirmation_tone_v1_29.py \
+            sage_tests/test_surprise_discovery_v1_29.py \
+            sage_tests/test_brain_route_repair_v1_29.py \
+            sage_tests/test_professional_brain_repair_v1_29.py \
+            sage_tests/test_owner_home_categories_v1_29.py \
+            sage_tests/test_media_voice_repair_v1_29.py \
+            sage_tests/test_external_action_lifecycle_v1_29.py \
+            sage_tests/test_surprise_fun_reliability_v1_29.py \
+            sage_tests/test_monster_mode_v1_29.py \
+            sage_tests/test_one_sage_routing_v1_29.py \
+            sage_tests/test_easter_egg_personality_v1_29.py \
+            sage_tests/test_voice_tolerance_v1_29.py \
+            sage_tests/test_internal_specialist_routing_v1_29.py \
+            sage_tests/test_owner_authority_cleanup_v1_29.py \
+            sage_tests/test_red_queen_entry_v1_29.py \
+            sage_tests/test_device_authority_v1_29.py \
+            sage_tests/test_privilege_readiness_v1_29.py \
+            sage_tests/test_dell_evidence_import_v1_29.py \
+            sage_tests/test_capability_snapshot_v1_29.py; do
+            python3 "$test_file" sage_build_129_second
+          done
+          python3 -m unittest -v sage_forge.tests.test_forge
+
+          # Release-contract invariants: same package and no destructive migration hooks.
+          grep -Rqs 'com.pineapple.sagecommander.stable' sage_build_129_second/app
+          ! grep -RqsE 'deleteDatabase\(|clearApplicationUserData\(|pm clear|factory.?reset|uninstall' sage_build_129_second/app/src/main
+
+          # Compile the independent reconstruction too, including the exact same native Brain revision.
+          rm -rf sage_build_129_second/third_party/llama.cpp
+          mkdir -p sage_build_129_second/third_party
+          cp -a sage_build_129/third_party/llama.cpp sage_build_129_second/third_party/llama.cpp
+          cd sage_build_129_second
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace

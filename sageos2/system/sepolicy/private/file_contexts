@@ -1,0 +1,3 @@
+/system/bin/sage-rootd                     u:object_r:sage_rootd_exec:s0
+/dev/socket/sage_rootd                     u:object_r:sage_rootd_socket:s0
+/data/misc/sage(/.*)?                      u:object_r:sage_rootd_data_file:s0

@@ -1,0 +1,163 @@
+"""Sage Forge: owner-controlled local engineering companion service."""
+
+__version__ = "0.3.1"
+
+# Register bounded Android authority and developer-inspection tools without replacing the
+# existing Forge registry or system.info tool. ToolRunner resolves default_registry at
+# runtime, so these extensions remain additive and independently testable.
+from . import tools as _tools
+from .adb_tools import collect_adb_authority
+from .autonomy_transport import collect_autonomy_dispatch, collect_autonomy_result
+from .developer_tools import collect_developer_runtime, collect_project_snapshot
+from .termux_tools import collect_termux_status
+
+_original_default_registry = _tools.default_registry
+
+
+def _object_schema(properties: tuple[str, ...]):
+    return {
+        "type": "object",
+        "additionalProperties": False,
+        "properties": {name: {} for name in properties},
+        "required": list(properties),
+    }
+
+
+def _register_readonly(registry, *, tool_id, display_name, purpose, implementation,
+                       output_properties, timeout_seconds=60, network_scope="local_device"):
+    registry.register(_tools.ToolDefinition(
+        tool_id=tool_id,
+        display_name=display_name,
+        purpose=purpose,
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=implementation,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {}, "required": []},
+        output_schema=_object_schema(output_properties),
+        required_permissions=("owner_approved_readonly_engineering",),
+        risk_level="low",
+        confirmation_policy="always",
+        timeout_seconds=timeout_seconds,
+        concurrency_limit=1,
+        network_scope=network_scope,
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_operation_set", "job_lifecycle", "result_recipient"),
+    ))
+
+
+def _register_autonomy_transport(registry):
+    registry.register(_tools.ToolDefinition(
+        tool_id="developer.autonomy_dispatch",
+        display_name="Sage autonomy engineering dispatch",
+        purpose="Place one bounded Sage-owned engineering order in the configured Forge project's fixed autonomy outbox",
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=collect_autonomy_dispatch,
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"job_id": {}, "fingerprint": {}, "order": {}},
+            "required": ["job_id", "fingerprint", "order"],
+        },
+        output_schema=_object_schema((
+            "schema_version", "observed_at", "job_id", "status", "outbox_json",
+            "outbox_markdown", "order_sha256", "project_head", "project_branch", "notes",
+        )),
+        required_permissions=("owner_approved_local_engineering_handoff",),
+        risk_level="moderate",
+        confirmation_policy="always",
+        timeout_seconds=30,
+        concurrency_limit=1,
+        network_scope="local_device",
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_project_root", "fixed_outbox", "job_lifecycle", "result_recipient"),
+    ))
+    registry.register(_tools.ToolDefinition(
+        tool_id="developer.autonomy_result",
+        display_name="Sage autonomy result inbox",
+        purpose="Read the structured developer result for one Sage-owned job from the configured Forge project's fixed result inbox",
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=collect_autonomy_result,
+        input_schema={
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {"job_id": {}},
+            "required": ["job_id"],
+        },
+        output_schema=_object_schema((
+            "schema_version", "observed_at", "job_id", "status", "result",
+            "result_sha256", "result_file", "notes",
+        )),
+        required_permissions=("owner_approved_local_engineering_result_read",),
+        risk_level="low",
+        confirmation_policy="always",
+        timeout_seconds=20,
+        concurrency_limit=1,
+        network_scope="local_device",
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_project_root", "fixed_result_inbox", "job_lifecycle", "result_recipient"),
+    ))
+
+
+def _default_registry_with_sage_extensions():
+    registry = _original_default_registry()
+    registry.register(_tools.ToolDefinition(
+        tool_id="android.adb_authority_probe",
+        display_name="Sage tablet ADB authority probe",
+        purpose="Inspect the connected Sage tablet's real non-root Android/ADB authority ceiling using fixed read-only commands",
+        supported_platforms=("windows", "linux", "darwin"),
+        implementation=collect_adb_authority,
+        input_schema={"type": "object", "additionalProperties": False,
+                      "properties": {}, "required": []},
+        output_schema=_object_schema((
+            "schema_version", "observed_at", "adb_available", "device_state",
+            "device_serial", "device", "sage_package", "authority", "boot", "next_ceiling",
+        )),
+        required_permissions=("owner_approved_adb_readonly",),
+        risk_level="low",
+        confirmation_policy="always",
+        timeout_seconds=60,
+        concurrency_limit=1,
+        network_scope="local_usb_or_adb_device",
+        data_leaves_device=True,
+        audit_requirements=("owner_approval", "fixed_command_set", "job_lifecycle", "result_recipient"),
+    ))
+    _register_readonly(
+        registry,
+        tool_id="developer.runtime_inventory",
+        display_name="Forge developer runtime inventory",
+        purpose="Report which fixed developer runtimes are available on Forge without accepting command text",
+        implementation=collect_developer_runtime,
+        output_properties=("schema_version", "observed_at", "executables", "termux_markers", "notes"),
+        timeout_seconds=30,
+    )
+    _register_readonly(
+        registry,
+        tool_id="developer.project_snapshot",
+        display_name="Forge project snapshot",
+        purpose="Read one configured Git working tree's identity, cleanliness, and file metadata using fixed read-only operations",
+        implementation=collect_project_snapshot,
+        output_properties=(
+            "schema_version", "observed_at", "project_root", "git_head", "git_branch",
+            "working_tree_clean", "changed_entry_count", "file_count", "file_bytes", "notes",
+        ),
+        timeout_seconds=60,
+    )
+    _register_readonly(
+        registry,
+        tool_id="android.termux_status",
+        display_name="Tablet Termux readiness",
+        purpose="Report whether Termux and Termux:API are installed on the connected tablet using fixed ADB package queries only",
+        implementation=collect_termux_status,
+        output_properties=(
+            "schema_version", "observed_at", "adb_available", "device_connected",
+            "termux_installed", "termux_api_installed", "termux_apk_path",
+            "termux_api_apk_path", "readiness",
+        ),
+        timeout_seconds=30,
+        network_scope="local_usb_or_adb_device",
+    )
+    _register_autonomy_transport(registry)
+    return registry
+
+
+_tools.default_registry = _default_registry_with_sage_extensions

@@ -1,0 +1,134 @@
+name: Validate approved Sage repair packet
+
+on:
+  workflow_dispatch:
+    inputs:
+      repair_packet_json:
+        description: Approved Sage repair-packet.json contents
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  validate-test-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: agent/sage-1-27-unified-20260801
+
+      - name: Validate constrained repair packet
+        env:
+          REPAIR_PACKET_JSON: ${{ inputs.repair_packet_json }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          packet = json.loads(os.environ["REPAIR_PACKET_JSON"])
+          required = {
+              "schema_version", "packet_id", "created_at", "repository", "base_branch",
+              "package_name", "version_name", "version_code",
+              "classification", "device", "android_version", "android_api",
+              "authority_states", "brain_status", "wake_status", "reproduction_steps",
+              "confirmed_evidence", "theories", "requested_operations",
+              "owner_approval_required", "arbitrary_commands",
+          }
+          assert set(packet) == required, "packet keys differ from schema allowlist"
+          assert packet["schema_version"] == "1.0"
+          assert packet["repository"] == "superkat13/JE"
+          assert packet["base_branch"] == "agent/sage-1-27-unified-20260801"
+          assert packet["package_name"] == "com.pineapple.sagecommander.stable"
+          assert packet["version_name"] == "1.27.0" and packet["version_code"] == 39
+          assert packet["owner_approval_required"] is True
+          assert packet["arbitrary_commands"] == []
+          assert packet["classification"] in {
+              "configuration", "permission", "transient_runtime_issue", "likely_code_defect"
+          }
+          allowed = {"inspect_sage_diagnostics", "modify_sage_source", "add_regression_tests"}
+          assert set(packet["requested_operations"]) <= allowed
+          assert "signing_certificate_sha256" not in packet, "public packet must omit signer digest"
+          assert len(os.environ["REPAIR_PACKET_JSON"].encode()) <= 32768
+          PY
+
+      - name: Create isolated local repair branch
+        run: git switch -c "repair/approved-${GITHUB_RUN_ID}"
+
+      - name: Reconstruct Sage 1.27.0
+        run: |
+          bash sage_tools/reconstruct_v1_20.sh sage_build
+          for patch in \
+            stabilize_v1_21 fix_android_lint_v1_21 brain_watchdog_v1_22 \
+            wake_profiles_and_recognition_v1_23 fix_wake_profiles_compile_v1_23 \
+            continuity_report_v1_24 number_overlay_release_v1_24_1 \
+            sage_release_v1_24_2 self_repair_foundation_v1_25 \
+            workbench_v1_25 sage_forge_v1_25; do
+            python3 "sage_patches/${patch}.py" sage_build
+          done
+          patch --fuzz=0 -p1 -d sage_build < SAGE_1_26_UNIFIED.diff
+          patch --fuzz=0 -p1 -d sage_build < sage_patches/continuity_finish_v1_26.patch
+          patch --fuzz=0 -p1 -d sage_build < sage_patches/sage_1_27_unified.patch
+          python3 sage_patches/creative_studio_v1_27.py sage_build
+
+      - name: Run complete source regressions
+        run: |
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py
+          python3 -m unittest -v sage_forge.tests.test_forge
+          for test in sage_tests/test_*.py; do python3 "$test" sage_build; done
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install Android native toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Install permanent Sage signing identity
+        run: |
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+
+      - name: Add pinned Brain engine and wake model
+        run: |
+          mkdir -p sage_build/third_party/llama.cpp
+          git -C sage_build/third_party/llama.cpp init
+          git -C sage_build/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build/third_party/llama.cpp checkout --detach FETCH_HEAD
+          curl -L --fail --retry 3 -o /tmp/vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/vosk.zip -d /tmp/vosk
+          mkdir -p sage_build/app/src/main/assets
+          mv /tmp/vosk/vosk-model-small-en-us-0.15 sage_build/app/src/main/assets/model-en-us
+          printf 'sage-v1.27.0-unified-intelligence\n' > sage_build/app/src/main/assets/model-en-us/uuid
+
+      - name: Compile, test, lint, and assemble candidate
+        working-directory: sage_build
+        run: gradle :app:compileReleaseJavaWithJavac :app:testReleaseUnitTest :app:lintRelease :app:assembleRelease
+
+      - name: Verify continuity identity
+        run: |
+          set -euo pipefail
+          APK="sage_build/app/build/outputs/apk/release/app-release.apk"
+          BUILD_TOOLS="$ANDROID_HOME/build-tools/35.0.0"
+          "$BUILD_TOOLS/apksigner" verify --verbose "$APK"
+          "$BUILD_TOOLS/aapt" dump badging "$APK" | tee approved-repair-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable' versionCode='39' versionName='1.27.0'" approved-repair-badging.txt
+
+      - name: Upload candidate only
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.27.0-approved-repair-candidate-${{ github.run_id }}
+          path: |
+            approved-repair-badging.txt
+            sage_build/app/build/outputs/apk/release/app-release.apk
+            sage_build/app/build/reports/lint-results-release.*
+          if-no-files-found: error

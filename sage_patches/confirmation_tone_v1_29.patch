@@ -1,0 +1,252 @@
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageBrainManager.java b/app/src/main/java/com/pineapple/sage/SageBrainManager.java
+--- a/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 20:06:18.665847560 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageBrainManager.java	2026-08-08 20:08:59.109721733 -0500
+@@ -779,0 +780,4 @@
++        SageTonePolicy.Tone tone;
++        try { tone = SageTonePolicy.Tone.valueOf(preferences.getString("owner_tone", "CLEAN")); }
++        catch (RuntimeException ignored) { tone = SageTonePolicy.Tone.CLEAN; }
++        prompt.append(SageTonePolicy.brainInstruction(tone)).append('\n');
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+--- a/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-08 20:06:18.669847558 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageCommandEngine.java	2026-08-08 20:08:58.937721911 -0500
+@@ -115,0 +116,8 @@
++        if (SageTonePolicy.isToneCommand(lower)) {
++            SageTonePolicy.Tone current = tone();
++            SageTonePolicy.Tone selected = SageTonePolicy.command(current, lower);
++            preferences.edit().putString("owner_tone", selected.name()).commit();
++            SageDiagnostics.appendEvent(context, "TONE",
++                    "tone_setting=" + selected.name() + " owner_preference=true");
++            return new Result(SageTonePolicy.response(selected));
++        }
+@@ -579,0 +588,5 @@
++    }
++
++    private SageTonePolicy.Tone tone() {
++        try { return SageTonePolicy.Tone.valueOf(preferences.getString("owner_tone", "CLEAN")); }
++        catch (RuntimeException ignored) { return SageTonePolicy.Tone.CLEAN; }
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageConfirmationLearning.java b/app/src/main/java/com/pineapple/sage/SageConfirmationLearning.java
+--- a/app/src/main/java/com/pineapple/sage/SageConfirmationLearning.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageConfirmationLearning.java	2026-08-08 20:09:32.605685521 -0500
+@@ -0,0 +1,62 @@
++package com.pineapple.sage;
++
++import java.util.LinkedHashMap;
++import java.util.Locale;
++import java.util.Map;
++
++/** Android-free exactly-once confirmation and correction policy. */
++final class SageConfirmationLearning {
++    static final long TTL_MS = 30_000L;
++    static final class Pending {
++        final long turnId, generation, createdAt, expiresAt;
++        final String raw, normalized, alternatives, intent, entities, context, risk;
++        final float confidence;
++        boolean consumed;
++        Pending(long turnId,long generation,String raw,String normalized,String alternatives,
++                float confidence,String intent,String entities,String context,String risk,long now) {
++            this.turnId=turnId; this.generation=generation; this.raw=clean(raw);
++            this.normalized=normalize(normalized); this.alternatives=clean(alternatives);
++            this.confidence=confidence; this.intent=clean(intent); this.entities=clean(entities);
++            this.context=clean(context); this.risk=clean(risk); createdAt=now; expiresAt=now+TTL_MS;
++        }
++    }
++    static final class Answer {
++        final boolean execute, retry, save; final String candidate, response, rejection;
++        Answer(boolean e,boolean r,boolean s,String c,String p,String x){execute=e;retry=r;save=s;candidate=c;response=p;rejection=x;}
++    }
++    static final class Correction {
++        final String rejected, corrected, intent, context, source, relationship;
++        final float confidence; final long createdAt, updatedAt;
++        Correction(String r,String c,String i,String x,String s,float f,long at){rejected=normalize(r);corrected=clean(c);intent=clean(i);context=clean(x);source=clean(s);confidence=f;createdAt=at;updatedAt=at;relationship="rejected_to_corrected";}
++    }
++    private Pending pending; private final Map<String,Correction> corrections=new LinkedHashMap<>();
++    synchronized void restore(Pending value){pending=value;}
++    synchronized Pending begin(long turn,long generation,String raw,String normalized,String alternatives,
++            float confidence,String intent,String entities,String context,String risk,long now) {
++        if (pending!=null && !pending.consumed && now<=pending.expiresAt) return pending;
++        pending=new Pending(turn,generation,raw,normalized,alternatives,confidence,intent,entities,context,risk,now); return pending;
++    }
++    synchronized Pending pending(long now){if(pending!=null&&now>pending.expiresAt){pending.consumed=true;pending=null;}return pending;}
++    synchronized Answer answer(String text,long turn,long generation,long now){
++        Pending p=pending(now); String value=normalize(text);
++        if(p==null)return new Answer(false,false,false,"","","no_pending_confirmation");
++        if(turn<p.turnId||generation<=p.generation||p.consumed)return new Answer(false,false,false,"","","stale_confirmation_answer");
++        if(value.equals("cancel")||value.equals("stop")){p.consumed=true;pending=null;return new Answer(false,false,false,"","","confirmation_cancelled");}
++        if(value.equals("no")||value.equals("nope")){p.consumed=true;pending=null;return new Answer(false,true,false,"","Okay—say it again.","");}
++        if(value.equals("yes")||value.equals("yeah")||value.equals("correct")){p.consumed=true;pending=null;return new Answer(true,false,isLearnable(p),p.raw,"","");}
++        return new Answer(false,false,false,"","","not_confirmation_answer");
++    }
++    synchronized Correction learn(String rejected,String corrected,String intent,String context,String risk,float confidence,long now){
++        if(!learnableRisk(risk))return null; Correction c=new Correction(rejected,corrected,intent,context,"owner_confirmed",confidence,now); corrections.put(key(rejected,context),c); return c;
++    }
++    synchronized String apply(String phrase,String context,String risk){if(!learnableRisk(risk))return phrase;Correction c=corrections.get(key(phrase,context));return c==null?phrase:c.corrected;}
++    synchronized boolean edit(String rejected,String context,String corrected,long now){Correction old=corrections.get(key(rejected,context));if(old==null)return false;corrections.put(key(rejected,context),new Correction(old.rejected,corrected,old.intent,old.context,"owner_edited",old.confidence,now));return true;}
++    synchronized boolean delete(String rejected,String context){return corrections.remove(key(rejected,context))!=null;}
++    synchronized void cancel(){if(pending!=null)pending.consumed=true;pending=null;}
++    private static boolean isLearnable(Pending p){return learnableRisk(p.risk);}
++    static boolean learnableRisk(String risk){String v=normalize(risk);return !(v.contains("auth")||v.contains("red queen")||v.contains("permission")||v.contains("installer")||v.contains("destructive")||v.contains("authority")||v.contains("privilege"));}
++    static String question(String candidate){return "Did you say ‘"+clean(candidate)+"’?";}
++    private static String key(String p,String c){return normalize(p)+"\u001f"+normalize(c);}
++    private static String clean(String v){return v==null?"":v.trim();}
++    private static String normalize(String v){return clean(v).toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]+"," ").replaceAll("\\s+"," ").trim();}
++}
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageConfirmationStore.java b/app/src/main/java/com/pineapple/sage/SageConfirmationStore.java
+--- a/app/src/main/java/com/pineapple/sage/SageConfirmationStore.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageConfirmationStore.java	2026-08-08 20:10:09.449642291 -0500
+@@ -0,0 +1,31 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.util.Base64;
++
++import java.nio.charset.StandardCharsets;
++import java.util.ArrayList;
++import java.util.HashSet;
++import java.util.List;
++import java.util.Set;
++
++/** Owner-private durable confirmation/correction records. */
++final class SageConfirmationStore {
++    private static final String PREFS="sage_confirmation_learning_v1", PENDING="pending", CORRECTIONS="corrections";
++    private SageConfirmationStore(){}
++    static void savePending(Context c,SageConfirmationLearning.Pending p){prefs(c).edit().putString(PENDING,join(p.turnId,p.generation,p.createdAt,p.expiresAt,p.confidence,p.raw,p.normalized,p.alternatives,p.intent,p.entities,p.context,p.risk)).commit();}
++    static SageConfirmationLearning.Pending loadPending(Context c,long now){String[] v=split(prefs(c).getString(PENDING,""));try{if(v.length!=12)return null;long created=Long.parseLong(v[2]),expires=Long.parseLong(v[3]);if(now>expires){clearPending(c);return null;}SageConfirmationLearning.Pending p=new SageConfirmationLearning.Pending(Long.parseLong(v[0]),Long.parseLong(v[1]),v[5],v[6],v[7],Float.parseFloat(v[4]),v[8],v[9],v[10],v[11],created);return p;}catch(RuntimeException e){clearPending(c);return null;}}
++    static void clearPending(Context c){prefs(c).edit().remove(PENDING).commit();}
++    static boolean saveCorrection(Context c,SageConfirmationLearning.Correction correction){if(correction==null)return false;Set<String> values=new HashSet<>(prefs(c).getStringSet(CORRECTIONS,new HashSet<>()));String prefix=enc(correction.rejected)+"|"+enc(correction.context)+"|";values.removeIf(v->v.startsWith(prefix));values.add(join(correction.rejected,correction.context,correction.corrected,correction.intent,correction.source,correction.relationship,correction.confidence,correction.createdAt,correction.updatedAt));return prefs(c).edit().putStringSet(CORRECTIONS,values).commit();}
++    static String apply(Context c,String phrase,String context,String risk){if(!SageConfirmationLearning.learnableRisk(risk))return phrase;String n=normalize(phrase),x=normalize(context);for(String row:prefs(c).getStringSet(CORRECTIONS,new HashSet<>())){String[] v=split(row);if(v.length==9&&normalize(v[0]).equals(n)&&normalize(v[1]).equals(x))return v[2];}return phrase;}
++    static boolean delete(Context c,String rejected,String context){String n=normalize(rejected),x=normalize(context);Set<String> values=new HashSet<>(prefs(c).getStringSet(CORRECTIONS,new HashSet<>()));boolean changed=values.removeIf(row->{String[]v=split(row);return v.length==9&&normalize(v[0]).equals(n)&&normalize(v[1]).equals(x);});return changed&&prefs(c).edit().putStringSet(CORRECTIONS,values).commit();}
++    static boolean edit(Context c,String rejected,String context,String corrected,long now){String n=normalize(rejected),x=normalize(context);Set<String> values=new HashSet<>(prefs(c).getStringSet(CORRECTIONS,new HashSet<>()));String[] found={};String foundRow="";for(String row:values){String[]v=split(row);if(v.length==9&&normalize(v[0]).equals(n)&&normalize(v[1]).equals(x)){found=v;foundRow=row;break;}}if(found.length==0)return false;values.remove(foundRow);values.add(join(found[0],found[1],corrected,found[3],"owner_edited",found[5],found[6],found[7],now));return prefs(c).edit().putStringSet(CORRECTIONS,values).commit();}
++    static List<String> records(Context c){return new ArrayList<>(prefs(c).getStringSet(CORRECTIONS,new HashSet<>()));}
++    private static SharedPreferences prefs(Context c){return c.getSharedPreferences(PREFS,Context.MODE_PRIVATE);}
++    private static String join(Object...values){StringBuilder b=new StringBuilder();for(Object value:values){if(b.length()>0)b.append('|');b.append(enc(String.valueOf(value)));}return b.toString();}
++    private static String[] split(String value){if(value==null||value.isEmpty())return new String[0];String[] raw=value.split("\\|",-1);for(int i=0;i<raw.length;i++)raw[i]=dec(raw[i]);return raw;}
++    private static String enc(String value){return Base64.encodeToString(value.getBytes(StandardCharsets.UTF_8),Base64.NO_WRAP|Base64.URL_SAFE);}
++    private static String dec(String value){return new String(Base64.decode(value,Base64.NO_WRAP|Base64.URL_SAFE),StandardCharsets.UTF_8);}
++    private static String normalize(String value){return value==null?"":value.trim().toLowerCase(java.util.Locale.US).replaceAll("[^a-z0-9 ]+"," ").replaceAll("\\s+"," ").trim();}
++}
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageTonePolicy.java b/app/src/main/java/com/pineapple/sage/SageTonePolicy.java
+--- a/app/src/main/java/com/pineapple/sage/SageTonePolicy.java	1969-12-31 18:00:00.000000000 -0600
++++ b/app/src/main/java/com/pineapple/sage/SageTonePolicy.java	2026-08-08 20:08:24.529755807 -0500
+@@ -0,0 +1,15 @@
++package com.pineapple.sage;
++
++import java.util.Locale;
++
++/** One Sage identity with an owner-selected presentation preference. */
++final class SageTonePolicy {
++    enum Tone { CLEAN, CASUAL, UNFILTERED }
++    enum MessageClass { CONVERSATION, SECURITY, DIAGNOSTIC, VERIFICATION, EMERGENCY, EXACT_ERROR }
++    static Tone command(Tone current,String spoken){String v=normalize(spoken);if(v.contains("stop cussing"))return Tone.CLEAN;if(v.contains("you can cuss around me"))return Tone.UNFILTERED;if(v.contains("turn the sass up"))return current==Tone.CLEAN?Tone.CASUAL:Tone.UNFILTERED;if(v.contains("tone it down"))return current==Tone.UNFILTERED?Tone.CASUAL:Tone.CLEAN;return current;}
++    static boolean isToneCommand(String spoken){String v=normalize(spoken);return v.contains("you can cuss around me")||v.contains("turn the sass up")||v.contains("tone it down")||v.contains("stop cussing")||v.contains("what is your language setting");}
++    static String response(Tone tone){return "Language setting: "+tone.name()+".";}
++    static String format(Tone tone,String text,MessageClass kind){if(kind!=MessageClass.CONVERSATION||tone==Tone.CLEAN)return text;if(tone==Tone.CASUAL)return text+" I’ve got you.";return text+" Hell yeah—I’ve got you.";}
++    static String brainInstruction(Tone tone){if(tone==Tone.CASUAL)return "Tone: CASUAL. Stay Sage; occasional natural mild profanity is allowed.";if(tone==Tone.UNFILTERED)return "Tone: UNFILTERED. Stay Sage; you may mirror the owner's language and use playful cheeky profanity.";return "Tone: CLEAN. Use warm language without profanity.";}
++    private static String normalize(String v){return v==null?"":v.toLowerCase(Locale.US).replaceAll("[^a-z0-9 ]+"," ").replaceAll("\\s+"," ").trim();}
++}
+diff -rN -U0 a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-08 20:06:18.665847560 -0500
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java	2026-08-08 20:09:50.889664499 -0500
+@@ -100,0 +101 @@
++    private SageConfirmationLearning confirmationLearning;
+@@ -136,0 +138,2 @@
++    private String rejectedForCorrection = "";
++    private String rejectedContext = "";
+@@ -150,0 +154,2 @@
++        confirmationLearning = new SageConfirmationLearning();
++        confirmationLearning.restore(SageConfirmationStore.loadPending(this, System.currentTimeMillis()));
+@@ -921,0 +927,16 @@
++                        if (handleConfirmationAnswer(decision.selectedCandidate, decision.turnId,
++                                decision.callbackGeneration)) return;
++                        if (!rejectedForCorrection.isEmpty()) {
++                            SageIntentCoordinator.Plan correctedPlan = SageIntentCoordinator.understand(
++                                    SageVoiceService.this, decision.selectedCandidate,
++                                    brainManager != null && brainManager.canAnswer(), SageForgeStore.isPaired(SageVoiceService.this));
++                            SageConfirmationLearning.Correction learned = confirmationLearning.learn(
++                                    rejectedForCorrection, decision.selectedCandidate, correctedPlan.intent,
++                                    rejectedContext, correctedPlan.riskDecision, decision.confidence,
++                                    System.currentTimeMillis());
++                            SageConfirmationStore.saveCorrection(SageVoiceService.this, learned);
++                            SageDiagnostics.appendEvent(SageVoiceService.this, "CONFIRMATION",
++                                    "learned_mapping=" + rejectedForCorrection + " -> " + decision.selectedCandidate
++                                            + " dispatch_count=1");
++                            rejectedForCorrection = ""; rejectedContext = "";
++                        }
+@@ -922,0 +944,2 @@
++                    } else if ("low_confidence".equals(rejection) && !candidate.isEmpty()) {
++                        askSpeechConfirmation(decision, finalChoices, confidence);
+@@ -1183,0 +1207,65 @@
++    private void askSpeechConfirmation(SageConversationStateMachine.Decision decision,
++                                       ArrayList<String> alternatives, float confidence) {
++        SageIntentCoordinator.Plan plan = SageIntentCoordinator.understand(this,
++                decision.selectedCandidate, brainManager != null && brainManager.canAnswer(),
++                SageForgeStore.isPaired(this));
++        SageConfirmationLearning.Pending pending = confirmationLearning.begin(
++                decision.turnId, decision.callbackGeneration, decision.selectedCandidate,
++                decision.normalized, alternatives.toString(), confidence, plan.intent,
++                plan.entities, SageActionContextStore.contextSummary(this), plan.riskDecision,
++                System.currentTimeMillis());
++        SageConfirmationStore.savePending(this, pending);
++        String question = SageConfirmationLearning.question(pending.raw);
++        SageDiagnostics.appendEvent(this, "CONFIRMATION",
++                "state=pending turn=" + pending.turnId + " recognizer_generation="
++                        + pending.generation + " candidate=" + pending.raw + " alternatives="
++                        + pending.alternatives + " confidence=" + pending.confidence
++                        + " rejection_reason=low_confidence dispatch_count=0 expires="
++                        + pending.expiresAt);
++        openConversationWindow();
++        listenForCommandAfterSpeech = true;
++        broadcastLine("Sage", question);
++        speak(question);
++    }
++
++    private boolean handleConfirmationAnswer(String transcript, long turnId, long generation) {
++        SageConfirmationLearning.Pending pending = confirmationLearning.pending(System.currentTimeMillis());
++        if (pending == null) {
++            SageConfirmationStore.clearPending(this);
++            return false;
++        }
++        SageConfirmationLearning.Answer answer = confirmationLearning.answer(
++                transcript, turnId, generation, System.currentTimeMillis());
++        SageDiagnostics.appendEvent(this, "CONFIRMATION",
++                "state=answered answer=" + transcript + " candidate=" + pending.raw
++                        + " dispatch_count=" + (answer.execute ? 1 : 0)
++                        + " rejection_reason=" + answer.rejection);
++        if ("not_confirmation_answer".equals(answer.rejection)) return false;
++        SageConfirmationStore.clearPending(this);
++        if (answer.retry) {
++            rejectedForCorrection = pending.raw;
++            rejectedContext = pending.context;
++            openConversationWindow();
++            listenForCommandAfterSpeech = true;
++            broadcastLine("Sage", answer.response);
++            speak(answer.response);
++            return true;
++        }
++        if (answer.execute) {
++            if (answer.save) {
++                SageConfirmationLearning.Correction correction = confirmationLearning.learn(
++                        pending.raw, pending.raw, pending.intent, pending.context,
++                        pending.risk, pending.confidence, System.currentTimeMillis());
++                SageConfirmationStore.saveCorrection(this, correction);
++                SageDiagnostics.appendEvent(this, "CONFIRMATION",
++                        "learned_mapping=" + pending.raw + " -> " + pending.raw
++                                + " source=owner_confirmed save_count=1");
++            }
++            handleCommand(answer.candidate);
++        } else {
++            closeConversationWindow();
++            startWakeListening(300);
++        }
++        return true;
++    }
++
+@@ -1244,0 +1333,8 @@
++        cleaned = SageConfirmationStore.apply(this, cleaned,
++                SageActionContextStore.contextSummary(this), intentPlan.riskDecision);
++        if (!cleaned.equals(command.trim())) {
++            intentPlan = SageIntentCoordinator.understand(this, cleaned,
++                    brainManager != null && brainManager.canAnswer(), SageForgeStore.isPaired(this));
++            SageDiagnostics.appendEvent(this, "CONFIRMATION",
++                    "learned_mapping_applied=true candidate=" + command + " corrected=" + cleaned);
++        }
