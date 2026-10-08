@@ -1,0 +1,30 @@
+name: Inspect Sage public web and voice routing
+
+on:
+  push:
+    branches:
+      - sage-public-web-voice-repair-20260811
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct current Sage
+        run: bash sage_tools/reconstruct_v1_29.sh sage_build_129
+      - name: Inspect exact routing and candidate code
+        run: |
+          set -euo pipefail
+          ENGINE=sage_build_129/app/src/main/java/com/pineapple/sage/SageCommandEngine.java
+          VOICE=sage_build_129/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+          COORD=sage_build_129/app/src/main/java/com/pineapple/sage/SageCoordinator.java
+          echo '=== COMMAND ENGINE WEB / NETWORK ==='
+          grep -n -C 8 -Ei 'website|browser|http|url|host|network|search|open.*site|private' "$ENGINE" || true
+          echo '=== VOICE CANDIDATE SELECTION ==='
+          grep -n -C 12 -Ei 'finalChoices|alternatives|candidate|selected|deterministic|semantic|confidence|VOICE CANDIDATES' "$VOICE" || true
+          echo '=== COORDINATOR ROUTING ==='
+          if test -f "$COORD"; then grep -n -C 8 -Ei 'website|browser|http|url|host|network|search|private|intent' "$COORD" || true; fi

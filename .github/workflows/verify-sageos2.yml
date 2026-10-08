@@ -1,0 +1,312 @@
+name: Verify SageOS 2
+
+on:
+  push:
+    branches: [sageos-2]
+    paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml', '.github/workflows/test-sageos2-native-brain.yml']
+  pull_request:
+    branches: [sageos-2]
+    paths: ['sageos2/**', '.github/workflows/verify-sageos2.yml', '.github/workflows/test-sageos2-native-brain.yml']
+  workflow_dispatch:
+
+jobs:
+  native-brain:
+    uses: ./.github/workflows/test-sageos2-native-brain.yml
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: '17' }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: '9.3.1' }
+      - uses: actions/cache@v4
+        with:
+          path: |
+            sageos2/.deps/kws
+            sageos2/app/libs/sherpa-onnx-1.13.7.aar
+            sageos2/app/src/main/assets/sherpa-kws
+          key: sageos2-kws-v3-1.13.7-f170013b4716e41b
+      - name: Reject removed Shizuku architecture
+        run: |
+          set -euo pipefail
+          if grep -Rni --exclude='SAGEOS2_MASTER_PLAN.md' --exclude='SAGEOS2_CONTINUITY.md' --exclude='verify-sageos2.yml' 'shizuku' sageos2; then exit 1; fi
+          ! grep -qi 'shizuku' sageos2/app/src/main/AndroidManifest.xml
+      - name: Verify root broker trust boundary and host syntax
+        run: |
+          set -euo pipefail
+          g++ -std=c++20 -D_GNU_SOURCE -Wall -Wextra -Werror -Wno-missing-field-initializers -fsyntax-only sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'SO_PEERCRED' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'SO_PEERSEC' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'kAllowedPeerPrefix = "u:r:sage_app:s0"' sageos2/system/rootd/sage_rootd.cpp
+          grep -F 'socket sage_rootd stream 0666 root root' sageos2/system/rootd/sage_rootd.rc
+          grep -F 'seinfo=platform name=com.pineapple.sagecommander.stable domain=sage_app' sageos2/system/sepolicy/private/seapp_contexts
+          grep -F 'allow sage_app sage_rootd:unix_stream_socket connectto;' sageos2/system/sepolicy/private/sage_app.te
+          grep -F 'class SocketRootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/SocketRootBrokerClient.kt
+          grep -F 'class AndroidCapabilityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F '"root.install_package"' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F 'val capabilities = AndroidCapabilityBroker' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          test ! -e sageos2/app/src/main/java/com/pineapple/sageos2/authority/AuthorityBroker.kt
+          ! grep -Rni 'permissive sage_rootd' sageos2/system
+          ! grep -Rni 'sh -c' sageos2/system/rootd
+      - name: Prepare pinned offline wake dependencies
+        run: |
+          set -euo pipefail
+          bash sageos2/tools/fetch-kws-deps.sh
+          python3 -m pip install sherpa-onnx==1.13.7 numpy==2.2.6
+          python3 sageos2/tools/test-native-kws.py
+          test -s sageos2/app/libs/sherpa-onnx-1.13.7.aar
+          test -s sageos2/app/src/main/assets/sherpa-kws/encoder.int8.onnx
+          test -s sageos2/app/src/main/assets/sherpa-kws/decoder.onnx
+          test -s sageos2/app/src/main/assets/sherpa-kws/joiner.int8.onnx
+          test -s sageos2/app/src/main/assets/sherpa-kws/tokens.txt
+          test -s sageos2/app/src/main/assets/sherpa-kws/bpe-vocab.tsv
+      - name: Prepare exact pinned llama.cpp for native Brain
+        run: |
+          set -euo pipefail
+          PIN=d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          DIR=sageos2/third_party/llama.cpp
+          rm -rf "$DIR"
+          mkdir -p "$(dirname "$DIR")"
+          git clone --filter=blob:none --no-checkout https://github.com/ggerganov/llama.cpp.git "$DIR"
+          git -C "$DIR" fetch --depth=1 origin "$PIN"
+          git -C "$DIR" checkout --detach "$PIN"
+          test "$(git -C "$DIR" rev-parse HEAD)" = "$PIN"
+          git -C "$DIR" diff-index --quiet HEAD -- .
+      - name: Verify Brain architecture and exact donor JNI boundary
+        run: |
+          grep -F 'class BrainRouterEngine' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRouterEngine.kt
+          grep -F 'class LocalNativeBrainEngine' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'interface NativeBrainBridge' sageos2/app/src/main/java/com/pineapple/sageos2/brain/NativeBrainBridge.kt
+          grep -F 'systemPrompt = systemPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'userPrompt = userPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'BrainProgressStage.LOADING_MODEL' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'BrainProgressStage.READING_CONTEXT' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'BrainPromptBudget.fitSystemContext' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'BrainRequestPolicy.forPrompt' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'BrainOutputCleaner.clean' sageos2/app/src/main/java/com/pineapple/sageos2/brain/LocalNativeBrainEngine.kt
+          grep -F 'private val brainResponseTimeoutMs: Long = 120_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainLoadTimeoutMs: Long = 30_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainFirstTokenTimeoutMs: Long = 60_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'private val brainStallTimeoutMs: Long = 30_000L' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'effective_user_prompt += "\n/no_think";' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'constexpr int kContextTokens = 2048;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'constexpr int kMaximumResponseTokens = 48;' sageos2/app/src/main/cpp/sage_brain.cpp
+          grep -F 'const val DEFAULT_COMBINED_CHARACTER_BUDGET = 4_800' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainPromptBudget.kt
+          grep -F 'SAGE_LLAMA_PIN "d73c1d6b22a2d3ecc74c2c9cde354015ee72e862"' sageos2/app/src/main/cpp/CMakeLists.txt
+          grep -F 'PROVIDER_LIMITATION' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainFailure.kt
+      - name: Verify private Brain model provisioning
+        run: |
+          set -euo pipefail
+          grep -F 'class BrainModelStore' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'const val MODEL_NAME = "sage-brain.gguf"' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'hasGgufMagic' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'StandardCopyOption.ATOMIC_MOVE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelProvisioning.kt
+          grep -F 'class BrainModelImportActivity' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelImportActivity.kt
+          grep -F 'data object ImportBrainModel' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'FastCommand.ImportBrainModel -> importBrainModel()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
+          grep -F 'val fastCommand = fastCommands.parse(normalized)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'fastCommand is FastCommand.OpenApp' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'value == "import brain model"' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'com.pineapple.sageos2.brain.BrainModelImportActivity' sageos2/app/src/main/AndroidManifest.xml
+      - name: Verify structured tools Forge and safe recovery
+        run: |
+          set -euo pipefail
+          grep -F 'object BrainToolDirectiveParser' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolDirective.kt
+          grep -F 'DEFAULT_MAX_TOOL_CALLS = 8' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'DEFAULT_MAX_VERIFICATION_ROUNDS = 3' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'GoalCompletionPolicy.DEFAULT_MAX_TOOL_CALLS' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'verificationTargetToolCountByTurn' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'VERIFIED_MARKER = "SAGE_GOAL_VERIFIED"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'UNVERIFIED_MARKER = "SAGE_GOAL_UNVERIFIED"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/GoalCompletionPolicy.kt
+          grep -F 'parseVerificationResponse' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'TaskState.WAITING' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'RECOVERY_MARKER = "<SAGE_GOAL_RECOVER>"' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/RecoveryCompletionPolicy.kt
+          grep -F 'MAX_AUTO_RESUME_DEPTH = 3' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'recoveryReplayGuardByTurn' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'handleBlockedRecoveryReplay' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'scheduleRecoveredResume' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'is SageEvent.RecoverTask -> onRecoverTask(event)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageTurnCoordinator.kt
+          grep -F 'recoveredMutatingActionIsNotBlindlyReplayed' sageos2/app/src/test/java/com/pineapple/sageos2/runtime/SageRuntimeTest.kt
+          grep -F 'capabilityExecutor = Executors.newSingleThreadExecutor' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'Capability.FORGE' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+          grep -F 'approved = false' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F '"forge.start_job"' sageos2/app/src/main/java/com/pineapple/sageos2/capability/AndroidCapabilityBroker.kt
+          grep -F 'class TaskRecoveryManager' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'Do not automatically replay the previous side effect' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskRecoveryManager.kt
+          grep -F 'taskContinuity = tasks' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          ! grep -F 'forge.revoke' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+          ! grep -F 'forge.pair' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainToolContext.kt
+      - name: Verify Chicken Tonight scope contract
+        run: |
+          set -euo pipefail
+          grep -F 'data class ChickenTonightScope' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/ChickenTonightScope.kt
+          grep -F 'NON_NEGOTIABLE_EXCLUSIONS' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/ChickenTonightScope.kt
+          grep -F 'scope.isUsable(now)' sageos2/app/src/main/java/com/pineapple/sageos2/workflow/WorkflowRegistryEngine.kt
+          grep -F 'val chickenTonightScope = SharedPreferencesChickenTonightScopeStore' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'SageSettingsItem("Workflows & scopes"' sageos2/app/src/main/java/com/pineapple/sageos2/SageProductPresentation.kt
+          grep -F 'Start scoped Chicken Tonight workflow' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+      - name: Verify offline wake architecture
+        run: |
+          grep -F 'class SherpaWakeWordEngine' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
+          grep -F 'class WakePhraseCompiler' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakePhraseCompiler.kt
+          test -s sageos2/app/src/main/assets/sherpa-kws/bpe-vocab.tsv
+          grep -F '▁S AGE' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
+          grep -F '▁S AGE ▁G LI T CH' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
+          grep -F 'SAMPLES_PER_CHUNK = 1_600' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
+      - name: Verify continuity and diagnostics
+        run: |
+          grep -F 'data class TaskCheckpoint' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/TaskContinuity.kt
+          grep -F 'class SharedPreferencesTraceStore' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/SharedPreferencesTraceStore.kt
+          grep -F 'class PersistentRuntimeObserver' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/PersistentRuntimeObserver.kt
+      - name: Verify post-210 physical acceptance repairs
+        run: |
+          set -euo pipefail
+          grep -F 'class OwnerContinuityImporter' sageos2/app/src/main/java/com/pineapple/sageos2/continuity/OwnerContinuityImport.kt
+          grep -F 'Restore owner continuity' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'SageSherpaRecognitionService.prewarm(appContext)' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'long started = System.currentTimeMillis();' sageos2/app/src/main/java/com/pineapple/sage/SageSherpaRecognitionService.java
+          grep -F 'priorWorker.join(STOP_JOIN_MS)' sageos2/app/src/main/java/com/pineapple/sageos2/speech/SherpaWakeWordEngine.kt
+          grep -F 'fast action failed:' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntime.kt
+          grep -F 'assertEquals(40, ordinary.outputTokens)' sageos2/app/src/test/java/com/pineapple/sageos2/brain/BrainRequestPolicyTest.kt
+          grep -F 'fastActionFailureReturnsExactDeviceReasonWithoutStartingBrain' sageos2/app/src/test/java/com/pineapple/sageos2/runtime/SageRuntimeTest.kt
+          grep -F 'mergeAddsReviewedContinuityWithoutDeletingExistingState' sageos2/app/src/test/java/com/pineapple/sageos2/continuity/OwnerContinuityMergerTest.kt
+      - name: Verify diagnostic report escape hatch
+        run: |
+          set -euo pipefail
+          grep -F 'object DiagnosticReportRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/DiagnosticReport.kt
+          grep -F 'Privacy: conversation text' sageos2/app/src/main/java/com/pineapple/sageos2/diagnostics/DiagnosticReport.kt
+          grep -F 'fun diagnosticReport(traceLimit: Int = 100): String' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'diagnosticReportProvider = { diagnosticReport() }' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'data object ShareDiagnosticReport' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'FastCommand.ShareDiagnosticReport -> shareDiagnosticReport()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
+          grep -F '"share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
+          grep -F 'text = "Copy diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          grep -F 'text = "Share diagnostic report"' sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+      - name: Verify twin context and Owner Apps
+        run: |
+          grep -F 'class TwinContextRenderer' sageos2/app/src/main/java/com/pineapple/sageos2/identity/TwinContextRenderer.kt
+          grep -F 'data class OwnerAppRecord' sageos2/app/src/main/java/com/pineapple/sageos2/apps/OwnerApps.kt
+      - name: Verify wake, memory and history
+        run: |
+          grep -F 'data class WakeProfile' sageos2/app/src/main/java/com/pineapple/sageos2/speech/WakeProfiles.kt
+          grep -F 'data class TwinMemoryRecord' sageos2/app/src/main/java/com/pineapple/sageos2/memory/TwinMemory.kt
+          grep -F 'data class ConversationEntry' sageos2/app/src/main/java/com/pineapple/sageos2/memory/ConversationHistory.kt
+      - name: Verify Sage owns behavioral policy and root path
+        run: |
+          grep -F 'val selfRestrictions: List<String>' sageos2/app/src/main/java/com/pineapple/sageos2/identity/SageCore.kt
+          grep -F 'data class ExecuteProcess' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
+          grep -F 'interface RootBrokerClient' sageos2/app/src/main/java/com/pineapple/sageos2/root/RootBroker.kt
+      - name: Verify deterministic actions and speech
+        run: |
+          grep -F 'class AndroidFastActionEngine' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidFastActionEngine.kt
+          grep -F 'class AndroidSpeechPort' sageos2/app/src/main/java/com/pineapple/sageos2/speech/AndroidSpeechPort.kt
+          grep -F 'recognitionFailureSpeaksOnceThenClosesToWakeWithoutListeningAgain' sageos2/app/src/test/java/com/pineapple/sageos2/core/SageTurnCoordinatorTest.kt
+      - name: Verify Chat-first Sage home and hidden engineering surfaces
+        run: |
+          set -euo pipefail
+          cockpit=sageos2/app/src/main/java/com/pineapple/sageos2/MainActivity.kt
+          home=sageos2/app/src/main/java/com/pineapple/sageos2/SageHomeActivity.kt
+          product=sageos2/app/src/main/java/com/pineapple/sageos2/SageProductPresentation.kt
+          grep -F 'class SageHomeActivity : MainActivity()' "$home"
+          grep -F 'startActivity(Intent(this, SageHomeActivity::class.java))' sageos2/app/src/main/java/com/pineapple/sageos2/SageLaunchActivity.kt
+          grep -F 'private enum class Panel { CHAT, SETTINGS, MEMORY, APPS, MODES, APPEARANCE, ADVANCED, CORE, HEALTH, TASKS, WORKFLOWS, DIAGNOSTICS }' "$cockpit"
+          grep -F 'showPanel(Panel.CHAT)' "$cockpit"
+          grep -F 'SageProductPresentation.settings.forEach' "$cockpit"
+          grep -F 'SageProductPresentation.advancedSettings.forEach' "$cockpit"
+          grep -F 'text = "How to use"' "$cockpit"
+          grep -F 'text = "Send"' "$cockpit"
+          grep -F 'SageSettingsItem("Advanced"' "$product"
+          grep -F 'SageSettingsItem("Local replies & device access"' "$product"
+          grep -F 'SageSettingsItem("Diagnostics"' "$product"
+          grep -F 'SharedPreferencesLearnedPhraseStore' sageos2/app/src/main/java/com/pineapple/sageos2/runtime/SageRuntimeHost.kt
+          grep -F 'private const val LEGACY_TONE_KEY = "owner_tone"' sageos2/app/src/main/java/com/pineapple/sageos2/mode/SharedPreferencesSageModeController.kt
+          grep -F 'private const val KEY_BACKGROUND_URI = "appearance_background_uri"' sageos2/app/src/main/java/com/pineapple/sageos2/appearance/SageAppearancePreferences.kt
+          grep -F 'packageManager.queryIntentActivities' "$cockpit"
+          grep -F 'startupProcedure = startupProcedure.text.toString().trim()' "$cockpit"
+          ! grep -F 'Android package name' "$cockpit"
+          grep -F 'SageEffect.RecordOwnerInput(queuedTurnId, cleaned, TurnOrigin.TEXT)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageTurnCoordinator.kt
+          grep -F 'includeToolContext: Boolean = false' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRequestPolicy.kt
+          grep -F 'includeTaskContext: Boolean = false' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainRequestPolicy.kt
+          grep -F 'SageChatPresentation.present' "$cockpit"
+          grep -F 'Talk to me the way you always have' "$product"
+          grep -F 'text = "Run local Brain self-check"' "$cockpit"
+          ! grep -F 'One Sage. One runtime. Owner control.' "$cockpit"
+          ! grep -F 'append(" Root:' "$cockpit"
+          grep -F 'host.core.replace' "$cockpit"
+          grep -F 'host.recoverableTasks()' "$cockpit"
+          grep -F 'host.traces.recent(100)' "$cockpit"
+          grep -F 'host.ownerApps.upsert' "$cockpit"
+          grep -F 'host.modes.activate' "$cockpit"
+          grep -F 'com.pineapple.sageos2.SageHomeActivity' sageos2/app/src/main/AndroidManifest.xml
+          grep -F 'com.pineapple.sageos2.MainActivity' sageos2/app/src/main/AndroidManifest.xml
+      - name: Verify authority component contract
+        run: |
+          manifest=sageos2/app/src/main/AndroidManifest.xml
+          for component in com.pineapple.sageos2.SageLaunchActivity com.pineapple.sageos2.SageHomeActivity com.pineapple.sageos2.MainActivity com.pineapple.sageos2.brain.BrainModelImportActivity com.pineapple.sage.SageAccessibilityService com.pineapple.sage.SageNotificationListener com.pineapple.sage.SageVoiceService com.pineapple.sage.SageDeviceAdminReceiver com.pineapple.sage.SageBootReceiver com.pineapple.sage.SageAssistActivity com.pineapple.sage.SageVoiceInteractionService com.pineapple.sage.SageVoiceInteractionSessionService com.pineapple.sage.SageSherpaRecognitionService; do grep -F "android:name=\"$component\"" "$manifest"; done
+      - name: Run A1 recovery and historical continuity gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python3 -m compileall -q sage_tests
+          python3 sage_tests/test_sageos2_recovery_contract.py
+          python3 sage_tests/test_autonomy_self_repair_v1_29.py
+          rm -rf /tmp/sage1333
+          bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
+          python3 sage_tests/test_normal_tablet_v1_33_3.py /tmp/sage1333
+
+          # Prove SageOS 2 migration reads the persistence names that the last-good
+          # 1.33.3 source actually wrote. This guards owner identity/data continuity.
+          grep -RFn '"sage_core"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"owner_instructions"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"sage_owner_apps"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"entries"' /tmp/sage1333/app/src/main/java/com/pineapple/sage | grep -F 'SageOwner'
+          grep -RFn '"memory_items"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"wake_profiles_v1"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"sage_autonomy_jobs_v1"' /tmp/sage1333/app/src/main/java
+          grep -RFn '"active_job"' /tmp/sage1333/app/src/main/java
+
+          python3 -m compileall -q sage_forge
+          python3 -m unittest discover -v sage_forge/tests
+
+      - name: Verify core, root wire tests, compile native Brain, and build debug APK
+        run: gradle -p sageos2 testDebugUnitTest lintRelease assembleDebug --stacktrace
+      - name: Summarize unit and Android service test results
+        if: always()
+        run: |
+          python3 - <<'PYTEST'
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+          reports = list(Path('sageos2/app/build/test-results').glob('**/TEST-*.xml'))
+          totals = dict(tests=0, failures=0, errors=0, skipped=0)
+          for path in reports:
+              root = ET.parse(path).getroot()
+              for key in totals:
+                  totals[key] += int(root.get(key, '0'))
+              if any(name in path.name for name in ('RemoteWake', 'WakeRecovery', 'OwnerContinuity')):
+                  print(path.name, dict(root.attrib))
+          print('TEST TOTALS:', totals)
+          if not reports:
+              raise SystemExit('No JUnit XML reports found')
+          if totals['failures'] or totals['errors']:
+              raise SystemExit('Test failures present')
+          PYTEST
+      - name: Preserve test reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sageos2-test-reports
+          path: sageos2/app/build/test-results/
+          if-no-files-found: error
+      - name: Verify arm64 Brain and wake runtimes are packaged without other ABIs
+        run: |
+          set -euo pipefail
+          APK=sageos2/app/build/outputs/apk/debug/app-debug.apk
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so'
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsherpa-onnx-jni.so'
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libonnxruntime.so'
+          ! unzip -l "$APK" | grep -E 'lib/(x86|x86_64|armeabi-v7a)/'
+      - uses: actions/upload-artifact@v4
+        with: { name: sageos2-debug, path: sageos2/app/build/outputs/apk/debug/app-debug.apk, if-no-files-found: error }

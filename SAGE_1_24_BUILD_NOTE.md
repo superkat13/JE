@@ -1,0 +1,1 @@
+The verified APK is produced only by `.github/workflows/build-sage-v1-24-continuity.yml`. The workflow blocks artifact upload unless source reconstruction, inherited regression tests, clean second reconstruction, Java/native compilation, Android unit tests, lint, APK integrity, 16 KiB alignment, permanent certificate matching, package identity, and version identity all pass.

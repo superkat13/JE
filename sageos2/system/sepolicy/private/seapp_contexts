@@ -1,0 +1,4 @@
+# Exact package + platform seinfo is intentional. The SageOS image signs the
+# installed Sage package with the platform key; ordinary sideloaded packages do
+# not enter this domain even if they copy the package name.
+user=_app seinfo=platform name=com.pineapple.sagecommander.stable domain=sage_app type=privapp_data_file levelFrom=user

@@ -1,0 +1,27 @@
+name: Verify Sage 1.31 mic handoff
+
+on:
+  push:
+    branches:
+      - sage-sherpa-mic-ab-v1-31
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  sage-mic-handoff-131:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reconstruct and prove microphone ownership handoff
+        run: |
+          set -euo pipefail
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py
+          bash sage_tools/reconstruct_v1_31.sh sage_build_131_handoff
+          python3 sage_tests/test_sherpa_mic_handoff_v1_31.py sage_build_131_handoff
+          python3 sage_tests/test_sherpa_mic_ab_v1_31.py sage_build_131_handoff
+          grep -F 'SageVoiceService.ACTION_STOP' sage_build_131_handoff/app/src/main/java/com/pineapple/sage/SageSpeechLabActivity.java
+          grep -F 'SageVoiceService.ACTION_START' sage_build_131_handoff/app/src/main/java/com/pineapple/sage/SageSpeechLabActivity.java
+          grep -F 'if (!resumeVoiceAfterMic) return;' sage_build_131_handoff/app/src/main/java/com/pineapple/sage/SageSpeechLabActivity.java

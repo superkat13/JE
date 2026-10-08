@@ -1,0 +1,177 @@
+name: Verify Sage autonomy self-repair update
+
+on:
+  push:
+    branches:
+      - sage-autonomy-self-repair-v1
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  autonomy-update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: First full Sage regression pass
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_final_a
+          for test_file in sage_tests/test_*_v1_29.py; do
+            echo "=== $test_file ==="
+            python3 "$test_file" sage_build_final_a
+          done
+          python3 -m py_compile sage_patches/*.py sage_tests/*.py sage_forge/*.py sage_forge/tests/*.py
+          python3 -m unittest discover -v -s sage_forge/tests -t .
+
+      - name: Inherited continuity regression pass
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_28.sh sage_build_128
+          for test_file in \
+            sage_tests/test_stabilization_v1_21.py \
+            sage_tests/test_android_compat_v1_21.py \
+            sage_tests/test_brain_watchdog_v1_22.py \
+            sage_tests/test_wake_profiles_and_recognition_v1_23.py \
+            sage_tests/test_wake_profiles_compile_repair_v1_23.py \
+            sage_tests/test_continuity_report_v1_24.py \
+            sage_tests/test_number_overlay_release_v1_24_1.py \
+            sage_tests/test_sage_release_v1_24_2.py \
+            sage_tests/test_self_repair_v1_25.py \
+            sage_tests/test_workbench_v1_25.py \
+            sage_tests/test_sage_forge_v1_25.py \
+            sage_tests/test_reliability_toolbelt_v1_26.py \
+            sage_tests/test_continuity_finish_v1_26.py \
+            sage_tests/test_intelligence_memory_v1_27.py \
+            sage_tests/test_living_sage_v1_28.py \
+            sage_tests/test_red_queen_v1_28.py \
+            sage_tests/test_orchestrator_registry_v1_28.py \
+            sage_tests/test_package_file_labs_v1_28.py \
+            sage_tests/test_network_operations_v1_28.py \
+            sage_tests/test_automation_v1_28.py; do
+            python3 "$test_file" sage_build_128
+          done
+          python3 sage_tests/test_public_disclosure_v1_27.py
+
+      - name: Second independent full Sage regression pass and deterministic proof
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_29.sh sage_build_final_b
+          for test_file in sage_tests/test_*_v1_29.py; do
+            python3 "$test_file" sage_build_final_b
+          done
+          python3 -m unittest discover -v -s sage_forge/tests -t .
+          diff -qr --exclude=build --exclude=.gradle sage_build_final_a/app/src sage_build_final_b/app/src
+          cmp sage_build_final_a/app/build.gradle.kts sage_build_final_b/app/build.gradle.kts
+
+      - name: Add exact pinned native Brain and offline wake model to both passes
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build_final_a/third_party/llama.cpp
+          git -C sage_build_final_a/third_party/llama.cpp init
+          git -C sage_build_final_a/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build_final_a/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build_final_a/third_party/llama.cpp checkout --detach FETCH_HEAD
+          test "$(git -C sage_build_final_a/third_party/llama.cpp rev-parse HEAD)" = d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          mkdir -p /tmp/sage-vosk-autonomy sage_build_final_a/app/src/main/assets
+          curl -L --fail --retry 3 --retry-delay 2 -o /tmp/sage-vosk-autonomy.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
+          unzip -q /tmp/sage-vosk-autonomy.zip -d /tmp/sage-vosk-autonomy
+          mv /tmp/sage-vosk-autonomy/vosk-model-small-en-us-0.15 sage_build_final_a/app/src/main/assets/model-en-us
+          printf 'sage-v1.29.0-autonomy-self-repair\n' > sage_build_final_a/app/src/main/assets/model-en-us/uuid
+          test -s sage_build_final_a/app/src/main/assets/model-en-us/am/final.mdl
+          mkdir -p sage_build_final_b/third_party sage_build_final_b/app/src/main/assets
+          cp -a sage_build_final_a/third_party/llama.cpp sage_build_final_b/third_party/llama.cpp
+          cp -a sage_build_final_a/app/src/main/assets/model-en-us sage_build_final_b/app/src/main/assets/model-en-us
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Verify permanent Sage signer before build
+        run: |
+          set -euo pipefail
+          mkdir -p "$HOME/.android"
+          base64 --decode sage_signing/android-debug.keystore.b64 > "$HOME/.android/debug.keystore"
+          chmod 600 "$HOME/.android/debug.keystore"
+          ACTUAL="$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d' ' -f1)"
+          EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
+          test "$ACTUAL" = "$EXPECTED"
+
+      - name: Install exact Android compile toolchain
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "cmake;3.22.1" "ndk;28.2.13676358"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile test and lint first full pass
+        working-directory: sage_build_final_a
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Compile test and lint second full pass
+        working-directory: sage_build_final_b
+        run: |
+          set -euo pipefail
+          gradle :app:compileReleaseJavaWithJavac --stacktrace
+          gradle :app:externalNativeBuildRelease --stacktrace
+          gradle :app:testReleaseUnitTest --stacktrace
+          gradle :app:lintRelease --stacktrace
+
+      - name: Assemble normal install-over-existing Sage autonomy update
+        working-directory: sage_build_final_a
+        run: |
+          set -euo pipefail
+          gradle :app:assembleRelease --stacktrace
+          APK="app/build/outputs/apk/release/app-release.apk"
+          test -f "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose --print-certs "$APK" | tee ../sage-autonomy-apksigner.txt
+          EXPECTED="$(printf '%s%s' '99e0a7c655cdefb3bb4ac85e5961d193' '58ee0ffdb3dce9b3a145f9cbcda78d35')"
+          ACTUAL="$(sed -n 's/^Signer #1 certificate SHA-256 digest: //p' ../sage-autonomy-apksigner.txt | tr '[:upper:]' '[:lower:]')"
+          test "$ACTUAL" = "$EXPECTED"
+          unzip -l "$APK" | grep -F 'assets/model-en-us/am/final.mdl' | tee ../sage-autonomy-wake-asset.txt
+          unzip -l "$APK" | grep -F 'lib/arm64-v8a/libsage-brain.so' | tee ../sage-autonomy-native-brain.txt
+          sha256sum "$APK" | tee ../Sage-Commander-1.29.0-autonomy-update.sha256
+          cp "$APK" ../Sage-Commander-1.29.0-autonomy-update.apk
+
+      - name: Final APK identity continuity and autonomy verification
+        run: |
+          set -euo pipefail
+          APK="Sage-Commander-1.29.0-autonomy-update.apk"
+          test -s "$APK"
+          "$ANDROID_HOME/build-tools/35.0.0/aapt" dump badging "$APK" | tee sage-autonomy-badging.txt
+          grep -F "package: name='com.pineapple.sagecommander.stable'" sage-autonomy-badging.txt
+          grep -F "versionCode='41'" sage-autonomy-badging.txt
+          grep -F "versionName='1.29.0'" sage-autonomy-badging.txt
+          "$ANDROID_HOME/build-tools/35.0.0/apksigner" verify --verbose "$APK"
+          unzip -t "$APK" >/dev/null
+          test -f sage_build_final_a/app/src/main/java/com/pineapple/sage/SageAutonomyStore.java
+          test -f sage_build_final_a/app/src/main/java/com/pineapple/sage/SageAutonomyActivity.java
+          test -f sage_build_final_a/app/src/main/java/com/pineapple/sage/SageAutonomyHeartbeatReceiver.java
+          grep -F 'FIVE_MINUTES_MS = 5L * 60L * 1000L' sage_build_final_a/app/src/main/java/com/pineapple/sage/SageAutonomyStore.java
+          grep -F 'Copy Sage'"'"'s order for The Company' sage_build_final_a/app/src/main/java/com/pineapple/sage/SageAutonomyActivity.java
+          grep -F 'functional(root, "Sage Autonomy"' sage_build_final_a/app/src/main/java/com/pineapple/sage/SageRedQueenActivity.java
+
+      - name: Upload proper Sage autonomy update
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-Commander-1.29.0-autonomy-update
+          path: |
+            Sage-Commander-1.29.0-autonomy-update.apk
+            Sage-Commander-1.29.0-autonomy-update.sha256
+            sage-autonomy-apksigner.txt
+            sage-autonomy-badging.txt
+            sage-autonomy-wake-asset.txt
+            sage-autonomy-native-brain.txt
+          if-no-files-found: error
+          retention-days: 30

@@ -1,0 +1,63 @@
+name: Audit SageOS 2 legacy data migration
+run-name: Reconstruct Sage 1.33.3 persistence contracts for SageOS 2
+
+on:
+  push:
+    branches: [sageos-2]
+    paths: ['.github/workflows/audit-sageos2-legacy-data.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Reconstruct verified Sage 1.33.3 donor
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_33_3.sh /tmp/sage1333
+      - name: Collect persistence contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          OUT=/tmp/sage1333
+          DEST=/tmp/sage1333-persistence-audit
+          mkdir -p "$DEST/source"
+
+          # Human-readable inventory of every persistence/storage reference.
+          {
+            echo '# Sage 1.33.3 persistence contract audit'
+            echo
+            echo '## SharedPreferences / preference stores'
+            grep -RniE 'getSharedPreferences|SharedPreferences|PreferenceManager|MODE_PRIVATE' "$OUT/app/src" || true
+            echo
+            echo '## App-private files / model / database / cache references'
+            grep -RniE 'filesDir|getFilesDir|File\(|brain|gguf|memory|history|owner|intentions|wake|profile|forge|database|SQLite|Room' "$OUT/app/src/main/java" || true
+            echo
+            echo '## Literal preference/storage names'
+            grep -RnoE '"[A-Za-z0-9_.-]{3,}"' "$OUT/app/src/main/java" | grep -Ei 'sage|brain|memory|history|owner|intent|wake|profile|forge|pref|core|red.?queen|mode|app' || true
+          } > "$DEST/persistence-audit.txt"
+
+          # Copy Java/Kotlin files that actually touch persistence or the known durable domains.
+          while IFS= read -r file; do
+            rel="${file#$OUT/}"
+            mkdir -p "$DEST/source/$(dirname "$rel")"
+            cp "$file" "$DEST/source/$rel"
+          done < <(
+            grep -RIlE 'getSharedPreferences|SharedPreferences|PreferenceManager|filesDir|getFilesDir|sage-brain\.gguf|memory|history|owner intentions|wake profile|forge' "$OUT/app/src/main/java" || true
+          )
+
+          find "$DEST" -type f -print | sort
+          test -s "$DEST/persistence-audit.txt"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sage1333-persistence-audit
+          path: /tmp/sage1333-persistence-audit
+          if-no-files-found: error
+          retention-days: 7

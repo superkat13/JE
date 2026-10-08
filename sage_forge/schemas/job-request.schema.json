@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://sage.local/schemas/job-request.schema.json",
+  "title": "Sage Forge approved job request",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["tool_id", "input", "owner_approved", "approval_context"],
+  "properties": {
+    "tool_id": {"type": "string", "pattern": "^[a-z][a-z0-9_.-]{2,63}$"},
+    "input": {"type": "object"},
+    "owner_approved": {"const": true},
+    "approval_context": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["surface", "action"],
+      "properties": {
+        "surface": {"const": "sage_commander"},
+        "action": {"type": "string", "minLength": 1, "maxLength": 300}
+      }
+    }
+  }
+}

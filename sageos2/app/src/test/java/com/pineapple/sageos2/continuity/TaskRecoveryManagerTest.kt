@@ -1,0 +1,230 @@
+package com.pineapple.sageos2.continuity
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class TaskRecoveryManagerTest {
+    @Test
+    fun activeRuntimeTurnBecomesWaitingAndExplicitlyForbidsReplay() {
+        val store = MemoryTaskStore()
+        store.upsert(
+            TaskCheckpoint(
+                taskId = "runtime:turn:7",
+                title = "Install the update",
+                state = TaskState.ACTIVE,
+                summary = "Executing structured capability root.install_package.",
+                nextStep = "Wait for result.",
+                updatedAtMs = 100,
+                metadata = mapOf(
+                    "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                    "ownerPrompt" to "install the update"
+                )
+            )
+        )
+
+        val recovered = TaskRecoveryManager(store).recoverInterruptedRuntimeTasks(nowMs = 500)
+        assertEquals(1, recovered.size)
+        val task = recovered.single()
+        assertEquals(TaskState.WAITING, task.state)
+        assertTrue(task.nextStep.contains("Do not automatically replay"))
+        assertEquals("true", task.metadata["recovered"])
+        assertEquals("500", task.metadata["recoveredAtMs"])
+    }
+
+    @Test
+    fun waitingWorkflowAndCompletedTurnAreNotRewritten() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint("workflow:one", "Workflow", TaskState.WAITING, "waiting", "next", 10))
+        store.upsert(TaskCheckpoint("runtime:turn:2", "Done", TaskState.COMPLETED, "done", "", 20, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND)))
+        assertTrue(TaskRecoveryManager(store).recoverInterruptedRuntimeTasks(100).isEmpty())
+        assertEquals(TaskState.WAITING, store.get("workflow:one")!!.state)
+        assertEquals(TaskState.COMPLETED, store.get("runtime:turn:2")!!.state)
+    }
+
+    @Test
+    fun newerOwnerTurnSupersedesOldRecoveredRuntimeTurnsWithoutDeletingThem() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:1", "Old question", TaskState.WAITING, "Recovered old turn.", "Continue safely.", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND)
+        ))
+        store.upsert(TaskCheckpoint(
+            "workflow:one", "Workflow", TaskState.WAITING, "waiting", "next", 20
+        ))
+
+        val superseded = TaskRecoveryManager(store).supersedeOlderRuntimeTasks(
+            keepTaskId = "runtime:turn:2",
+            nowMs = 50
+        )
+
+        assertEquals(1, superseded.size)
+        val old = store.get("runtime:turn:1")!!
+        assertEquals(TaskState.COMPLETED, old.state)
+        assertEquals("true", old.metadata["superseded"])
+        assertEquals("runtime:turn:2", old.metadata["supersededBy"])
+        assertEquals(TaskState.WAITING, store.get("workflow:one")!!.state)
+        assertTrue(store.recent(10).any { it.taskId == "runtime:turn:1" })
+    }
+
+    @Test
+    fun newestRecoveredWaitingTaskIsTheOnlyAutomaticResumeCandidate() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:1", "Older", TaskState.WAITING, "recovered", "resume", 10,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "older goal"
+            )
+        ))
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:2", "Newer", TaskState.WAITING, "recovered", "resume", 20,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "newer goal"
+            )
+        ))
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:3", "Normal waiting", TaskState.WAITING, "blocked", "ask owner", 30,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "ownerPrompt" to "do not auto resume me"
+            )
+        ))
+
+        val manager = TaskRecoveryManager(store)
+        assertEquals("runtime:turn:2", manager.autoResumeCandidate()?.taskId)
+
+        val marked = manager.markAutoResumeAttempted("runtime:turn:2", nowMs = 50)!!
+        assertEquals("true", marked.metadata["autoResumeAttempted"])
+        assertEquals("1", marked.metadata["recoveryDepth"])
+        assertEquals("runtime:turn:1", manager.autoResumeCandidate()?.taskId)
+    }
+
+    @Test
+    fun automaticResumeStopsAtRecoveryDepthLimit() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint(
+            "runtime:turn:8", "Looping task", TaskState.WAITING, "recovered", "resume", 40,
+            mapOf(
+                "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true",
+                "ownerPrompt" to "finish this",
+                "recoveryDepth" to TaskRecoveryManager.MAX_AUTO_RESUME_DEPTH.toString()
+            )
+        ))
+
+        assertEquals(null, TaskRecoveryManager(store).autoResumeCandidate())
+    }
+
+    @Test
+    fun contextMakesRecoveredWorkVisibleButNotAnExecutionTrigger() {
+        val text = TaskContinuityContextRenderer.render(
+            listOf(
+                TaskCheckpoint(
+                    "runtime:turn:9",
+                    "Continue research",
+                    TaskState.WAITING,
+                    "Interrupted runtime work recovered.",
+                    "Continue safely.",
+                    20,
+                    mapOf("ownerPrompt" to "continue what we were doing")
+                )
+            )
+        )
+        assertTrue(text.contains("ownerPrompt=continue what we were doing"))
+        assertTrue(text.contains("never replay a prior side effect"))
+        assertFalse(text.contains("<SAGE_TOOL>"))
+    }
+
+    @Test fun delayedResumeRechecksCancellationCompletionAndDepthWithoutChangingTask() {
+        val original = TaskCheckpoint("runtime:turn:10", "Recovered", TaskState.WAITING,
+            "recovered", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true", "ownerPrompt" to "finish this"))
+        val invalidated = listOf(
+            original.copy(state = TaskState.CANCELLED),
+            original.copy(state = TaskState.COMPLETED),
+            original.copy(state = TaskState.ACTIVE),
+            original.copy(metadata = original.metadata + ("autoResumeAttempted" to "true")),
+            original.copy(metadata = original.metadata + ("recoveryDepth" to "3")),
+            original.copy(metadata = original.metadata + ("recovered" to "false")),
+            original.copy(metadata = original.metadata + ("kind" to "self_care"))
+        )
+        invalidated.forEach { changed ->
+            val store = MemoryTaskStore()
+            store.upsert(original)
+            val manager = TaskRecoveryManager(store)
+            assertEquals(original.taskId, manager.autoResumeCandidate()?.taskId)
+            store.upsert(changed) // Change after selection, before the delayed callback.
+            assertEquals(null, manager.markAutoResumeAttempted(original.taskId, 100))
+            assertEquals(changed, store.get(original.taskId))
+        }
+    }
+
+    @Test fun delayedResumeCannotConsumeTheSameAttemptTwice() {
+        val store = MemoryTaskStore()
+        store.upsert(TaskCheckpoint("runtime:turn:11", "Recovered", TaskState.WAITING,
+            "recovered", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true", "ownerPrompt" to "finish this")))
+        val manager = TaskRecoveryManager(store)
+        val first = manager.markAutoResumeAttempted("runtime:turn:11", 100)!!
+        assertEquals(null, manager.markAutoResumeAttempted(first.taskId, 200))
+        assertEquals(first, store.get(first.taskId))
+    }
+
+    @Test fun unusablePromptCannotHideAValidRecoveryCandidateOrConsumeAnAttempt() {
+        listOf<String?>(null, "", "  \n  ").forEach { prompt ->
+            val store = MemoryTaskStore()
+            val metadata = mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "recovered" to "true")
+            val valid = TaskCheckpoint("valid", "Valid", TaskState.WAITING, "recovered", "resume", 10,
+                metadata + ("ownerPrompt" to "finish my research"))
+            val invalid = valid.copy(taskId = "invalid", updatedAtMs = 20,
+                metadata = metadata + if (prompt == null) emptyMap() else mapOf("ownerPrompt" to prompt))
+            store.upsert(valid)
+            store.upsert(invalid)
+            val manager = TaskRecoveryManager(store)
+            assertEquals(valid.taskId, manager.autoResumeCandidate()?.taskId)
+            assertEquals(null, manager.markAutoResumeAttempted(invalid.taskId, 30))
+            assertEquals(invalid, store.get(invalid.taskId))
+        }
+    }
+
+    @Test fun promptRemovedAfterSelectionDoesNotConsumeAnAttempt() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("selected", "Selected", TaskState.WAITING, "recovered", "resume", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "recovered" to "true", "ownerPrompt" to "finish"))
+        store.upsert(task)
+        val manager = TaskRecoveryManager(store)
+        assertEquals(task, manager.autoResumeCandidate())
+        val changed = task.copy(metadata = task.metadata - "ownerPrompt")
+        store.upsert(changed)
+        assertEquals(null, manager.markAutoResumeAttempted(task.taskId, 20))
+        assertEquals(changed, store.get(task.taskId))
+    }
+
+    @Test fun recoveringSeveralTasksPreservesTheirPreRestartRecency() {
+        val store = MemoryTaskStore()
+        val old = TaskCheckpoint("old", "Old", TaskState.ACTIVE, "working", "continue", 10,
+            mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND, "ownerPrompt" to "older goal"))
+        val recent = old.copy(taskId = "recent", updatedAtMs = 20,
+            metadata = old.metadata + ("ownerPrompt" to "newer goal"))
+        store.upsert(old)
+        store.upsert(recent)
+        val manager = TaskRecoveryManager(store)
+        manager.recoverInterruptedRuntimeTasks(100)
+        assertEquals("recovery timestamps must not erase original ordering", recent.taskId,
+            manager.autoResumeCandidate()?.taskId)
+    }
+
+    private class MemoryTaskStore : TaskContinuityStore {
+        private val tasks = linkedMapOf<String, TaskCheckpoint>()
+        override fun upsert(checkpoint: TaskCheckpoint) { tasks[checkpoint.taskId] = checkpoint }
+        override fun get(taskId: String) = tasks[taskId]
+        override fun active() = tasks.values.filter { it.state == TaskState.ACTIVE || it.state == TaskState.WAITING }.sortedByDescending { it.updatedAtMs }
+        override fun recent(limit: Int) = tasks.values.sortedByDescending { it.updatedAtMs }.take(limit)
+        override fun remove(taskId: String) { tasks.remove(taskId) }
+    }
+}

@@ -1,0 +1,798 @@
+diff --git a/app/src/main/java/com/pineapple/sage/MainActivity.java b/app/src/main/java/com/pineapple/sage/MainActivity.java
+index 87eee73..42eb36a 100644
+--- a/app/src/main/java/com/pineapple/sage/MainActivity.java
++++ b/app/src/main/java/com/pineapple/sage/MainActivity.java
+@@ -6,0 +7,2 @@ import android.content.BroadcastReceiver;
++import android.content.ClipData;
++import android.content.ClipboardManager;
+@@ -43,0 +46 @@ public class MainActivity extends Activity {
++    private TextView diagnosticsText;
+@@ -70,0 +74 @@ public class MainActivity extends Activity {
++            refreshDiagnostics();
+@@ -79,0 +84 @@ public class MainActivity extends Activity {
++        refreshDiagnostics();
+@@ -105 +110 @@ public class MainActivity extends Activity {
+-        subtitle.setText("Strict wake word + saved lessons + custom voice clips + translation");
++        subtitle.setText("Quiet wake word + natural conversation + live diagnostics");
+@@ -135 +140 @@ public class MainActivity extends Activity {
+-        conversationModeHelp.setText("Wake-word mode waits for “Sage” before every command. Optional conversation mode keeps listening for follow-ups for 30 seconds.");
++        conversationModeHelp.setText("Natural conversation opens one deliberate listening turn after Sage answers. If nobody speaks, it closes instead of repeatedly reopening and beeping. The quiet offline wake listener then waits for “Sage.”");
+@@ -140,0 +146,35 @@ public class MainActivity extends Activity {
++        TextView diagnosticsTitle = new TextView(this);
++        diagnosticsTitle.setText("Sage Diagnostics");
++        diagnosticsTitle.setTextSize(23);
++        diagnosticsTitle.setTextColor(Color.rgb(31, 41, 55));
++        diagnosticsTitle.setPadding(4, 18, 4, 4);
++        root.addView(diagnosticsTitle, spaced());
++
++        diagnosticsText = new TextView(this);
++        diagnosticsText.setTextSize(14);
++        diagnosticsText.setTextColor(Color.rgb(17, 24, 39));
++        diagnosticsText.setPadding(14, 14, 14, 14);
++        diagnosticsText.setBackgroundColor(Color.rgb(224, 242, 254));
++        diagnosticsText.setTextIsSelectable(true);
++        root.addView(diagnosticsText, matchWrap());
++
++        Button refreshDiagnostics = makeButton("Refresh diagnostics");
++        refreshDiagnostics.setOnClickListener(v -> refreshDiagnostics());
++        root.addView(refreshDiagnostics, spacedSmall());
++
++        Button copyDiagnostics = makeButton("Copy diagnostic report");
++        copyDiagnostics.setOnClickListener(v -> copyDiagnosticReport());
++        root.addView(copyDiagnostics, spacedSmall());
++
++        Button shareDiagnostics = makeButton("Share diagnostic report");
++        shareDiagnostics.setOnClickListener(v -> shareDiagnosticReport());
++        root.addView(shareDiagnostics, spacedSmall());
++
++        Button clearDiagnostics = makeButton("Clear diagnostic history");
++        clearDiagnostics.setOnClickListener(v -> {
++            SageDiagnostics.clear(this);
++            refreshDiagnostics();
++            Toast.makeText(this, "Sage diagnostic history cleared.", Toast.LENGTH_LONG).show();
++        });
++        root.addView(clearDiagnostics, spacedSmall());
++
+@@ -309 +349 @@ public class MainActivity extends Activity {
+-        conversationText.setText("Wake-word mode is the default: say Sage, wait for Yes, then give one command. Sage returns to waiting for her name after she answers. If Sage asks you a question, she listens for that answer without making you repeat her name.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nUse the mode button above only when you want a 30-second hands-free conversation window.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
++        conversationText.setText("Natural conversation is the default: say Sage, wait for Yes, then speak. After Sage answers, she opens one follow-up turn without requiring her name again. If nobody speaks, that turn closes and the quiet offline wake listener waits for Sage—there is no automatic beep loop.\n\nTo teach her:\nSage, remember this\nor\nSage, when I say movie time, it means open YouTube\n\nCustom voice clips are separate from text lessons. Choose a clip above, then say Sage and its saved phrase.\n\nThe green microphone privacy dot can remain visible while the quiet wake-word listener is active. Android command dictation should open only for an expected conversation turn.\n\nTranslation stays inside Sage. Try: Sage, translate good morning to Spanish.");
+@@ -345 +385 @@ public class MainActivity extends Activity {
+-                .getBoolean("conversation_mode_enabled", false);
++                .getBoolean("conversation_mode_enabled", true);
+@@ -358 +398 @@ public class MainActivity extends Activity {
+-                        ? "30-second conversation mode is on."
++                        ? "Natural conversation is on. Sage opens one follow-up turn after answering."
+@@ -379 +419 @@ public class MainActivity extends Activity {
+-                .getBoolean("conversation_mode_enabled", false);
++                .getBoolean("conversation_mode_enabled", true);
+@@ -381 +421 @@ public class MainActivity extends Activity {
+-                ? "Mode: 30-second conversation"
++                ? "Mode: Natural conversation"
+@@ -384,0 +425,38 @@ public class MainActivity extends Activity {
++    private void refreshDiagnostics() {
++        if (diagnosticsText != null) {
++            diagnosticsText.setText(SageDiagnostics.buildSummary(this));
++        }
++    }
++
++    private void copyDiagnosticReport() {
++        ClipboardManager clipboard =
++                (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
++        if (clipboard == null) {
++            Toast.makeText(this, "Android could not open the clipboard.", Toast.LENGTH_LONG).show();
++            return;
++        }
++        clipboard.setPrimaryClip(
++                ClipData.newPlainText(
++                        "Sage diagnostic report",
++                        SageDiagnostics.buildReport(this)
++                )
++        );
++        Toast.makeText(
++                this,
++                "Diagnostic report copied. Paste it into our Sage chat.",
++                Toast.LENGTH_LONG
++        ).show();
++    }
++
++    private void shareDiagnosticReport() {
++        Intent share = new Intent(Intent.ACTION_SEND);
++        share.setType("text/plain");
++        share.putExtra(Intent.EXTRA_SUBJECT, "Sage diagnostic report");
++        share.putExtra(Intent.EXTRA_TEXT, SageDiagnostics.buildReport(this));
++        try {
++            startActivity(Intent.createChooser(share, "Share Sage diagnostic report"));
++        } catch (Exception error) {
++            Toast.makeText(this, "Android could not open the share menu.", Toast.LENGTH_LONG).show();
++        }
++    }
++
+@@ -827,0 +906 @@ public class MainActivity extends Activity {
++        refreshDiagnostics();
+diff --git a/app/src/main/java/com/pineapple/sage/SageDiagnostics.java b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+new file mode 100644
+index 0000000..49b29d5
+--- /dev/null
++++ b/app/src/main/java/com/pineapple/sage/SageDiagnostics.java
+@@ -0,0 +1,209 @@
++package com.pineapple.sage;
++
++import android.content.Context;
++import android.content.SharedPreferences;
++import android.content.pm.PackageInfo;
++import android.os.Build;
++
++import java.text.SimpleDateFormat;
++import java.util.Date;
++import java.util.Locale;
++
++public final class SageDiagnostics {
++    private static final String PREFS_NAME = "sage_diagnostics";
++    private static final String KEY_EVENT_LOG = "event_log";
++    private static final String KEY_STATE = "state";
++    private static final String KEY_LISTENER = "listener";
++    private static final String KEY_LAST_HEARD = "last_heard";
++    private static final String KEY_LAST_ERROR = "last_error";
++    private static final String KEY_MIC_LEVEL = "mic_level";
++    private static final String KEY_WAKE_STARTS = "wake_starts";
++    private static final String KEY_COMMAND_STARTS = "command_starts";
++    private static final String KEY_SILENCE_CLOSES = "silence_closes";
++    private static final String KEY_BUSY_RETRIES = "busy_retries";
++    private static final String KEY_STALE_CALLBACKS = "stale_callbacks";
++    private static final String KEY_ECHO_REJECTIONS = "echo_rejections";
++    private static final int MAX_LOG_CHARS = 12000;
++    private static final Object LOCK = new Object();
++
++    private static long lastMicWriteAtMs;
++    private static float lastMicLevel = Float.NaN;
++
++    private SageDiagnostics() {
++    }
++
++    public static void recordState(Context context, String state, String listener) {
++        SharedPreferences preferences = preferences(context);
++        String cleanedState = safe(state);
++        String cleanedListener = listener == null ? null : safe(listener);
++        String previousState = preferences.getString(KEY_STATE, "");
++        String previousListener = preferences.getString(KEY_LISTENER, "");
++        SharedPreferences.Editor editor = preferences.edit()
++                .putString(KEY_STATE, cleanedState);
++        if (listener != null) {
++            editor.putString(KEY_LISTENER, cleanedListener);
++        }
++        editor.apply();
++        if (!cleanedState.equals(previousState)
++                || (cleanedListener != null && !cleanedListener.equals(previousListener))) {
++            appendEvent(context, "STATE", cleanedState);
++        }
++    }
++
++    public static void recordHeard(Context context, String heard) {
++        String cleaned = safe(heard).trim();
++        if (cleaned.length() > 160) {
++            cleaned = cleaned.substring(0, 160) + "…";
++        }
++        preferences(context).edit().putString(KEY_LAST_HEARD, cleaned).apply();
++    }
++
++    public static void recordError(Context context, String error) {
++        String cleaned = safe(error);
++        preferences(context).edit().putString(KEY_LAST_ERROR, cleaned).apply();
++        appendEvent(context, "ERROR", cleaned);
++    }
++
++    public static void recordMicLevel(Context context, float rmsDb) {
++        long now = System.currentTimeMillis();
++        if (now - lastMicWriteAtMs < 500L
++                && !Float.isNaN(lastMicLevel)
++                && Math.abs(rmsDb - lastMicLevel) < 2.0f) {
++            return;
++        }
++        lastMicWriteAtMs = now;
++        lastMicLevel = rmsDb;
++        preferences(context).edit()
++                .putFloat(KEY_MIC_LEVEL, rmsDb)
++                .apply();
++    }
++
++    public static void wakeStarted(Context context, String detail) {
++        increment(context, KEY_WAKE_STARTS);
++        preferences(context).edit().putString(KEY_LISTENER, "Offline wake word").apply();
++        appendEvent(context, "WAKE", detail);
++    }
++
++    public static void commandStarted(Context context, String detail) {
++        increment(context, KEY_COMMAND_STARTS);
++        preferences(context).edit().putString(KEY_LISTENER, "Android command turn").apply();
++        appendEvent(context, "COMMAND", detail);
++    }
++
++    public static void silenceClosedTurn(Context context, String detail) {
++        increment(context, KEY_SILENCE_CLOSES);
++        appendEvent(context, "SILENCE", detail);
++    }
++
++    public static void busyRetry(Context context, String detail) {
++        increment(context, KEY_BUSY_RETRIES);
++        appendEvent(context, "BUSY", detail);
++    }
++
++    public static void staleCallbackIgnored(Context context, String detail) {
++        increment(context, KEY_STALE_CALLBACKS);
++        appendEvent(context, "STALE", detail);
++    }
++
++    public static void echoRejected(Context context, String detail) {
++        increment(context, KEY_ECHO_REJECTIONS);
++        appendEvent(context, "ECHO", detail);
++    }
++
++    public static void appendEvent(Context context, String category, String detail) {
++        synchronized (LOCK) {
++            SharedPreferences preferences = preferences(context);
++            String existing = preferences.getString(KEY_EVENT_LOG, "");
++            String line = timestamp() + "  " + safe(category) + "  " + safe(detail);
++            String updated = existing == null || existing.isEmpty()
++                    ? line
++                    : existing + "\n" + line;
++            if (updated.length() > MAX_LOG_CHARS) {
++                updated = updated.substring(updated.length() - MAX_LOG_CHARS);
++                int firstBreak = updated.indexOf('\n');
++                if (firstBreak >= 0 && firstBreak + 1 < updated.length()) {
++                    updated = updated.substring(firstBreak + 1);
++                }
++            }
++            preferences.edit().putString(KEY_EVENT_LOG, updated).apply();
++        }
++    }
++
++    public static String buildSummary(Context context) {
++        SharedPreferences preferences = preferences(context);
++        String state = preferences.getString(KEY_STATE, "Not started");
++        String listener = preferences.getString(KEY_LISTENER, "None");
++        String heard = preferences.getString(KEY_LAST_HEARD, "");
++        String error = preferences.getString(KEY_LAST_ERROR, "");
++        float mic = preferences.getFloat(KEY_MIC_LEVEL, 0.0f);
++        return "State: " + state
++                + "\nListener: " + listener
++                + "\nMic level: " + String.format(Locale.US, "%.1f dB", mic)
++                + "\nLast heard: " + (heard == null || heard.isEmpty() ? "Nothing yet" : heard)
++                + "\nLast error: " + (error == null || error.isEmpty() ? "None" : error)
++                + "\nWake starts: " + preferences.getInt(KEY_WAKE_STARTS, 0)
++                + "  •  Command turns: " + preferences.getInt(KEY_COMMAND_STARTS, 0)
++                + "\nSilent turns closed: " + preferences.getInt(KEY_SILENCE_CLOSES, 0)
++                + "  •  Busy retries: " + preferences.getInt(KEY_BUSY_RETRIES, 0)
++                + "\nStale callbacks blocked: " + preferences.getInt(KEY_STALE_CALLBACKS, 0)
++                + "  •  Echoes rejected: " + preferences.getInt(KEY_ECHO_REJECTIONS, 0);
++    }
++
++    public static String buildReport(Context context) {
++        SharedPreferences appPreferences =
++                context.getSharedPreferences("sage_state", Context.MODE_PRIVATE);
++        String version = "unknown";
++        try {
++            PackageInfo info = context.getPackageManager()
++                    .getPackageInfo(context.getPackageName(), 0);
++            long code = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
++                    ? info.getLongVersionCode()
++                    : info.versionCode;
++            version = info.versionName + " (" + code + ")";
++        } catch (Exception ignored) {
++        }
++        SharedPreferences preferences = preferences(context);
++        String events = preferences.getString(KEY_EVENT_LOG, "");
++        return "Sage diagnostic report\n"
++                + "Created: " + timestamp() + "\n"
++                + "Version: " + version + "\n"
++                + "Package: " + context.getPackageName() + "\n"
++                + "Device: " + Build.MANUFACTURER + " " + Build.MODEL + "\n"
++                + "Android: " + Build.VERSION.RELEASE + " (API " + Build.VERSION.SDK_INT + ")\n"
++                + "Conversation mode: "
++                + (appPreferences.getBoolean("conversation_mode_enabled", true) ? "on" : "off")
++                + "\n\nCurrent snapshot\n"
++                + buildSummary(context)
++                + "\n\nRecent microphone events\n"
++                + (events == null || events.isEmpty() ? "No events recorded." : events);
++    }
++
++    public static void clear(Context context) {
++        synchronized (LOCK) {
++            preferences(context).edit().clear().apply();
++            lastMicWriteAtMs = 0L;
++            lastMicLevel = Float.NaN;
++        }
++    }
++
++    private static void increment(Context context, String key) {
++        synchronized (LOCK) {
++            SharedPreferences preferences = preferences(context);
++            int value = preferences.getInt(key, 0);
++            preferences.edit().putInt(key, value + 1).apply();
++        }
++    }
++
++    private static SharedPreferences preferences(Context context) {
++        return context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
++    }
++
++    private static String timestamp() {
++        return new SimpleDateFormat("yyyy-MM-dd HH:mm:ss.SSS", Locale.US)
++                .format(new Date());
++    }
++
++    private static String safe(String value) {
++        return value == null ? "" : value.replace('\n', ' ').trim();
++    }
++}
+diff --git a/app/src/main/java/com/pineapple/sage/SageVoiceService.java b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+index 55703ea..cdc3d92 100644
+--- a/app/src/main/java/com/pineapple/sage/SageVoiceService.java
++++ b/app/src/main/java/com/pineapple/sage/SageVoiceService.java
+@@ -57,2 +57,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private static final long CONVERSATION_WINDOW_MS = 30000L;
+-    private static final long CONVERSATION_RETRY_MS = 550L;
++    private static final long CONVERSATION_WINDOW_MS = 45000L;
++    private static final long COMMAND_BUSY_RETRY_MS = 1400L;
++    private static final int MAX_COMMAND_BUSY_RETRIES = 1;
+@@ -75 +75,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private Intent wakeRecognizerIntent;
+@@ -87,2 +86,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private boolean nativeWakeListening;
+-    private int nativeWakeFailures;
+@@ -90 +87,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private String lastWakePreview = "";
+@@ -98,0 +96,2 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++    private long commandSessionGeneration;
++    private long activeCommandSession;
+@@ -122 +120,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        configureWakeRecognizerIntent();
+@@ -123,0 +122 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        SageDiagnostics.appendEvent(this, "SERVICE", "Sage voice service created");
+@@ -187 +186 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                    if (!nativeWakeListening && !wakeListening && !commandListening && !speaking) {
++                    if (!wakeListening && !commandListening && !speaking) {
+@@ -195,9 +194,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                    if (SpeechRecognizer.isRecognitionAvailable(this)) {
+-                        broadcastStatus("Using high-accuracy wake listener");
+-                        updateNotification("Say Sage");
+-                        startWakeListening(250);
+-                    } else {
+-                        broadcastLine("Sage", "The wake-word services could not start. Tap Talk to Sage to use one command at a time.");
+-                        broadcastStatus("Wake word unavailable");
+-                        updateNotification("Wake word unavailable");
+-                    }
++                    SageDiagnostics.recordError(
++                            this,
++                            "Offline wake-word model failed: " + exception.getClass().getSimpleName()
++                    );
++                    broadcastLine("Sage", "The quiet wake-word listener could not start. Tap Talk to Sage to use one command at a time.");
++                    broadcastStatus("Wake word unavailable");
++                    updateNotification("Wake word unavailable");
+@@ -215 +212 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                    || wakeListening || nativeWakeListening) {
++                    || wakeListening) {
+@@ -223,4 +219,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-            if (SpeechRecognizer.isRecognitionAvailable(this) && nativeWakeFailures < 3) {
+-                startNativeWakeRecognition();
+-                return;
+-            }
+@@ -229 +222 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                updateNotification("Preparing wake-word listener");
++                updateNotification("Preparing quiet wake-word listener");
+@@ -237,0 +231 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                SageDiagnostics.wakeStarted(this, "Quiet offline listener started");
+@@ -259,0 +254,4 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                            SageDiagnostics.recordError(
++                                    SageVoiceService.this,
++                                    "Offline wake listener: " + exception.getClass().getSimpleName()
++                            );
+@@ -262 +260 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                                startWakeListening(1000);
++                                startWakeListening(1800);
+@@ -277,2 +275,2 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                broadcastStatus("Waiting for Sage — offline backup");
+-                updateNotification("Offline backup: say Sage");
++                broadcastStatus("Waiting for Sage — quiet wake listener");
++                updateNotification("Quiet wake listener: say Sage");
+@@ -281,0 +280,4 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                SageDiagnostics.recordError(
++                        this,
++                        "Could not start quiet wake listener: " + error.getClass().getSimpleName()
++                );
+@@ -283 +285 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                startWakeListening(1500);
++                startWakeListening(2200);
+@@ -291,9 +292,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        nativeWakeListening = false;
+-        if (speechRecognizer != null && !commandListening) {
+-            try {
+-                speechRecognizer.cancel();
+-            } catch (RuntimeException ignored) {
+-            }
+-            speechRecognizer.destroy();
+-            speechRecognizer = null;
+-        }
+@@ -310,146 +302,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private void startNativeWakeRecognition() {
+-        if (stopRequested || speaking || commandListening || commandStartPending
+-                || nativeWakeListening || wakeListening) {
+-            return;
+-        }
+-        try {
+-            speechRecognizer = SpeechRecognizer.createSpeechRecognizer(this);
+-            speechRecognizer.setRecognitionListener(new RecognitionListener() {
+-                @Override
+-                public void onReadyForSpeech(Bundle params) {
+-                    if (!nativeWakeListening) {
+-                        return;
+-                    }
+-                    String status = lastWakePreview.isEmpty()
+-                            ? "Waiting for Sage — high accuracy"
+-                            : "Waiting for Sage — ignored (not Sage): " + lastWakePreview;
+-                    broadcastStatus(status);
+-                    updateNotification("Say Sage");
+-                }
+-
+-                @Override
+-                public void onBeginningOfSpeech() {
+-                    if (nativeWakeListening) {
+-                        broadcastStatus("Checking wake word");
+-                    }
+-                }
+-
+-                @Override public void onRmsChanged(float rmsdB) { }
+-                @Override public void onBufferReceived(byte[] buffer) { }
+-                @Override public void onEndOfSpeech() { }
+-
+-                @Override
+-                public void onError(int error) {
+-                    if (!nativeWakeListening) {
+-                        return;
+-                    }
+-                    nativeWakeListening = false;
+-                    destroyCommandRecognizer();
+-                    if (isNativeWakeFailure(error)) {
+-                        nativeWakeFailures++;
+-                    }
+-                    if (!stopRequested && !speaking && !commandListening) {
+-                        long retryDelay = error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY ? 900L : 350L;
+-                        startWakeListening(retryDelay);
+-                    }
+-                }
+-
+-                @Override
+-                public void onResults(Bundle results) {
+-                    if (!nativeWakeListening) {
+-                        return;
+-                    }
+-                    if (handleNativeWakeResults(results, true)) {
+-                        return;
+-                    }
+-                    nativeWakeListening = false;
+-                    destroyCommandRecognizer();
+-                    startWakeListening(700);
+-                }
+-
+-                @Override
+-                public void onPartialResults(Bundle partialResults) {
+-                    if (nativeWakeListening) {
+-                        handleNativeWakeResults(partialResults, false);
+-                    }
+-                }
+-
+-                @Override public void onEvent(int eventType, Bundle params) { }
+-            });
+-            nativeWakeListening = true;
+-            speechRecognizer.startListening(wakeRecognizerIntent);
+-            broadcastStatus("Starting high-accuracy wake listener");
+-            updateNotification("Starting wake listener");
+-        } catch (RuntimeException error) {
+-            nativeWakeListening = false;
+-            destroyCommandRecognizer();
+-            nativeWakeFailures++;
+-            startWakeListening(900);
+-        }
+-    }
+-
+-    private boolean handleNativeWakeResults(Bundle results, boolean finalResult) {
+-        if (System.currentTimeMillis() < ignoreRecognitionUntilMs) {
+-            return false;
+-        }
+-        ArrayList<String> choices = results == null
+-                ? null
+-                : results.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION);
+-        if (choices == null || choices.isEmpty()) {
+-            return false;
+-        }
+-        if (!finalResult) {
+-            for (String choice : choices) {
+-                String preview = normalizeForEcho(choice);
+-                if (preview.isEmpty()) {
+-                    continue;
+-                }
+-                String visible = preview.length() > 48
+-                        ? preview.substring(0, 48) + "…"
+-                        : preview;
+-                broadcastStatus("Waiting for Sage — hearing: " + visible);
+-                break;
+-            }
+-            return false;
+-        }
+-        String preview = "";
+-        for (String choice : choices) {
+-            String normalized = normalizeForEcho(choice);
+-            if (normalized.isEmpty()) {
+-                continue;
+-            }
+-            if (preview.isEmpty()) {
+-                preview = normalized;
+-            }
+-            String command = commandAfterNativeWake(normalized);
+-            if (command != null) {
+-                nativeWakeFailures = 0;
+-                lastWakePreview = "";
+-                nativeWakeListening = false;
+-                stopWakeListening();
+-                respondToWake(command);
+-                return true;
+-            }
+-        }
+-        nativeWakeFailures = 0;
+-        if (!preview.isEmpty()) {
+-            String visible = preview.length() > 48 ? preview.substring(0, 48) + "…" : preview;
+-            lastWakePreview = visible;
+-            broadcastStatus("Ignored (not Sage): " + visible);
+-            if (finalResult) {
+-                updateNotification("Ignored “" + visible + "” — waiting for Sage");
+-            }
+-        }
+-        return false;
+-    }
+-
+-    private boolean isNativeWakeFailure(int error) {
+-        return error == SpeechRecognizer.ERROR_AUDIO
+-                || error == SpeechRecognizer.ERROR_CLIENT
+-                || error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS
+-                || error == SpeechRecognizer.ERROR_NETWORK
+-                || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT
+-                || error == SpeechRecognizer.ERROR_RECOGNIZER_BUSY
+-                || error == SpeechRecognizer.ERROR_SERVER;
+-    }
+-
+@@ -457 +304,2 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        if (text == null || text.trim().isEmpty() || stopRequested || speaking || commandListening
++        if (text == null || text.trim().isEmpty() || !wakeListening
++                || stopRequested || speaking || commandListening
+@@ -467,0 +316 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        SageDiagnostics.recordHeard(this, normalized);
+@@ -495,30 +343,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private String commandAfterNativeWake(String text) {
+-        String normalized = normalizeForEcho(text);
+-        for (String prefix : BUILT_IN_WAKE_PREFIXES) {
+-            if (normalized.equals(prefix)) {
+-                return "";
+-            }
+-            if (normalized.startsWith(prefix + " ")) {
+-                return cleanWakeRemainder(normalized.substring(prefix.length()));
+-            }
+-        }
+-        for (String alias : EXACT_WAKE_ALIASES) {
+-            if (normalized.equals(alias)) {
+-                return "";
+-            }
+-        }
+-        Set<String> aliases = preferences.getStringSet("wake_aliases", null);
+-        if (aliases != null) {
+-            for (String alias : aliases) {
+-                String wake = normalizeForEcho(alias);
+-                if (normalized.equals(wake)) {
+-                    return "";
+-                }
+-                if (!wake.isEmpty() && normalized.startsWith(wake + " ")) {
+-                    return cleanWakeRemainder(normalized.substring(wake.length()));
+-                }
+-            }
+-        }
+-        return null;
+-    }
+-
+@@ -669,13 +487,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-    private void configureWakeRecognizerIntent() {
+-        wakeRecognizerIntent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, COMMAND_LOCALE.toLanguageTag());
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_PREFERENCE, COMMAND_LOCALE.toLanguageTag());
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, false);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 8);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 900L);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_COMPLETE_SILENCE_LENGTH_MILLIS, 700L);
+-        wakeRecognizerIntent.putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_POSSIBLY_COMPLETE_SILENCE_LENGTH_MILLIS, 500L);
+-    }
+-
+@@ -697 +502,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        lastWakePreview = "";
+@@ -723,0 +529,5 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                SageDiagnostics.recordError(
++                        this,
++                        "Android command recognizer could not open: "
++                                + error.getClass().getSimpleName()
++                );
+@@ -728,0 +539,2 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++            final long sessionId = ++commandSessionGeneration;
++            activeCommandSession = sessionId;
+@@ -731,0 +544,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        return;
++                    }
+@@ -739,0 +555,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        return;
++                    }
+@@ -743 +561,6 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                @Override public void onRmsChanged(float rmsdB) { }
++                @Override
++                public void onRmsChanged(float rmsdB) {
++                    if (isActiveCommandSession(sessionId)) {
++                        SageDiagnostics.recordMicLevel(SageVoiceService.this, rmsdB);
++                    }
++                }
+@@ -747,0 +571,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        return;
++                    }
+@@ -752,0 +579,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        SageDiagnostics.staleCallbackIgnored(
++                                SageVoiceService.this,
++                                "Ignored command error " + error + " from session " + sessionId
++                        );
++                        return;
++                    }
+@@ -767,4 +600 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                        commandBusyRetries = 0;
+-                        broadcastStatus("Conversation open — keep talking");
+-                        updateNotification("Conversation open — keep talking");
+-                        startCommandRecognition(CONVERSATION_RETRY_MS);
++                        closeSilentCommandTurn(error);
+@@ -774 +604 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                            && commandBusyRetries < 2
++                            && commandBusyRetries < MAX_COMMAND_BUSY_RETRIES
+@@ -779,3 +609,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                        broadcastStatus("Switching microphone");
+-                        updateNotification("Switching microphone");
+-                        startCommandRecognition(900, true);
++                        SageDiagnostics.busyRetry(
++                                SageVoiceService.this,
++                                "Android command recognizer busy; one delayed retry"
++                        );
++                        broadcastStatus("Microphone busy — one retry");
++                        updateNotification("Microphone busy — retrying once");
++                        startCommandRecognition(COMMAND_BUSY_RETRY_MS, true);
+@@ -787 +621,6 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                        broadcastLine("Sage", recognitionErrorMessage(error));
++                        String message = recognitionErrorMessage(error);
++                        SageDiagnostics.recordError(
++                                SageVoiceService.this,
++                                "Command recognition error " + error + ": " + message
++                        );
++                        broadcastLine("Sage", message);
+@@ -795,0 +635,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        SageDiagnostics.staleCallbackIgnored(
++                                SageVoiceService.this,
++                                "Ignored command result from session " + sessionId
++                        );
++                        return;
++                    }
+@@ -807,3 +653 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                        broadcastStatus("Conversation open — keep talking");
+-                        updateNotification("Conversation open — keep talking");
+-                        startCommandRecognition(CONVERSATION_RETRY_MS);
++                        closeSilentCommandTurn(SpeechRecognizer.ERROR_NO_MATCH);
+@@ -817,0 +662,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    if (!isActiveCommandSession(sessionId)) {
++                        return;
++                    }
+@@ -836,0 +684 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                            SageDiagnostics.recordHeard(SageVoiceService.this, visible);
+@@ -850,0 +699,4 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                SageDiagnostics.commandStarted(
++                        this,
++                        "Command turn " + sessionId + " opened"
++                );
+@@ -856 +708 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                if (commandBusyRetries < 2 && isConversationOpen()) {
++                if (commandBusyRetries < MAX_COMMAND_BUSY_RETRIES && isConversationOpen()) {
+@@ -858 +710,6 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                    startCommandRecognition(900, true);
++                    SageDiagnostics.busyRetry(
++                            this,
++                            "Command start threw " + error.getClass().getSimpleName()
++                                    + "; one delayed retry"
++                    );
++                    startCommandRecognition(COMMAND_BUSY_RETRY_MS, true);
+@@ -861,0 +719,5 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++                    SageDiagnostics.recordError(
++                            this,
++                            "Command listener failed to start: "
++                                    + error.getClass().getSimpleName()
++                    );
+@@ -869,0 +732,21 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++    private void closeSilentCommandTurn(int error) {
++        commandBusyRetries = 0;
++        SageDiagnostics.silenceClosedTurn(
++                this,
++                error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
++                        ? "Command turn timed out; automatic reopen blocked"
++                        : "No command matched; automatic reopen blocked"
++        );
++        closeConversationWindow();
++        commandEngine.cancelFollowUp();
++        broadcastStatus("No speech — conversation closed. Say Sage");
++        updateNotification("Quiet wake listener: say Sage");
++        startWakeListening(350);
++    }
++
++    private boolean isActiveCommandSession(long sessionId) {
++        return sessionId != 0L
++                && activeCommandSession == sessionId
++                && speechRecognizer != null;
++    }
++
+@@ -954 +837 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        if (cleaned.isEmpty() || speaking || stopRequested || isLikelySelfEcho(cleaned)) {
++        if (cleaned.isEmpty() || speaking || stopRequested) {
+@@ -957,0 +841,9 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        if (isLikelySelfEcho(cleaned)) {
++            SageDiagnostics.echoRejected(this, cleaned);
++            closeConversationWindow();
++            commandEngine.cancelFollowUp();
++            broadcastStatus("Speaker echo blocked — say Sage");
++            updateNotification("Quiet wake listener: say Sage");
++            startWakeListening(900);
++            return;
++        }
+@@ -961,0 +854 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        SageDiagnostics.recordHeard(this, cleaned);
+@@ -1020 +912,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        lastWakePreview = "";
+@@ -1197 +1088,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        lastWakePreview = "";
+@@ -1278 +1169,7 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        lastWakePreview = "";
++        SageDiagnostics.appendEvent(
++                this,
++                "CONVERSATION",
++                singleCommandArmed
++                        ? "One command armed"
++                        : "Natural conversation window opened"
++        );
+@@ -1284 +1181 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-                && preferences.getBoolean("conversation_mode_enabled", false);
++                && preferences.getBoolean("conversation_mode_enabled", true);
+@@ -1308,0 +1206 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        boolean wasActive = conversationActive;
+@@ -1313,0 +1212,3 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        if (wasActive) {
++            SageDiagnostics.appendEvent(this, "CONVERSATION", "Conversation window closed");
++        }
+@@ -1333,0 +1235 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        SageDiagnostics.appendEvent(this, "CONVERSATION", "Conversation window expired");
+@@ -1365 +1267 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        nativeWakeListening = false;
++        activeCommandSession = 0L;
+@@ -1472,0 +1375,11 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
++        String listener;
++        if (speaking) {
++            listener = "Speaker active — microphone paused";
++        } else if (commandListening || commandStartPending) {
++            listener = "Android command turn";
++        } else if (wakeListening) {
++            listener = "Offline wake word";
++        } else {
++            listener = "Idle";
++        }
++        SageDiagnostics.recordState(this, status, listener);
+@@ -1488 +1400,0 @@ public class SageVoiceService extends Service implements TextToSpeech.OnInitList
+-        nativeWakeListening = false;

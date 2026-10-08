@@ -1,0 +1,96 @@
+name: Diagnose Sage 1.23 compilation
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches:
+      - sage-tablet-control-v1
+  push:
+    branches:
+      - agent/sage-stabilization-v1-21
+
+jobs:
+  compile-diagnostics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Reconstruct and apply Sage 1.23
+        run: |
+          set -euo pipefail
+          bash sage_tools/reconstruct_v1_20.sh sage_build
+          python3 sage_patches/stabilize_v1_21.py sage_build
+          python3 sage_patches/fix_android_lint_v1_21.py sage_build
+          python3 sage_patches/brain_watchdog_v1_22.py sage_build
+          python3 sage_patches/wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_patches/fix_wake_profiles_compile_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_and_recognition_v1_23.py sage_build
+          python3 sage_tests/test_wake_profiles_compile_repair_v1_23.py sage_build
+
+      - name: Add pinned llama.cpp engine
+        run: |
+          set -euo pipefail
+          mkdir -p sage_build/third_party/llama.cpp
+          git -C sage_build/third_party/llama.cpp init
+          git -C sage_build/third_party/llama.cpp remote add origin https://github.com/ggml-org/llama.cpp.git
+          git -C sage_build/third_party/llama.cpp fetch --depth=1 origin d73c1d6b22a2d3ecc74c2c9cde354015ee72e862
+          git -C sage_build/third_party/llama.cpp checkout --detach FETCH_HEAD
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK and native toolchain
+        run: |
+          sdkmanager \
+            "platform-tools" \
+            "platforms;android-35" \
+            "build-tools;35.0.0" \
+            "cmake;3.22.1" \
+            "ndk;28.2.13676358"
+
+      - name: Set up Gradle 8.10.2
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.10.2
+
+      - name: Compile and capture output
+        id: compile
+        continue-on-error: true
+        working-directory: sage_build
+        run: |
+          set +e
+          gradle :app:compileDebugJavaWithJavac --stacktrace 2>&1 | tee ../sage-1.23-compile-console.txt
+          status=${PIPESTATUS[0]}
+          echo "$status" > ../sage-1.23-compile-exit-code.txt
+          exit "$status"
+
+      - name: Package transformed source
+        if: always()
+        run: |
+          tar -czf sage-1.23-transformed-source.tgz \
+            -C sage_build \
+            app/src/main/java/com/pineapple/sage \
+            app/build.gradle.kts
+
+      - name: Upload compile diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Sage-1.23-compile-diagnostics
+          path: |
+            sage-1.23-compile-console.txt
+            sage-1.23-compile-exit-code.txt
+            sage-1.23-transformed-source.tgz
+          if-no-files-found: error
+
+      - name: Enforce compile result
+        if: steps.compile.outcome != 'success'
+        run: exit 1
