@@ -33,6 +33,9 @@ CLASSES = [
     'speech.voicerepair.VoiceRepairSessionManagerTest',
     'speech.voicerepair.VoiceRepairResponderTest',
     'speech.voicerepair.VoiceRepairIntegrationTest',
+    'speech.voicerepair.VoiceRepairWorkflowTest',
+    'speech.voicerepair.VoiceRepairPersistenceTest',
+    'speech.voicerepair.SharedPreferencesVoiceRepairStoreTest',
 ]
 PREFIX = 'com.pineapple.sageos2.'
 # SageSherpaRecognitionServiceLifecycleTest is listed without a package because it is not under

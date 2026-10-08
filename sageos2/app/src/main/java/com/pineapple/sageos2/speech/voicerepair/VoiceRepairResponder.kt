@@ -8,18 +8,16 @@ import java.util.Locale
 class VoiceRepairResponder(
     private val inner: SagePersonalResponder,
     private val manager: VoiceRepairSessionManager,
-    private val startRepair: (() -> String)? = null
+    private val startRepair: (() -> String)? = null,
+    private val cancelRepair: (() -> String)? = null
 ) : SagePersonalResponder {
     override fun resolve(rawText: String): SagePersonalResolution? {
         val command = normalize(rawText)
         if (command !in COMMANDS) return inner.resolve(rawText)
         // Repair requests take precedence over personality or learned conversational replies.
         val reply = when (command) {
-            in CANCEL_COMMANDS -> if (manager.cancel() == null) {
-                "No active voice repair session to cancel."
-            } else {
-                "Cancelled voice repair. No repair has been verified."
-            }
+            in CANCEL_COMMANDS -> cancelRepair?.invoke()
+                ?: "The hearing controller is not connected. I cannot safely cancel a microphone session from here."
             else -> startRepair?.invoke()
                 ?: "I understand that you want me to test and repair my hearing. " +
                     "The microphone test and repair workflow is not connected in this build. " +
@@ -28,7 +26,9 @@ class VoiceRepairResponder(
         return SagePersonalResolution.Reply(reply)
     }
 
-    private fun normalize(value: String): String {
+
+    companion object {
+        fun normalize(value: String): String {
         var text = value.lowercase(Locale.ROOT).trim()
             .replace(Regex("[.!?,;]+"), " ")
             .replace(Regex("['\u2019]"), "")
@@ -40,7 +40,8 @@ class VoiceRepairResponder(
         return text.removeSuffix(" please").trim()
     }
 
-    companion object {
+        fun isCancellation(rawText: String) = normalize(rawText) in CANCEL_COMMANDS
+
         val DIAGNOSE_COMMANDS = setOf("diagnose my voice", "diagnose voice", "check my voice", "check your hearing", "diagnose your hearing")
         val FIX_COMMANDS = setOf("fix my hearing", "fix your hearing", "repair your hearing", "fix my voice", "repair my voice", "fix your voice", "repair your voice")
         val CANCEL_COMMANDS = setOf("cancel voice repair", "stop voice repair")

@@ -43,10 +43,18 @@ class VoiceRepairResponderTest {
         assertEquals(1, calls)
     }
 
-    @Test fun cancelledSessionIsNotReportedActiveAgain() {
-        manager.startSession("hello")
-        assertTrue((responder.resolve("cancel voice repair") as SagePersonalResolution.Reply).text.contains("Cancelled"))
-        assertTrue((responder.resolve("cancel voice repair") as SagePersonalResolution.Reply).text.contains("No active"))
+    @Test fun cancellationUsesControllerCallbackInsteadOfRelabellingManager() {
+        val session = manager.startSession("hello")
+        val disconnected = (responder.resolve("cancel voice repair") as SagePersonalResolution.Reply).text
+        assertTrue(disconnected.contains("cannot safely cancel"))
+        assertEquals(session.state, manager.current()!!.state)
+        var calls = 0
+        val connected = VoiceRepairResponder(EmptySagePersonalResponder, manager, cancelRepair = {
+            calls++
+            "Controller cancelled and released the microphone."
+        })
+        assertTrue((connected.resolve("Sage, please stop voice repair") as SagePersonalResolution.Reply).text.contains("released"))
+        assertEquals(1, calls)
     }
 
     @Test fun unrelatedConversationStillDelegates() {

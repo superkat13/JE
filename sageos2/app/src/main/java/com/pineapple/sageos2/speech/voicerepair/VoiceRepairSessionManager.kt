@@ -4,9 +4,30 @@ import java.util.UUID
 
 /** Serializes session ownership; retired callbacks cannot overwrite a successor or terminal result. */
 class VoiceRepairSessionManager(
+    private val store: VoiceRepairStore = MemoryVoiceRepairStore(),
     private val clockMs: () -> Long = System::currentTimeMillis
 ) {
-    private var session: VoiceRepairSession? = null
+    private val records = store.load().takeLast(HISTORY_LIMIT).toMutableList()
+    private var session: VoiceRepairSession? = records.lastOrNull()
+
+    init {
+        val restored = session
+        if (restored != null && restored.state !in TERMINAL) {
+            save(restored.copy(state = VoiceRepairState.INTERRUPTED, interrupted = true,
+                endedAtMs = clockMs(), steps = restored.steps + VoiceRepairStep("interrupted", clockMs())))
+        }
+    }
+
+    @Synchronized fun history(): List<VoiceRepairSession> { expire(); return records.toList() }
+
+    private fun save(value: VoiceRepairSession): VoiceRepairSession {
+        session = value
+        records.removeAll { it.id == value.id }
+        records.add(value)
+        while (records.size > HISTORY_LIMIT) records.removeAt(0)
+        store.save(records.toList())
+        return value
+    }
 
     @Synchronized fun current(): VoiceRepairSession? {
         expire()
@@ -23,7 +44,7 @@ class VoiceRepairSessionManager(
             cause = VoiceRepairCause.NONE, maxAttempts = VoiceRepairPolicy.MAX_ATTEMPTS,
             startedAtMs = now, deadlineMs = now + timeoutMs, testPhrase = testPhrase.trim(),
             steps = listOf(VoiceRepairStep("start", now, "session started"))
-        ).also { session = it }
+        ).also { save(it) }
     }
 
     @Synchronized fun update(candidate: VoiceRepairSession): VoiceRepairSession {
@@ -41,8 +62,7 @@ class VoiceRepairSessionManager(
                 "repair success requires a matching retest after a repair"
             }
         }
-        session = candidate
-        return candidate
+        return save(candidate)
     }
 
     @Synchronized fun cancel(): VoiceRepairSession? = finish(VoiceRepairState.CANCELLED)
@@ -59,7 +79,7 @@ class VoiceRepairSessionManager(
             interrupted = state == VoiceRepairState.INTERRUPTED,
             endedAtMs = now,
             steps = current.steps + VoiceRepairStep(state.name.lowercase(), now)
-        ).also { session = it }
+        ).also { save(it) }
     }
 
     private fun expire() {
@@ -67,14 +87,15 @@ class VoiceRepairSessionManager(
         val deadline = current.deadlineMs ?: return
         val now = clockMs()
         if (current.state !in TERMINAL && now >= deadline) {
-            session = current.copy(state = VoiceRepairState.FAILED, cause = VoiceRepairCause.DEADLINE_EXCEEDED,
-                endedAtMs = now, steps = current.steps + VoiceRepairStep("deadline", now, "exceeded"))
+            save(current.copy(state = VoiceRepairState.FAILED, cause = VoiceRepairCause.DEADLINE_EXCEEDED,
+                endedAtMs = now, steps = current.steps + VoiceRepairStep("deadline", now, "exceeded")))
         }
     }
 
     @Synchronized fun clear() { session = null }
 
     companion object {
+        const val HISTORY_LIMIT = 10
         private val TERMINAL = setOf(VoiceRepairState.HEALTHY, VoiceRepairState.SUCCESS, VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)
     }
 }
