@@ -393,7 +393,7 @@ class AndroidSpeechPort(
         return true
     }
 
-    /** Uses the existing service protocol without changing the wake client's ownership. */
+    /** Uses the existing service STOP protocol with a per-lease acknowledgement channel. */
     private fun awaitRemoteWakeStop(completed: (Boolean) -> Unit): () -> Unit {
         var finished = false
         var bound = false

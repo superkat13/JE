@@ -83,6 +83,7 @@ class VoiceDiagnosticAdapterTest {
         assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
         context.acknowledgeStop(); idle()
         assertEquals(1, recognizer().starts)
+        assertEquals(1, context.unbinds)
     }
     @Test fun diagnosticResultsNeverReachNormalCommandRouting() {
         acquire()
@@ -239,10 +240,32 @@ class VoiceDiagnosticAdapterTest {
         assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()); assertNull(manager.current()!!.repairAppliedAtMs)
         assertTrue(adapter.acquire("next")); adapter.release("next")
     }
-    @Test fun shutdownInvalidatesCaptureAndPendingWakeBarrier() {
+    @Test fun shutdownInvalidatesCapture() {
         acquire(); capture(); val old = recognizer().callback!!
         port.shutdown(); idle(); old.onResults(bundle("delete everything")); old.onError(5)
         adapter.release("one"); assertFalse(adapter.acquire("next")); assertIsolated()
+    }
+    @Test fun shutdownBeforeStopAcknowledgementCancelsBindingAndCapture() {
+        assertTrue(adapter.acquire("one")); capture()
+        val reply = context.stopReplies.last()
+        port.shutdown(); idle()
+        val unbinds = context.unbinds
+        context.acknowledgeStop(reply = reply); idle(); advance(5_001)
+        assertEquals(unbinds, context.unbinds); assertTrue(unbinds >= 1)
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()); assertIsolated()
+    }
+    @Test fun queuedCaptureCannotRunForReusedOwner() {
+        acquire(); var oldResults = 0
+        adapter.capture("one", "old") { oldResults++ }; adapter.release("one")
+        assertTrue(adapter.acquire("one")); idle(); context.acknowledgeStop(); idle()
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()); assertEquals(0, oldResults)
+        capture(); assertEquals(1, recognizer().starts)
+    }
+    @Test fun deferredCommandModeDoesNotPreventOwnedReset() {
+        acquire(); capture(); port.setListening(SageListeningMode.COMMAND, 9, 9)
+        var result: Boolean? = null
+        adapter.reset("one") { result = it }; idle(); assertEquals(true, result)
+        capture(); assertEquals(1, recognizer().starts); assertIsolated()
     }
     private class TestScheduler : RuntimeScheduler {
         var task: (() -> Unit)? = null
@@ -268,11 +291,12 @@ class VoiceDiagnosticAdapterTest {
     private class WakeContext(base: Context) : ContextWrapper(base) {
         val stopReplies = mutableListOf<Messenger>()
         var starts = 0
+        var unbinds = 0
         override fun getApplicationContext(): Context = this
         override fun checkSelfPermission(permission: String) = PackageManager.PERMISSION_GRANTED
         override fun startForegroundService(intent: Intent) = intent.component
         override fun stopService(intent: Intent) = true
-        override fun unbindService(connection: ServiceConnection) {}
+        override fun unbindService(connection: ServiceConnection) { unbinds++ }
         override fun bindService(intent: Intent, connection: ServiceConnection, flags: Int): Boolean {
             if (intent.component?.className != "com.pineapple.sageos2.speech.SageWakeRemoteService") return false
             val service = Messenger(Handler(Looper.getMainLooper()) { message ->
