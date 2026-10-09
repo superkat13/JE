@@ -1,46 +1,60 @@
 package com.pineapple.sageos2.speech
 
+import android.os.Handler
+import android.os.Looper
 import com.pineapple.sageos2.speech.voicerepair.VoiceDiagnosticPort
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult
 
-class VoiceDiagnosticAdapter(
-    private val port: SpeechPort
-) : VoiceDiagnosticPort {
+class VoiceDiagnosticAdapter(private val port: SpeechPort) : VoiceDiagnosticPort {
+    private val main = Handler(Looper.getMainLooper())
     private var currentOwner: String? = null
-    private var resultCallback: ((VoiceRepairTestResult) -> Unit)? = null
+    private var operation = 0L
+
+    private fun onMain(action: () -> Unit) {
+        if (Looper.myLooper() == main.looper) action() else main.post { action() }
+    }
 
     override fun acquire(owner: String): Boolean {
-        if (currentOwner != null) return false
+        if (Looper.myLooper() != main.looper || owner.isBlank() || currentOwner != null) return false
+        val android = port as? AndroidSpeechPort ?: return false
+        if (!android.acquireDiagnosticWindow(owner)) return false
         currentOwner = owner
+        ++operation
         return true
     }
 
     override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) {
-        if (currentOwner != owner) return
-        resultCallback = result
-        // Actual capture would use diagnostic path; simplified for scaffolding
+        onMain {
+            if (currentOwner != owner || owner.isBlank()) return@onMain
+            val token = ++operation
+            (port as AndroidSpeechPort).captureDiagnosticPhrase(owner, expected) { testResult ->
+                if (currentOwner == owner && operation == token) {
+                    ++operation
+                    result(testResult)
+                }
+            }
+        }
     }
 
     override fun reset(owner: String, completed: (Boolean) -> Unit) {
-        if (currentOwner != owner) {
-            completed(false)
-            return
-        }
-        if (port is com.pineapple.sageos2.speech.voicerepair.VoiceRepairCapable) {
-            try {
-                port.resetRecognizer("repair reset")
-                completed(true)
-            } catch (e: Exception) {
-                completed(false)
+        onMain {
+            if (currentOwner != owner || owner.isBlank()) { completed(false); return@onMain }
+            val token = ++operation
+            (port as AndroidSpeechPort).resetDiagnosticRecognizer(owner) { success ->
+                if (currentOwner == owner && operation == token) {
+                    ++operation
+                    completed(success)
+                }
             }
-        } else {
-            completed(false)
         }
     }
 
     override fun release(owner: String) {
-        if (currentOwner != owner) return
-        currentOwner = null
-        resultCallback = null
+        onMain {
+            if (currentOwner != owner) return@onMain
+            currentOwner = null
+            ++operation
+            (port as AndroidSpeechPort).releaseDiagnosticWindow(owner)
+        }
     }
 }

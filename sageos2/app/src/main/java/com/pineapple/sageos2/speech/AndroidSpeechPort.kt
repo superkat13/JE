@@ -1,10 +1,15 @@
 package com.pineapple.sageos2.speech
 
 import android.annotation.SuppressLint
+import android.content.ComponentName
+import android.content.ServiceConnection
 import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.os.IBinder
+import android.os.Message
+import android.os.Messenger
 import android.os.Handler
 import android.os.Looper
 import android.speech.RecognitionListener
@@ -29,6 +34,15 @@ class AndroidSpeechPort(
     private var recognizer: SpeechRecognizer? = null
     private var recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
     private val sessions = RecognitionSessionGate()
+    private val diagnosticSessions = RecognitionSessionGate()
+    private var diagnosticOwner: String? = null
+    private var diagnosticEpoch = 0L
+    private var diagnosticReady = false
+    private var diagnosticStopFailed = false
+    private var cancelWakeBarrier: (() -> Unit)? = null
+    private var waitingCapture: (() -> Unit)? = null
+    private var speechActive = false
+    private val deferredSpeech = java.util.ArrayDeque<PendingSpeech>()
     private var localFallbackAttempted = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -50,12 +64,19 @@ class AndroidSpeechPort(
 
     override fun attach(listener: SpeechInputListener) { this.listener = listener }
 
+    // Admission and normal input changes share the main looper. An off-main caller cannot
+    // synchronously reserve a window ahead of a queued command.
+    private fun onMain(action: () -> Unit) {
+        if (Looper.myLooper() == main.looper) action() else main.post { action() }
+    }
+
     override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long) {
-        main.post {
-            if (destroyed) return@post
+        onMain {
+            if (destroyed) return@onMain
             this.desiredMode = mode
             this.generation = generation
             this.turnId = turnId
+            if (diagnosticOwner != null) return@onMain
             stopInput()
             localFallbackAttempted = false
             when (mode) {
@@ -69,8 +90,12 @@ class AndroidSpeechPort(
     override fun speak(turnId: Long, text: String, onComplete: () -> Unit) {
         main.post {
             if (destroyed) { onComplete(); return@post }
-            stopInput()
             val pending = PendingSpeech(turnId, text, onComplete)
+            if (diagnosticOwner != null) {
+                deferredSpeech.addLast(pending)
+                return@post
+            }
+            stopInput()
             if (!ttsReady) { pendingSpeech = pending; return@post }
             speakNow(pending)
         }
@@ -78,10 +103,11 @@ class AndroidSpeechPort(
 
     override fun speakTransient(text: String) {
         main.post {
-            if (destroyed || !ttsReady) return@post
+            if (destroyed || !ttsReady || diagnosticOwner != null) return@post
             val resumeMode = desiredMode
             val resumeGeneration = generation
             stopInput()
+            speechActive = true
             val id = "transient-${UUID.randomUUID()}"
             runCatching {
                 tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
@@ -90,7 +116,8 @@ class AndroidSpeechPort(
                     override fun onDone(utteranceId: String?) {
                         if (utteranceId != id) return
                         main.post {
-                            if (!destroyed && desiredMode == resumeMode && generation == resumeGeneration) {
+                            speechActive = false
+                            if (!destroyed && diagnosticOwner == null && desiredMode == resumeMode && generation == resumeGeneration) {
                                 when (resumeMode) {
                                     SageListeningMode.WAKE_ONLY -> startWake(resumeGeneration)
                                     SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, resumeGeneration)
@@ -100,8 +127,13 @@ class AndroidSpeechPort(
                         }
                     }
                 })
-                tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id)
-            }.onFailure { listener?.onSpeechDiagnostic("transient TTS failed: ${it.message ?: it::class.simpleName}") }
+                if (tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) == TextToSpeech.ERROR) {
+                    speechActive = false
+                }
+            }.onFailure {
+                speechActive = false
+                listener?.onSpeechDiagnostic("transient TTS failed: ${it.message ?: it::class.simpleName}")
+            }
         }
     }
 
@@ -114,7 +146,7 @@ class AndroidSpeechPort(
                     tts?.language = Locale.US
                     runCatching { applyLegacyVoiceProfileIfPresent() }
                         .onFailure { listener?.onSpeechDiagnostic("legacy TTS profile failed: ${it.message ?: it::class.simpleName}") }
-                    pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
+                    if (diagnosticOwner == null) pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
                 } else {
                     listener?.onSpeechDiagnostic("TTS initialization failed: $status")
                     pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
@@ -155,7 +187,14 @@ class AndroidSpeechPort(
     private fun speakNow(pending: PendingSpeech) {
         val id = "sage-${pending.turnId}-${UUID.randomUUID()}"
         val completed = AtomicBoolean(false)
-        val completeOnce = { if (completed.compareAndSet(false, true)) pending.onComplete() }
+        speechActive = true
+        val completeOnce = {
+            if (completed.compareAndSet(false, true)) {
+                speechActive = false
+                pending.onComplete()
+                drainDeferredSpeech()
+            }
+        }
         val result = runCatching {
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
@@ -173,15 +212,20 @@ class AndroidSpeechPort(
     }
 
     private fun startWake(generation: Long) {
+        if (destroyed || diagnosticOwner != null) return
         try {
             wakeWordEngine.configure(wakeProfiles.profiles())
-            wakeWordEngine.start(generation) { hit -> listener?.onWakeDetected(hit) }
+            wakeWordEngine.start(generation) { hit -> onMain {
+                if (!destroyed && diagnosticOwner == null && desiredMode == SageListeningMode.WAKE_ONLY &&
+                    hit.generation == this.generation) listener?.onWakeDetected(hit)
+            } }
         } catch (t: Throwable) {
             listener?.onSpeechDiagnostic("wake start failed: ${t.message}")
         }
     }
 
     private fun startRecognition(turnId: Long, generation: Long, allowLocal: Boolean = true) {
+        if (destroyed || diagnosticOwner != null) return
         val localComponent = if (allowLocal) SageSherpaRecognitionService.primaryComponent(appContext) else null
         val backend = CommandRecognizerPolicy.choose(
             localSherpaReady = localComponent != null,
@@ -251,7 +295,7 @@ class AndroidSpeechPort(
     }
 
     private fun handleResults(session: Long, capturedTurnId: Long, capturedGeneration: Long, results: Bundle?) {
-        if (!sessions.isCurrent(session)) {
+        if (destroyed || diagnosticOwner != null || !sessions.isCurrent(session)) {
             listener?.onSpeechDiagnostic("ignored stale recognizer result session=$session")
             return
         }
@@ -271,7 +315,7 @@ class AndroidSpeechPort(
         capturedGeneration: Long,
         error: Int
     ) {
-        if (!sessions.isCurrent(session)) {
+        if (destroyed || diagnosticOwner != null || !sessions.isCurrent(session)) {
             listener?.onSpeechDiagnostic("ignored stale recognizer error session=$session code=$error")
             return
         }
@@ -315,9 +359,262 @@ class AndroidSpeechPort(
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
-    override fun shutdown() {
+    fun acquireDiagnosticWindow(owner: String): Boolean {
+        if (Looper.myLooper() != main.looper || owner.isBlank() || destroyed ||
+            diagnosticOwner != null || speechActive || pendingSpeech != null ||
+            desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) return false
+        diagnosticOwner = owner
+        val epoch = ++diagnosticEpoch
+        diagnosticReady = false
+        diagnosticStopFailed = false
+        sessions.invalidate()
+        // Reserve first; capture waits for actual remote STOP acknowledgement, not a delay
+        // or the local stop() enqueue. Each lease has its own reply Messenger.
         main.post {
+            if (diagnosticOwner != owner || diagnosticEpoch != epoch || destroyed) return@post
+            try {
+                recognizer?.cancel()
+                wakeWordEngine.stop()
+                if (wakeWordEngine is RemoteWakeWordEngine) {
+                    cancelWakeBarrier = awaitRemoteWakeStop {
+                        if (diagnosticOwner == owner && diagnosticEpoch == epoch && !destroyed) {
+                            diagnosticReady = it
+                            diagnosticStopFailed = !it
+                            waitingCapture?.also { capture -> waitingCapture = null; capture() }
+                        }
+                    }
+                } else {
+                    diagnosticReady = true // in-process engine.stop() is synchronous
+                }
+            } catch (_: Exception) {
+                diagnosticStopFailed = true
+            }
+        }
+        return true
+    }
+
+    /** Uses the existing service STOP protocol with a per-lease acknowledgement channel. */
+    private fun awaitRemoteWakeStop(completed: (Boolean) -> Unit): () -> Unit {
+        var finished = false
+        var bound = false
+        lateinit var connection: ServiceConnection
+        lateinit var timeout: Runnable
+        fun finish(success: Boolean, notify: Boolean = true) {
+            if (finished) return
+            finished = true
+            main.removeCallbacks(timeout)
+            if (bound) runCatching { appContext.unbindService(connection) }
+            if (notify) completed(success)
+        }
+        val reply = Messenger(Handler(main.looper) { message ->
+            when (message.what) {
+                RemoteWakeProtocol.MSG_ACKNOWLEDGED -> if (
+                    message.data.getString(RemoteWakeProtocol.KEY_DETAIL) == "remote wake engine stopped"
+                ) finish(true)
+                RemoteWakeProtocol.MSG_STATUS -> finish(false)
+            }
+            true
+        })
+        timeout = Runnable { finish(false) }
+        connection = object : ServiceConnection {
+            override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
+                if (finished) return
+                try {
+                    checkNotNull(service)
+                    Messenger(service).send(Message.obtain(null, RemoteWakeProtocol.MSG_STOP).apply {
+                        replyTo = reply
+                        data = Bundle().apply { putLong(RemoteWakeProtocol.KEY_GENERATION, generation) }
+                    })
+                } catch (_: Exception) { finish(false) }
+            }
+            override fun onServiceDisconnected(name: ComponentName?) = finish(false)
+            override fun onNullBinding(name: ComponentName?) = finish(false)
+            override fun onBindingDied(name: ComponentName?) = finish(false)
+        }
+        main.postDelayed(timeout, 5_000L)
+        try {
+            bound = appContext.bindService(Intent().setComponent(ComponentName(appContext.packageName,
+                "com.pineapple.sageos2.speech.SageWakeRemoteService")), connection, Context.BIND_AUTO_CREATE)
+            if (!bound) finish(false)
+        } catch (_: Exception) { finish(false) }
+        return { finish(false, notify = false) }
+    }
+
+    fun captureDiagnosticPhrase(
+        owner: String,
+        expected: String,
+        onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
+    ) {
+        val epoch = diagnosticEpoch
+        main.post {
+            if (destroyed || diagnosticOwner != owner || diagnosticEpoch != epoch) {
+                return@post
+            }
+            if (!diagnosticReady && !diagnosticStopFailed) {
+                waitingCapture = { captureDiagnosticPhrase(owner, expected, onResult) }
+                return@post
+            }
+            val startMs = System.currentTimeMillis()
+            val sessionToken = diagnosticSessions.next()
+            if (diagnosticStopFailed) {
+                diagnosticSessions.invalidate()
+                onResult(com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
+                    expected, null, SpeechRecognizer.ERROR_AUDIO, CommandRecognizerBackend.UNAVAILABLE))
+                return@post
+            }
+
+            val localComponent = SageSherpaRecognitionService.primaryComponent(appContext)
+            val backend = CommandRecognizerPolicy.choose(
+                localSherpaReady = localComponent != null,
+                androidOnDeviceAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
+                    SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext),
+                androidDefaultAvailable = SpeechRecognizer.isRecognitionAvailable(appContext)
+            )
+
+            if (!ensureRecognizer(backend, localComponent)) {
+                diagnosticSessions.invalidate()
+                onResult(
+                    com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
+                        expected = expected,
+                        recognized = null,
+                        errorCode = SpeechRecognizer.ERROR_CLIENT,
+                        backend = CommandRecognizerBackend.UNAVAILABLE,
+                        elapsedMs = System.currentTimeMillis() - startMs,
+                        nonEmpty = false
+                    )
+                )
+                return@post
+            }
+
+            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US.toLanguageTag())
+                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
+                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
+                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            }
+
+            try {
+                recognizer?.setRecognitionListener(
+                    DiagnosticRecognitionListener(sessionToken, owner, expected, startMs, onResult)
+                )
+                recognizer?.startListening(intent)
+            } catch (t: Throwable) {
+                listener?.onSpeechDiagnostic("diagnostic recognizer start failed: ${t.message}")
+                if (diagnosticSessions.isCurrent(sessionToken) && diagnosticOwner == owner) {
+                    diagnosticSessions.invalidate()
+                    onResult(
+                        com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
+                            expected = expected,
+                            recognized = null,
+                            errorCode = SpeechRecognizer.ERROR_CLIENT,
+                            backend = recognizerBackend,
+                            elapsedMs = System.currentTimeMillis() - startMs,
+                            nonEmpty = false
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    private inner class DiagnosticRecognitionListener(
+        private val sessionToken: Long,
+        private val owner: String,
+        private val expected: String,
+        private val startMs: Long,
+        private val onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
+    ) : RecognitionListener {
+        override fun onResults(results: Bundle?) {
+            if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
+            diagnosticSessions.invalidate()
+            val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
+            val elapsed = System.currentTimeMillis() - startMs
+            val res = com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
+                expected = expected,
+                recognized = text,
+                errorCode = if (text.isNullOrBlank()) SpeechRecognizer.ERROR_NO_MATCH else null,
+                backend = recognizerBackend,
+                elapsedMs = elapsed,
+                nonEmpty = !text.isNullOrBlank()
+            )
+            onResult(res)
+        }
+
+        override fun onError(error: Int) {
+            if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
+            diagnosticSessions.invalidate()
+            val elapsed = System.currentTimeMillis() - startMs
+            val res = com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
+                expected = expected,
+                recognized = null,
+                errorCode = error,
+                backend = recognizerBackend,
+                elapsedMs = elapsed,
+                nonEmpty = false
+            )
+            onResult(res)
+        }
+
+        override fun onReadyForSpeech(params: Bundle?) {
+            if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
+            listener?.onSpeechDiagnostic("diagnostic recognizer ready backend=$recognizerBackend")
+        }
+        override fun onBeginningOfSpeech() {
+            if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
+            listener?.onSpeechDiagnostic("diagnostic recognizer speech began backend=$recognizerBackend")
+        }
+        override fun onRmsChanged(rmsdB: Float) = Unit
+        override fun onBufferReceived(buffer: ByteArray?) = Unit
+        override fun onEndOfSpeech() = Unit
+        override fun onPartialResults(partialResults: Bundle?) = Unit
+        override fun onEvent(eventType: Int, params: Bundle?) = Unit
+    }
+
+    fun releaseDiagnosticWindow(owner: String) {
+        onMain {
+            if (diagnosticOwner != owner) return@onMain
+            diagnosticOwner = null
+            ++diagnosticEpoch
+            diagnosticSessions.invalidate()
+            waitingCapture = null
+            cancelWakeBarrier?.invoke()
+            cancelWakeBarrier = null
+            runCatching { recognizer?.cancel() }
+            if (!drainDeferredSpeech()) resumeListening()
+        }
+    }
+
+    private fun resumeListening() {
+        if (destroyed || diagnosticOwner != null || speechActive || pendingSpeech != null) return
+        when (desiredMode) {
+            SageListeningMode.WAKE_ONLY -> startWake(generation)
+            SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
+            SageListeningMode.OFF -> Unit
+        }
+    }
+
+    private fun drainDeferredSpeech(): Boolean {
+        if (destroyed || diagnosticOwner != null || speechActive) return false
+        val pending = deferredSpeech.pollFirst() ?: return false
+        val resumed = pending.copy(onComplete = {
+            pending.onComplete()
+            if (deferredSpeech.isEmpty()) resumeListening()
+        })
+        stopInput()
+        if (ttsReady) speakNow(resumed) else pendingSpeech = resumed
+        return true
+    }
+
+    override fun shutdown() {
+        onMain {
             destroyed = true
+            ++diagnosticEpoch
+            waitingCapture = null
+            cancelWakeBarrier?.invoke()
+            cancelWakeBarrier = null
+            diagnosticOwner = null
+            diagnosticSessions.invalidate()
             stopInput()
             try { wakeWordEngine.close() } catch (_: Throwable) {}
             runCatching { recognizer?.destroy() }; recognizer = null
@@ -325,26 +622,45 @@ class AndroidSpeechPort(
             runCatching { tts?.stop() }
             runCatching { tts?.shutdown() }
             tts = null
+            pendingSpeech?.onComplete()
             pendingSpeech = null
+            while (deferredSpeech.isNotEmpty()) deferredSpeech.removeFirst().onComplete()
         }
     }
 
     private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
 
     override fun resetRecognizer(reason: String) {
+        resetRecognizer(reason) {}
+    }
+
+    override fun resetRecognizer(reason: String, completed: (Boolean) -> Unit) {
+        // Ordinary reset cannot interfere with a diagnostic lease.
+        resetRecognizerForOwner(null, reason, completed)
+    }
+
+    fun resetDiagnosticRecognizer(owner: String, completed: (Boolean) -> Unit) {
+        resetRecognizerForOwner(owner, "repair reset", completed)
+    }
+
+    private fun resetRecognizerForOwner(owner: String?, reason: String, completed: (Boolean) -> Unit) {
+        val epoch = diagnosticEpoch
         main.post {
-            if (destroyed) return@post
-            // A caller must first reserve an idle diagnostic window. Never cancel a live command.
-            if (desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) {
-                listener?.onSpeechDiagnostic("recognizer reset refused: command capture active")
+            if (destroyed || diagnosticOwner != owner || diagnosticEpoch != epoch ||
+                (owner != null && (!diagnosticReady || diagnosticStopFailed)) ||
+                (owner == null && desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP))) {
+                completed(false)
                 return@post
             }
-            listener?.onSpeechDiagnostic("recognizer reset requested")
+            listener?.onSpeechDiagnostic("recognizer reset requested: $reason")
             sessions.invalidate()
-            runCatching { recognizer?.cancel() }
-            runCatching { recognizer?.destroy() }
-            recognizer = null
+            diagnosticSessions.invalidate()
+            val cancelled = runCatching { recognizer?.cancel() }.isSuccess
+            val tornDown = runCatching { recognizer?.destroy() }.isSuccess
+            // Retain a failed teardown for a later cleanup attempt; never reuse it as healthy.
+            if (tornDown) recognizer = null
             recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
+            completed(cancelled && tornDown)
         }
     }
 
