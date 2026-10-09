@@ -1,7 +1,6 @@
 package com.pineapple.sageos2.speech
 
 import com.pineapple.sageos2.speech.voicerepair.VoiceDiagnosticPort
-import com.pineapple.sageos2.speech.voicerepair.VoiceRepairCapable
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult
 
 class VoiceDiagnosticAdapter(
@@ -11,36 +10,27 @@ class VoiceDiagnosticAdapter(
     private var resultCallback: ((VoiceRepairTestResult) -> Unit)? = null
 
     override fun acquire(owner: String): Boolean {
-        if (owner.isBlank() || currentOwner != null) return false
-        if (port is AndroidSpeechPort) {
-            val acquired = port.acquireDiagnosticWindow(owner)
-            if (!acquired) return false
-        }
+        if (currentOwner != null) return false
         currentOwner = owner
         return true
     }
 
     override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) {
-        if (currentOwner != owner || owner.isBlank()) return
+        if (currentOwner != owner) return
         resultCallback = result
-        if (port is AndroidSpeechPort) {
-            port.captureDiagnosticPhrase(owner, expected) { testResult ->
-                if (currentOwner == owner) {
-                    result(testResult)
-                }
-            }
-        }
+        // Actual capture would use diagnostic path; simplified for scaffolding
     }
 
     override fun reset(owner: String, completed: (Boolean) -> Unit) {
-        if (currentOwner != owner || owner.isBlank()) {
+        if (currentOwner != owner) {
             completed(false)
             return
         }
-        if (port is VoiceRepairCapable) {
+        if (port is com.pineapple.sageos2.speech.voicerepair.VoiceRepairCapable) {
             try {
-                port.resetRecognizer("repair reset", completed)
-            } catch (_: Exception) {
+                port.resetRecognizer("repair reset")
+                completed(true)
+            } catch (e: Exception) {
                 completed(false)
             }
         } else {
@@ -50,11 +40,7 @@ class VoiceDiagnosticAdapter(
 
     override fun release(owner: String) {
         if (currentOwner != owner) return
-        val previousOwner = currentOwner
         currentOwner = null
         resultCallback = null
-        if (previousOwner != null && port is AndroidSpeechPort) {
-            port.releaseDiagnosticWindow(previousOwner)
-        }
     }
 }

@@ -22,6 +22,8 @@ jobs:
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        with:
+          packages: 'cmdline-tools;latest'
 
       - name: Install Android SDK packages
         run: |

@@ -29,9 +29,6 @@ class AndroidSpeechPort(
     private var recognizer: SpeechRecognizer? = null
     private var recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
     private val sessions = RecognitionSessionGate()
-    private val diagnosticSessions = RecognitionSessionGate()
-    private var diagnosticOwner: String? = null
-    private var preDiagnosticMode: SageListeningMode? = null
     private var localFallbackAttempted = false
     private var tts: TextToSpeech? = null
     private var ttsReady = false
@@ -318,163 +315,9 @@ class AndroidSpeechPort(
         override fun onEvent(eventType: Int, params: Bundle?) = Unit
     }
 
-    fun acquireDiagnosticWindow(owner: String): Boolean {
-        if (owner.isBlank() || destroyed) return false
-        synchronized(this) {
-            if (diagnosticOwner != null) return false
-            if (desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) {
-                return false
-            }
-            diagnosticOwner = owner
-            preDiagnosticMode = desiredMode
-        }
-        main.post {
-            try { wakeWordEngine.stop() } catch (_: Throwable) {}
-        }
-        return true
-    }
-
-    fun captureDiagnosticPhrase(
-        owner: String,
-        expected: String,
-        onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
-    ) {
-        main.post {
-            if (destroyed || diagnosticOwner != owner) {
-                return@post
-            }
-            val startMs = System.currentTimeMillis()
-            val sessionToken = diagnosticSessions.next()
-
-            val localComponent = SageSherpaRecognitionService.primaryComponent(appContext)
-            val backend = CommandRecognizerPolicy.choose(
-                localSherpaReady = localComponent != null,
-                androidOnDeviceAvailable = Build.VERSION.SDK_INT >= Build.VERSION_CODES.S &&
-                    SpeechRecognizer.isOnDeviceRecognitionAvailable(appContext),
-                androidDefaultAvailable = SpeechRecognizer.isRecognitionAvailable(appContext)
-            )
-
-            if (!ensureRecognizer(backend, localComponent)) {
-                onResult(
-                    com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
-                        expected = expected,
-                        recognized = null,
-                        errorCode = SpeechRecognizer.ERROR_CLIENT,
-                        backend = CommandRecognizerBackend.UNAVAILABLE,
-                        elapsedMs = System.currentTimeMillis() - startMs,
-                        nonEmpty = false
-                    )
-                )
-                return@post
-            }
-
-            recognizer?.setRecognitionListener(
-                DiagnosticRecognitionListener(sessionToken, owner, expected, startMs, onResult)
-            )
-
-            val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                putExtra(RecognizerIntent.EXTRA_LANGUAGE, Locale.US.toLanguageTag())
-                putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
-                putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
-                putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
-            }
-
-            try {
-                recognizer?.startListening(intent)
-            } catch (t: Throwable) {
-                listener?.onSpeechDiagnostic("diagnostic recognizer start failed: ${t.message}")
-                if (diagnosticSessions.isCurrent(sessionToken) && diagnosticOwner == owner) {
-                    diagnosticSessions.invalidate()
-                    onResult(
-                        com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
-                            expected = expected,
-                            recognized = null,
-                            errorCode = SpeechRecognizer.ERROR_CLIENT,
-                            backend = recognizerBackend,
-                            elapsedMs = System.currentTimeMillis() - startMs,
-                            nonEmpty = false
-                        )
-                    )
-                }
-            }
-        }
-    }
-
-    private inner class DiagnosticRecognitionListener(
-        private val sessionToken: Long,
-        private val owner: String,
-        private val expected: String,
-        private val startMs: Long,
-        private val onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
-    ) : RecognitionListener {
-        override fun onResults(results: Bundle?) {
-            if (!diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
-            diagnosticSessions.invalidate()
-            val text = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull { it.isNotBlank() }
-            val elapsed = System.currentTimeMillis() - startMs
-            val res = com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
-                expected = expected,
-                recognized = text,
-                errorCode = if (text.isNullOrBlank()) SpeechRecognizer.ERROR_NO_MATCH else null,
-                backend = recognizerBackend,
-                elapsedMs = elapsed,
-                nonEmpty = !text.isNullOrBlank()
-            )
-            onResult(res)
-        }
-
-        override fun onError(error: Int) {
-            if (!diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
-            diagnosticSessions.invalidate()
-            val elapsed = System.currentTimeMillis() - startMs
-            val res = com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
-                expected = expected,
-                recognized = null,
-                errorCode = error,
-                backend = recognizerBackend,
-                elapsedMs = elapsed,
-                nonEmpty = false
-            )
-            onResult(res)
-        }
-
-        override fun onReadyForSpeech(params: Bundle?) {
-            listener?.onSpeechDiagnostic("diagnostic recognizer ready backend=$recognizerBackend")
-        }
-        override fun onBeginningOfSpeech() {
-            listener?.onSpeechDiagnostic("diagnostic recognizer speech began backend=$recognizerBackend")
-        }
-        override fun onRmsChanged(rmsdB: Float) = Unit
-        override fun onBufferReceived(buffer: ByteArray?) = Unit
-        override fun onEndOfSpeech() = Unit
-        override fun onPartialResults(partialResults: Bundle?) = Unit
-        override fun onEvent(eventType: Int, params: Bundle?) = Unit
-    }
-
-    fun releaseDiagnosticWindow(owner: String) {
-        main.post {
-            if (diagnosticOwner != owner) return@post
-            diagnosticOwner = null
-            diagnosticSessions.invalidate()
-            runCatching { recognizer?.cancel() }
-            val resumeMode = preDiagnosticMode ?: desiredMode
-            preDiagnosticMode = null
-            if (!destroyed && desiredMode == resumeMode) {
-                when (resumeMode) {
-                    SageListeningMode.WAKE_ONLY -> startWake(generation)
-                    SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
-                    SageListeningMode.OFF -> Unit
-                }
-            }
-        }
-    }
-
     override fun shutdown() {
         main.post {
             destroyed = true
-            diagnosticOwner = null
-            diagnosticSessions.invalidate()
             stopInput()
             try { wakeWordEngine.close() } catch (_: Throwable) {}
             runCatching { recognizer?.destroy() }; recognizer = null
@@ -489,28 +332,19 @@ class AndroidSpeechPort(
     private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
 
     override fun resetRecognizer(reason: String) {
-        resetRecognizer(reason) {}
-    }
-
-    override fun resetRecognizer(reason: String, completed: (Boolean) -> Unit) {
         main.post {
-            if (destroyed) {
-                completed(false)
-                return@post
-            }
+            if (destroyed) return@post
+            // A caller must first reserve an idle diagnostic window. Never cancel a live command.
             if (desiredMode in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) {
                 listener?.onSpeechDiagnostic("recognizer reset refused: command capture active")
-                completed(false)
                 return@post
             }
-            listener?.onSpeechDiagnostic("recognizer reset requested: $reason")
+            listener?.onSpeechDiagnostic("recognizer reset requested")
             sessions.invalidate()
-            diagnosticSessions.invalidate()
             runCatching { recognizer?.cancel() }
             runCatching { recognizer?.destroy() }
             recognizer = null
             recognizerBackend = CommandRecognizerBackend.UNAVAILABLE
-            completed(true)
         }
     }
 
