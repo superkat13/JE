@@ -15,8 +15,8 @@ class SharedPreferencesVoiceRepairHistoryStore(
 
     @Synchronized override fun observe(session: VoiceRepairSession) {
         if (session.state in TERMINAL) {
-            val kept = (history() + session).filterNot { it.id == session.id }
-            writeHistory(kept.takeLast(capacity))
+            val kept = (history().filterNot { it.id == session.id } + session).takeLast(capacity)
+            writeHistory(kept)
             prefs.edit().remove(KEY_IN_FLIGHT).apply()
         } else {
             writeInFlight(session)
