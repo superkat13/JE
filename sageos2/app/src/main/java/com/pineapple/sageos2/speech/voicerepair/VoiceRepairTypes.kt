@@ -84,4 +84,28 @@ data class VoiceRepairExport(
     val verified: Boolean,
     val steps: List<VoiceRepairStep>,
     val notes: String
-)
+) {
+    companion object {
+        /** Terminal-session metadata for the explicit developer export. */
+        fun from(session: VoiceRepairSession): VoiceRepairExport = VoiceRepairExport(
+            sessionId = session.id,
+            startedAtMs = session.startedAtMs,
+            endedAtMs = session.endedAtMs,
+            state = session.state,
+            cause = session.cause,
+            testPhrase = session.testPhrase,
+            expected = session.testPhrase,
+            recognizedBefore = session.firstTest?.recognized,
+            recognizedAfter = session.secondTest?.recognized,
+            repairAction = session.repairAction,
+            repairApplied = session.repairAppliedAtMs != null,
+            verified = session.state == VoiceRepairState.SUCCESS,
+            steps = session.steps,
+            notes = if (session.state == VoiceRepairState.HEALTHY) {
+                "Initial phrase matched; no repair was needed or performed."
+            } else {
+                "Explicit diagnostic test only."
+            }
+        )
+    }
+}

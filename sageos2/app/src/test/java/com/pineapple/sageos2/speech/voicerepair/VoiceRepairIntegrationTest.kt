@@ -1,5 +1,7 @@
 package com.pineapple.sageos2.speech.voicerepair
 
+import com.pineapple.sageos2.personal.EmptySagePersonalResponder
+import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.runtime.RuntimeScheduler
 import com.pineapple.sageos2.runtime.ScheduledHandle
 import org.junit.Assert.*
@@ -137,5 +139,57 @@ class VoiceRepairIntegrationTest {
     }
     @Test(expected = IllegalArgumentException::class) fun blankPhraseCannotStartCapture() {
         Fixture().controller.startRepair(" ")
+    }
+
+    @Test fun completedRepairPresentsOwnerOutcomeAfterCapture() {
+        val f = Fixture(); f.port.broken = true
+        f.controller.startRepair("hello")
+        f.port.completeReset(); f.port.heard("hello")
+        assertEquals(VoiceRepairState.SUCCESS, f.state())
+        val text = VoiceRepairCompletionPresenter.ownerText(f.manager.current()!!)
+        assertNotNull(text)
+        assertTrue(text!!.contains("Voice test complete"))
+        assertTrue(text.contains("passed"))
+        assertTrue(text.contains("verified"))
+    }
+
+    @Test fun healthyCapturePresentsOwnerOutcomeAfterCapture() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.port.heard("hello")
+        assertEquals(VoiceRepairState.HEALTHY, f.state())
+        val text = VoiceRepairCompletionPresenter.ownerText(f.manager.current()!!)
+        assertNotNull(text)
+        assertTrue(text!!.contains("without any change"))
+    }
+
+    @Test fun failedCapturePresentsAnHonestOwnerOutcome() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.port.heard("goodbye")
+        assertEquals(VoiceRepairState.FAILED, f.state())
+        val text = VoiceRepairCompletionPresenter.ownerText(f.manager.current()!!)!!
+        assertTrue(text.contains("Voice test complete"))
+        assertTrue(text.contains("did not pass"))
+        assertTrue(text.contains("not verified"))
+    }
+
+    @Test fun interruptionAndCancellationAreNeverPushedUnprompted() {
+        val f = Fixture(); f.controller.startRepair("hello")
+        assertNull(VoiceRepairCompletionPresenter.ownerText(f.manager.current()!!)) // active DIAGNOSING
+        f.controller.interrupt()
+        assertNull(VoiceRepairCompletionPresenter.ownerText(f.manager.current()!!)) // INTERRUPTED
+        val g = Fixture(); g.controller.startRepair("hello"); g.controller.cancel()
+        assertNull(VoiceRepairCompletionPresenter.ownerText(g.manager.current()!!)) // CANCELLED
+    }
+
+    @Test fun statusCommandPresentsTheFinalOutcomeAfterCapture() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.port.heard("hello")
+        assertEquals(VoiceRepairState.HEALTHY, f.state())
+        // The responder surfaces the persisted terminal report when the owner checks in.
+        val responder = VoiceRepairResponder(
+            EmptySagePersonalResponder, f.manager,
+            latestReport = { VoiceRepairReporter.terminalReport(f.manager.current()!!) }
+        )
+        val reply = (responder.resolve("voice repair status")
+            as SagePersonalResolution.Reply).text
+        assertTrue(reply.contains("without any change"))
+        assertTrue(reply.contains("no repair was needed"))
     }
 }
