@@ -80,7 +80,11 @@ class VoiceRepairResponder(
     private fun statusReply(): String {
         val active = manager.current()
         if (active != null && active.state in ACTIVE_STATES) {
-            return if (active.steps.any { it.name == "ready" }) {
+            if (active.state == VoiceRepairState.REPAIRING) {
+                return "The recognizer repair is underway. My microphone is not listening for the retest yet. " +
+                    "Wait for a new listening-ready message before speaking."
+            }
+            return if (readyForCurrentCapture(active)) {
                 "Your voice test is running and my microphone is listening now; please say “${active.testPhrase}”. " +
                     "Say “cancel voice repair” to stop it."
             } else {
@@ -101,6 +105,13 @@ class VoiceRepairResponder(
     private fun exportReply(): String {
         val exported = exportText()
         return exported.ifBlank { "There is no completed voice test to export. Run one with “fix my hearing” first." }
+    }
+
+    /** Readiness belongs to the current capture, never an earlier test before a repair. */
+    private fun readyForCurrentCapture(session: VoiceRepairSession): Boolean {
+        if (session.state != VoiceRepairState.TESTING_EXPECTED && session.state != VoiceRepairState.RETESTING) return false
+        val start = session.steps.indexOfLast { it.name == "test_start" || it.name == "retest_start" }
+        return start >= 0 && session.steps.drop(start + 1).any { it.name == "ready" }
     }
 
     private fun liveActive(): Boolean = manager.current()?.state?.let { it in ACTIVE_STATES } == true
