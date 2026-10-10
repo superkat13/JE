@@ -22,9 +22,13 @@ import com.pineapple.sageos2.continuity.OwnerContinuityImportResult
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskRecoveryManager
+import com.pineapple.sageos2.speech.voicerepair.SharedPreferencesVoiceRepairHistoryStore
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExport
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExportRenderer
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairReporter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager
-import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
 import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -78,10 +82,15 @@ class SageRuntimeHost private constructor(context: Context) {
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
     val recovery = TaskRecoveryManager(tasks)
     private val voiceRepairManager = VoiceRepairSessionManager()
+    private val voiceRepairHistory = SharedPreferencesVoiceRepairHistoryStore(appContext)
     private val voiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
         port = VoiceDiagnosticAdapter(speech),
         manager = voiceRepairManager,
-        scheduler = AndroidRuntimeScheduler()
+        scheduler = AndroidRuntimeScheduler(),
+        onChanged = { session ->
+            traces.record("voice_repair", VoiceRepairReporter.traceStep(session))
+            voiceRepairHistory.observe(session)
+        }
     ) }
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
@@ -188,7 +197,13 @@ class SageRuntimeHost private constructor(context: Context) {
                         resume = { task -> queueOwnerTask(task) },
                         onEvent = { detail -> traces.record("follow_through", detail.take(800)) }
                     ),
-                    manager = voiceRepairManager
+                    manager = voiceRepairManager,
+                    startRepair = { phrase -> voiceRepairOrchestrator.startRepair(phrase) },
+                    cancelRepair = { voiceRepairOrchestrator.cancel() },
+                    latestReport = { voiceRepairLatestReport() },
+                    interruptedNotice = { voiceRepairInterruptedNotice() },
+                    exportText = { voiceRepairExportText() },
+                    onDiagnostic = { detail -> traces.record("voice_repair", detail.take(800)) }
                 ),
                 ownerApps = ownerApps
             )
@@ -231,6 +246,9 @@ class SageRuntimeHost private constructor(context: Context) {
             runtime.start()
             localApi.start()
             scheduleRecoveredResume(autoResumeCandidate)
+            voiceRepairHistory.interruptedSession()?.let {
+                traces.record("voice_repair", "restored interrupted session; unverified; no auto-repeat")
+            }
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
         }
@@ -247,6 +265,26 @@ class SageRuntimeHost private constructor(context: Context) {
             delayMs = RECOVERY_RESUME_DELAY_MS,
             synchronizationLock = runtime
         )
+    }
+
+    /** Owner-facing report of the most recent completed voice test, or "" when none exists. */
+    private fun voiceRepairLatestReport(): String {
+        val latest = voiceRepairHistory.latestTerminal() ?: return ""
+        return VoiceRepairReporter.terminalReport(latest)
+    }
+
+    /** Owner-facing interrupted notice when a previous session never reached a terminal state. */
+    private fun voiceRepairInterruptedNotice(): String {
+        val interrupted = voiceRepairHistory.interruptedSession() ?: return ""
+        return VoiceRepairReporter.interruptedNotice(interrupted)
+    }
+
+    /** One explicit developer export for the current/ latest session; "" when nothing to export. */
+    private fun voiceRepairExportText(): String {
+        val export = voiceRepairOrchestrator.createExport()
+            ?: voiceRepairHistory.latestTerminal()?.let { VoiceRepairExport.from(it) }
+            ?: return ""
+        return VoiceRepairExportRenderer.render(export)
     }
 
     private fun scheduleRecoveredResume(candidate: TaskCheckpoint?) {

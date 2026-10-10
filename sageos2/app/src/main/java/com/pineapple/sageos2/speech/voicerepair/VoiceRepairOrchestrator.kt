@@ -152,10 +152,7 @@ class VoiceRepairOrchestrator(
 
     @Synchronized fun createExport(): VoiceRepairExport? {
         val s = manager.current() ?: return null
-        return VoiceRepairExport(s.id, s.startedAtMs, s.endedAtMs, s.state, s.cause,
-            s.testPhrase, s.testPhrase, s.firstTest?.recognized, s.secondTest?.recognized,
-            s.repairAction, s.repairAppliedAtMs != null, s.state == VoiceRepairState.SUCCESS,
-            s.steps, if (s.state == VoiceRepairState.HEALTHY) "Initial phrase matched; no repair was needed or performed." else "Explicit diagnostic test only.")
+        return VoiceRepairExport.from(s)
     }
 
     companion object {
