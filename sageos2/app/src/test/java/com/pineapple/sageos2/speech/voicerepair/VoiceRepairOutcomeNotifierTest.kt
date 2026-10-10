@@ -30,7 +30,13 @@ class VoiceRepairOutcomeNotifierTest {
         var callback: ((VoiceRepairTestResult) -> Unit)? = null
         var resetCallback: ((Boolean) -> Unit)? = null
         override fun acquire(owner: String) = !busy
-        override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) {
+        override fun capture(
+            owner: String,
+            expected: String,
+            ready: () -> Unit,
+            speechBegan: () -> Unit,
+            result: (VoiceRepairTestResult) -> Unit
+        ) {
             callback = result
             if (broken) result(VoiceRepairTestResult(expected, null, errorCode = 5))
         }

@@ -39,7 +39,7 @@ class VoiceDiagnosticAdapterTest {
     private lateinit var context: WakeContext
     private lateinit var wake: RemoteWakeWordEngine
     private lateinit var port: AndroidSpeechPort
-    private lateinit var adapter: VoiceDiagnosticAdapter
+    private lateinit var adapter: VoiceDiagnosticPort
     private val normal = mutableListOf<String>()
     private val errors = mutableListOf<Int>()
     private var wakeHits = 0
@@ -69,8 +69,13 @@ class VoiceDiagnosticAdapterTest {
     private fun acquire(owner: String = "one") {
         assertTrue(adapter.acquire(owner)); idle(); context.acknowledgeStop(); idle()
     }
-    private fun capture(owner: String = "one", result: (VoiceRepairTestResult) -> Unit = {}) {
-        adapter.capture(owner, "delete everything", result); idle()
+    private fun capture(
+        owner: String = "one",
+        ready: () -> Unit = {},
+        speechBegan: () -> Unit = {},
+        result: (VoiceRepairTestResult) -> Unit = {}
+    ) {
+        adapter.capture(owner, "delete everything", ready, speechBegan, result); idle()
     }
     private fun assertIsolated() {
         assertTrue(normal.isEmpty()); assertTrue(errors.isEmpty()); assertEquals(0, wakeHits)
@@ -88,11 +93,22 @@ class VoiceDiagnosticAdapterTest {
     @Test fun diagnosticResultsNeverReachNormalCommandRouting() {
         acquire()
         var received: VoiceRepairTestResult? = null
-        capture { received = it }
+        capture(result = { received = it })
         // Listener installed by production captureDiagnosticPhrase, not a test variable assignment.
         recognizer().callback!!.onResults(bundle("delete everything"))
         assertEquals("delete everything", received?.recognized)
         assertEquals("delete everything", received?.expected)
+        assertIsolated()
+    }
+    @Test fun diagnosticIntentIsMarkedAndReadinessSurfacesToCallbacks() {
+        acquire()
+        var ready = 0; var speech = 0
+        capture(ready = { ready++ }, speechBegan = { speech++ })
+        assertTrue(recognizer().lastIntent!!.getBooleanExtra(SageSpeechIntents.EXTRA_DIAGNOSTIC_CAPTURE, false))
+        val callback = recognizer().callback!!
+        callback.onReadyForSpeech(null); callback.onReadyForSpeech(null) // duplicate must surface once per event source
+        callback.onBeginningOfSpeech()
+        assertEquals(2, ready); assertEquals(1, speech)
         assertIsolated()
     }
     @Test fun modeAndSpeechChangesCannotCancelOrReplaceDiagnostic() {
@@ -205,8 +221,8 @@ class VoiceDiagnosticAdapterTest {
         context.acknowledgeStop(); idle(); assertEquals(1, recognizer().starts)
     }
     @Test fun cancelDuringCaptureRejectsLateResultsErrorsAndDuplicateCompletion() {
-        acquire(); var count = 0; capture { count++ }; val old = recognizer().callback!!
-        adapter.release("one"); idle(); acquire("one"); capture("one") { count++ }
+        acquire(); var count = 0; capture(result = { count++ }); val old = recognizer().callback!!
+        adapter.release("one"); idle(); acquire("one"); capture("one", result = { count++ })
         old.onResults(bundle("delete everything")); old.onError(5); assertEquals(0, count)
         recognizer().callback!!.onResults(bundle("delete everything"))
         recognizer().callback!!.onResults(bundle("duplicate"))
@@ -224,7 +240,11 @@ class VoiceDiagnosticAdapterTest {
             val controller = VoiceRepairOrchestrator(adapter, manager, clock)
             assertTrue(controller.startRepair("hello")); idle(); context.acknowledgeStop(); idle()
             val old = recognizer().callback!!
-            if (timeout) clock.task!!.invoke() else controller.cancel()
+            if (timeout) {
+                // Readiness precedes the overall deadline; only then is the deadline the live timer.
+                old.onReadyForSpeech(null); idle()
+                clock.advance(60_000)
+            } else controller.cancel()
             idle()
             assertEquals(if (timeout) VoiceRepairState.FAILED else VoiceRepairState.CANCELLED, manager.current()!!.state)
             if (timeout) assertEquals(VoiceRepairCause.DEADLINE_EXCEEDED, manager.current()!!.cause)
@@ -256,7 +276,7 @@ class VoiceDiagnosticAdapterTest {
     }
     @Test fun queuedCaptureCannotRunForReusedOwner() {
         acquire(); var oldResults = 0
-        adapter.capture("one", "old") { oldResults++ }; adapter.release("one")
+        adapter.capture("one", "old", result = { oldResults++ }); adapter.release("one")
         assertTrue(adapter.acquire("one")); idle(); context.acknowledgeStop(); idle()
         assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer()); assertEquals(0, oldResults)
         capture(); assertEquals(1, recognizer().starts)
@@ -268,20 +288,31 @@ class VoiceDiagnosticAdapterTest {
         capture(); assertEquals(1, recognizer().starts); assertIsolated()
     }
     private class TestScheduler : RuntimeScheduler {
-        var task: (() -> Unit)? = null
+        var now = 0L
         var cancelled = false
+        private var seq = 0L
+        private val tasks = mutableListOf<Triple<Long, Long, () -> Unit>>()
         override fun schedule(delayMs: Long, task: () -> Unit): ScheduledHandle {
-            this.task = task
-            return object : ScheduledHandle { override fun cancel() { cancelled = true } }
+            val entry = Triple(seq++, now + delayMs, task)
+            tasks += entry
+            return object : ScheduledHandle { override fun cancel() { cancelled = true; tasks.remove(entry) } }
+        }
+        fun advance(ms: Long) {
+            now += ms
+            while (true) {
+                val next = tasks.filter { it.second <= now }.minWithOrNull(compareBy({ it.second }, { it.first })) ?: break
+                tasks.remove(next); next.third()
+            }
         }
     }
     @Implements(SpeechRecognizer::class)
     class RecognizerShadow : ShadowSpeechRecognizer() {
         var callback: RecognitionListener? = null
+        var lastIntent: Intent? = null
         var starts = 0; var cancels = 0; var destroys = 0
         var failCancel = false; var failDestroy = false
         @Implementation fun setRecognitionListener(listener: RecognitionListener) { callback = listener }
-        @Implementation public override fun startListening(intent: Intent) { starts++ }
+        @Implementation public override fun startListening(intent: Intent) { starts++; lastIntent = intent }
         @Implementation fun cancel() { cancels++; check(!failCancel) { "injected cancel failure" } }
         @Implementation public override fun destroy() { destroys++; check(!failDestroy) { "injected destroy failure" } }
         companion object {

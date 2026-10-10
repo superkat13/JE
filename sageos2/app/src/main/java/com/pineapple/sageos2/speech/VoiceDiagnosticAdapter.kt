@@ -23,11 +23,22 @@ class VoiceDiagnosticAdapter(private val port: SpeechPort) : VoiceDiagnosticPort
         return true
     }
 
-    override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) {
+    override fun capture(
+        owner: String,
+        expected: String,
+        ready: () -> Unit,
+        speechBegan: () -> Unit,
+        result: (VoiceRepairTestResult) -> Unit
+    ) {
         onMain {
             if (currentOwner != owner || owner.isBlank()) return@onMain
             val token = ++operation
-            (port as AndroidSpeechPort).captureDiagnosticPhrase(owner, expected) { testResult ->
+            (port as AndroidSpeechPort).captureDiagnosticPhrase(
+                owner,
+                expected,
+                onReady = { if (currentOwner == owner && operation == token) ready() },
+                onSpeechBegan = { if (currentOwner == owner && operation == token) speechBegan() }
+            ) { testResult ->
                 if (currentOwner == owner && operation == token) {
                     ++operation
                     result(testResult)

@@ -28,6 +28,7 @@ import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExportRenderer
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairCompletionPresenter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOutcomeNotifier
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairReadinessNotifier
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairReporter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSession
@@ -95,7 +96,8 @@ class SageRuntimeHost private constructor(context: Context) {
             traces.record("voice_repair", VoiceRepairReporter.traceStep(session))
             voiceRepairHistory.observe(session)
             presentVoiceRepairOutcome(session)
-        }
+        },
+        onReady = { session -> voiceRepairReadinessNotifier.onReady(session) }
     ) }
     val core = SharedPreferencesSageCoreStore(appContext)
     val memory = SharedPreferencesTwinMemoryStore(appContext)
@@ -278,6 +280,13 @@ class SageRuntimeHost private constructor(context: Context) {
 
     private val voiceRepairOutcomeNotifier by lazy {
         VoiceRepairOutcomeNotifier(
+            history = history,
+            notify = { text -> observer.onTextResponse(0L, text) }
+        )
+    }
+
+    private val voiceRepairReadinessNotifier by lazy {
+        VoiceRepairReadinessNotifier(
             history = history,
             notify = { text -> observer.onTextResponse(0L, text) }
         )

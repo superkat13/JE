@@ -179,7 +179,11 @@ public final class SageSherpaRecognitionService extends RecognitionService {
      * flags is exactly what let a successor un-cancel its predecessor.
      */
     @Override protected void onStartListening(android.content.Intent intent, Callback callback) {
-        CommandSpeechTurnState state = new CommandSpeechTurnState(callback);
+        // A voice-repair diagnostic capture requests this recognizer directly, after the wake engine
+        // has been stopped and acknowledged, so it must not discard the wake tail below.
+        boolean diagnosticCapture = intent != null
+                && intent.getBooleanExtra(com.pineapple.sageos2.speech.SageSpeechIntents.EXTRA_DIAGNOSTIC_CAPTURE, false);
+        CommandSpeechTurnState state = new CommandSpeechTurnState(callback, diagnosticCapture);
         if (!claimDeviceFor(state)) {
             emitError(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
             return;
@@ -370,9 +374,17 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             // where onset latches as early as 600 ms and with the short one- and two-character
             // results. Discarding the first few reads removes it. This is deliberately not fed to
             // the recognizer at all, so it cannot consume the utterance budget.
+            //
+            // A diagnostic capture has no wake tail to remove: the wake engine was stopped and its
+            // stop acknowledged before this recognizer opened, so the first read is the start of the
+            // owner's own phrase. Its tail discard is therefore zero, and this is the point the
+            // prefix loss was fixed — the onset is fed to the recognizer from the first frame.
+            int tailDiscardChunks = state.tailDiscardChunks(WAKE_TAIL_DISCARD_CHUNKS);
+            Log.i(DIAG_TAG, "turn[tailDiscard] diagnostic=" + state.getDiagnosticCapture()
+                    + " chunks=" + tailDiscardChunks);
             short[] discard = new short[READ_SAMPLES];
             int discarded = 0;
-            while (discarded < WAKE_TAIL_DISCARD_CHUNKS && !state.getStopped()) {
+            while (discarded < tailDiscardChunks && !state.getStopped()) {
                 int dropped = audio.read(discard, 0, discard.length);
                 if (dropped <= 0) break;
                 discarded++;
