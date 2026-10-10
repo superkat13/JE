@@ -150,6 +150,35 @@ class VoiceRepairResponderTest {
         assertTrue(text.contains("couldn't start the voice test"))
     }
 
+    @Test fun successfulStartDiagnosticNeverContainsThePhrase() {
+        val diagnostics = mutableListOf<String>()
+        val local = VoiceRepairResponder(
+            EmptySagePersonalResponder, manager,
+            startRepair = { true },
+            onDiagnostic = { diagnostics += it }
+        )
+        reply("fix my voice", local)
+        reply("pineapple tornado 42", local)
+        assertTrue(diagnostics.isNotEmpty())
+        assertTrue(diagnostics.none { it.contains("pineapple tornado 42") })
+        assertTrue(diagnostics.none { it.contains("pineapple") })
+        assertTrue(diagnostics.any { it.contains("started") })
+    }
+
+    @Test fun refusedStartDiagnosticNeverContainsThePhrase() {
+        val diagnostics = mutableListOf<String>()
+        val local = VoiceRepairResponder(
+            EmptySagePersonalResponder, manager,
+            startRepair = { false },
+            onDiagnostic = { diagnostics += it }
+        )
+        reply("fix my voice", local)
+        reply("pineapple tornado 42", local)
+        assertTrue(diagnostics.isNotEmpty())
+        assertTrue(diagnostics.none { it.contains("pineapple tornado 42") })
+        assertTrue(diagnostics.any { it.contains("refused") })
+    }
+
     @Test fun overlongPhraseReasksAndRemainsAwaitingAPhrase() {
         var calls = 0
         val local = VoiceRepairResponder(EmptySagePersonalResponder, manager, startRepair = { calls++; true })

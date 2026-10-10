@@ -51,7 +51,9 @@ class VoiceRepairResponder(
         }
         if (liveActive()) return "A voice test is already running. Say “cancel voice repair” to stop it first."
         val started = runCatching { startRepair(phrase) }.getOrDefault(false)
-        onDiagnostic(if (started) "owned voice repair session for “$phrase”" else "voice repair start refused for “$phrase”")
+        // Diagnostics are redacted: the owner's typed phrase never enters ordinary traces/exports.
+        onDiagnostic(if (started) "voice repair session started; awaiting phrase capture"
+            else "voice repair start refused; nothing changed or verified")
         if (started) {
             return "Microphone test started. Say “$phrase” now while I listen. I will tell you what I actually heard."
         }

@@ -26,9 +26,12 @@ import com.pineapple.sageos2.speech.voicerepair.SharedPreferencesVoiceRepairHist
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExport
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExportRenderer
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairCompletionPresenter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairReporter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSession
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairState
 import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -90,6 +93,7 @@ class SageRuntimeHost private constructor(context: Context) {
         onChanged = { session ->
             traces.record("voice_repair", VoiceRepairReporter.traceStep(session))
             voiceRepairHistory.observe(session)
+            presentVoiceRepairOutcome(session)
         }
     ) }
     val core = SharedPreferencesSageCoreStore(appContext)
@@ -246,8 +250,12 @@ class SageRuntimeHost private constructor(context: Context) {
             runtime.start()
             localApi.start()
             scheduleRecoveredResume(autoResumeCandidate)
-            voiceRepairHistory.interruptedSession()?.let {
-                traces.record("voice_repair", "restored interrupted session; unverified; no auto-repeat")
+            val recoveredVoiceRepair = voiceRepairHistory.reconcileInterrupted()
+            if (recoveredVoiceRepair != null) {
+                traces.record(
+                    "voice_repair",
+                    VoiceRepairReporter.traceStep(recoveredVoiceRepair) + "; interrupted session recovered; unverified; no auto-repeat"
+                )
             }
             selfCareHandler.removeCallbacks(selfCareRunnable)
             selfCareHandler.postDelayed(selfCareRunnable, SELF_CARE_INITIAL_DELAY_MS)
@@ -265,6 +273,19 @@ class SageRuntimeHost private constructor(context: Context) {
             delayMs = RECOVERY_RESUME_DELAY_MS,
             synchronizationLock = runtime
         )
+    }
+
+    private var presentedVoiceRepairOutcome: Pair<String, VoiceRepairState>? = null
+
+    /** Presents a finished capture outcome to the owner via the text-response channel (outside
+     *  any turn state machine) exactly once per terminal result state for a session.
+     */
+    private fun presentVoiceRepairOutcome(session: VoiceRepairSession) {
+        val text = VoiceRepairCompletionPresenter.ownerText(session) ?: return
+        val key = session.id to session.state
+        if (presentedVoiceRepairOutcome == key) return
+        presentedVoiceRepairOutcome = key
+        observer.onTextResponse(0L, text)
     }
 
     /** Owner-facing report of the most recent completed voice test, or "" when none exists. */

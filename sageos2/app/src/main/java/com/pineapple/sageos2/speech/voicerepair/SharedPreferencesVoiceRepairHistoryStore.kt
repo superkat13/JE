@@ -15,13 +15,18 @@ class SharedPreferencesVoiceRepairHistoryStore(
 
     @Synchronized override fun observe(session: VoiceRepairSession) {
         if (session.state in TERMINAL) {
+            reconcileDistinctPendingMarker(session.id)
             val kept = (history().filterNot { it.id == session.id } + session).takeLast(capacity)
             writeHistory(kept)
             prefs.edit().remove(KEY_IN_FLIGHT).apply()
         } else {
+            reconcileDistinctPendingMarker(session.id)
             writeInFlight(session)
         }
     }
+
+    @Synchronized override fun reconcileInterrupted(): VoiceRepairSession? =
+        reconcilePendingMarker(protectSessionId = null)
 
     @Synchronized override fun latestTerminal(): VoiceRepairSession? =
         readSessions(KEY_HISTORY).lastOrNull()
@@ -43,6 +48,44 @@ class SharedPreferencesVoiceRepairHistoryStore(
     private fun writeInFlight(session: VoiceRepairSession) {
         prefs.edit().putString(KEY_IN_FLIGHT, encode(session).toString()).apply()
     }
+
+    /** Preserves a stale, unrelated interruption before a new session pins the marker.
+     *  Never touches a marker that already belongs to [protectSessionId] (re-publish of a live session).
+     */
+    private fun reconcileDistinctPendingMarker(protectSessionId: String) {
+        val pending = readSingle(KEY_IN_FLIGHT) ?: return
+        if (pending.id == protectSessionId) return
+        prefs.edit().remove(KEY_IN_FLIGHT).apply()
+        if (pending.state in TERMINAL) return
+        val reconciled = toInterrupted(pending)
+        val kept = (history().filterNot { it.id == reconciled.id } + reconciled).takeLast(capacity)
+        writeHistory(kept)
+    }
+
+    /** Idempotent startup/marker recovery: an unfinished active session becomes a terminal,
+     *  unverified INTERRUPTED history event; the in-flight marker is cleared.
+     */
+    private fun reconcilePendingMarker(protectSessionId: String?): VoiceRepairSession? {
+        val pending = readSingle(KEY_IN_FLIGHT) ?: return null
+        if (protectSessionId != null && pending.id == protectSessionId) return null
+        prefs.edit().remove(KEY_IN_FLIGHT).apply()
+        if (pending.state in TERMINAL) return null
+        val reconciled = toInterrupted(pending)
+        val kept = (history().filterNot { it.id == reconciled.id } + reconciled).takeLast(capacity)
+        writeHistory(kept)
+        return reconciled
+    }
+
+    private fun toInterrupted(session: VoiceRepairSession): VoiceRepairSession = session.copy(
+        state = VoiceRepairState.INTERRUPTED,
+        interrupted = true,
+        endedAtMs = session.endedAtMs ?: System.currentTimeMillis(),
+        steps = session.steps + VoiceRepairStep(
+            "interrupted_recovered",
+            System.currentTimeMillis(),
+            "unfinished repair preserved as interrupted; never auto-repeated"
+        )
+    )
 
     private fun readSessions(key: String): List<VoiceRepairSession> {
         val raw = prefs.getString(key, null) ?: return emptyList()

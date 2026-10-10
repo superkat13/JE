@@ -16,6 +16,12 @@ interface VoiceRepairHistoryStore {
     /** A previously active session that never reached a terminal state (interrupted/unverified). */
     fun interruptedSession(): VoiceRepairSession?
 
+    /** Idempotently records any non-terminal in-flight marker as a terminal INTERRUPTED history
+     * event (unverified, never auto-repaired) and clears the marker. Returns the reconciled
+     * session, or null when nothing was pending or the marker was already terminal.
+     */
+    fun reconcileInterrupted(): VoiceRepairSession?
+
     /** Bounded terminal history, oldest first. */
     fun history(): List<VoiceRepairSession>
 
