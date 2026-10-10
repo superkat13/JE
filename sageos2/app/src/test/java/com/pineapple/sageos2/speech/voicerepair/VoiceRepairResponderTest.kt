@@ -133,6 +133,32 @@ class VoiceRepairResponderTest {
         assertTrue(text.contains("ping"))
     }
 
+    @Test fun voiceRepairStatusOnlyClaimsReadyForTheCurrentCapture() {
+        val started = manager.startSession("pineapple")
+        val firstCapture = manager.update(started.copy(
+            state = VoiceRepairState.TESTING_EXPECTED,
+            steps = started.steps + VoiceRepairStep("test_start", 100L) + VoiceRepairStep("ready", 110L)
+        ))
+        assertTrue(reply("voice repair status").contains("listening now"))
+
+        val repairing = manager.update(firstCapture.copy(
+            state = VoiceRepairState.REPAIRING,
+            steps = firstCapture.steps + VoiceRepairStep("reset_requested", 115L)
+        ))
+        assertTrue(reply("voice repair status").contains("repair is underway"))
+
+        val retesting = manager.update(repairing.copy(
+            state = VoiceRepairState.RETESTING,
+            steps = repairing.steps + VoiceRepairStep("retest_start", 120L)
+        ))
+        val waiting = reply("voice repair status")
+        assertTrue(waiting.contains("not listening yet"))
+        assertFalse(waiting.contains("listening now"))
+
+        manager.update(retesting.copy(steps = retesting.steps + VoiceRepairStep("ready", 125L)))
+        assertTrue(reply("voice repair status").contains("listening now"))
+    }
+
     @Test fun busyStartIsHonestAndDoesNotClaimRepair() {
         val local = VoiceRepairResponder(EmptySagePersonalResponder, manager, startRepair = { phrase ->
             manager.startSession(phrase)
