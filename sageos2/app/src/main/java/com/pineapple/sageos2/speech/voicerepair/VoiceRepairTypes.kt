@@ -25,6 +25,7 @@ enum class VoiceRepairCause {
     UNSUPPORTED_REPAIR,
     BUSY_RUNTIME,
     DEADLINE_EXCEEDED,
+    READY_TIMEOUT,
     CANCELLED_BY_OWNER
 }
 

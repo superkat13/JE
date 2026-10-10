@@ -11,12 +11,23 @@ import org.junit.Test
 class VoiceRepairIntegrationTest {
     private class Clock : RuntimeScheduler {
         var now = 1000L
-        var task: (() -> Unit)? = null
+        private var seq = 0L
+        private val tasks = mutableListOf<Triple<Long, Long, () -> Unit>>() // seq, due, task
         override fun schedule(delayMs: Long, task: () -> Unit): ScheduledHandle {
-            this.task = task
-            return object : ScheduledHandle { override fun cancel() { this@Clock.task = null } }
+            val entry = Triple(seq++, now + delayMs, task)
+            tasks += entry
+            return object : ScheduledHandle { override fun cancel() { tasks.remove(entry) } }
         }
-        fun expire() { now += 60_000; task?.invoke() }
+        /** Fires every scheduled task due within [ms], earliest due first, including tasks they schedule. */
+        fun advance(ms: Long) {
+            now += ms
+            while (true) {
+                val next = tasks.filter { it.second <= now }.minWithOrNull(compareBy({ it.second }, { it.first })) ?: break
+                tasks.remove(next)
+                next.third()
+            }
+        }
+        fun expire() = advance(60_000)
     }
     private class Adapter : VoiceDiagnosticPort {
         var busy = false
@@ -26,15 +37,27 @@ class VoiceRepairIntegrationTest {
         var releases = 0
         var callback: ((VoiceRepairTestResult) -> Unit)? = null
         var resetCallback: ((Boolean) -> Unit)? = null
+        var readyCallback: (() -> Unit)? = null
+        var speechCallback: (() -> Unit)? = null
         val phrases = mutableListOf<String>()
         override fun acquire(owner: String) = !busy
-        override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) {
-            captures++; phrases += expected; callback = result
+        override fun capture(
+            owner: String,
+            expected: String,
+            ready: () -> Unit,
+            speechBegan: () -> Unit,
+            result: (VoiceRepairTestResult) -> Unit
+        ) {
+            captures++; phrases += expected
+            readyCallback = ready; speechCallback = speechBegan
+            callback = result
             if (broken) result(VoiceRepairTestResult(expected, null, errorCode = 5))
         }
         override fun reset(owner: String, completed: (Boolean) -> Unit) { resets++; resetCallback = completed }
         fun completeReset(success: Boolean = true) { if (success) broken = false; resetCallback!!.invoke(success) }
         override fun release(owner: String) { releases++ }
+        fun ready() { readyCallback!!.invoke() }
+        fun speechBegan() { speechCallback!!.invoke() }
         fun heard(text: String) { callback!!.invoke(VoiceRepairTestResult("adapter must not control expected phrase", text)) }
         fun error(code: Int) { callback!!.invoke(VoiceRepairTestResult("ignored", null, errorCode = code)) }
     }
@@ -42,7 +65,10 @@ class VoiceRepairIntegrationTest {
         val clock = Clock()
         val port = Adapter()
         val manager = VoiceRepairSessionManager { clock.now }
-        val controller = VoiceRepairOrchestrator(port, manager, clock, clockMs = { clock.now })
+        val readyEvents = mutableListOf<VoiceRepairSession>()
+        val controller = VoiceRepairOrchestrator(
+            port, manager, clock, clockMs = { clock.now }, onReady = { readyEvents += it }
+        )
         fun state() = manager.current()!!.state
     }
 
@@ -99,11 +125,17 @@ class VoiceRepairIntegrationTest {
         assertEquals(VoiceRepairState.CANCELLED, f.state()); assertEquals(1, f.port.captures)
         assertEquals(1, f.port.releases)
     }
-    @Test fun timeoutReleasesMicrophoneWithoutAnyCallback() {
-        val f = Fixture(); f.controller.startRepair("hello"); f.clock.expire()
-        assertEquals(VoiceRepairCause.DEADLINE_EXCEEDED, f.manager.current()!!.cause)
+    @Test fun noReadinessReleasesMicrophoneWithReadyTimeout() {
+        val f = Fixture(); f.controller.startRepair("hello")
+        f.clock.advance(15_000) // past the readiness window, but before the overall deadline
+        assertEquals(VoiceRepairCause.READY_TIMEOUT, f.manager.current()!!.cause)
         assertEquals(1, f.port.releases); f.port.heard("hello")
         assertEquals(VoiceRepairState.FAILED, f.state())
+    }
+    @Test fun overallDeadlineAfterReadinessStillReleases() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.port.ready(); f.clock.expire()
+        assertEquals(VoiceRepairCause.DEADLINE_EXCEEDED, f.manager.current()!!.cause)
+        assertEquals(1, f.port.releases)
     }
     @Test fun busyDoesNotCaptureOrReleaseAnotherOwner() {
         val f = Fixture(); f.port.busy = true
@@ -191,5 +223,42 @@ class VoiceRepairIntegrationTest {
             as SagePersonalResolution.Reply).text
         assertTrue(reply.contains("without any change"))
         assertTrue(reply.contains("no repair was needed"))
+    }
+
+    @Test fun readinessStampsOneStepAndFiresCallbackExactlyOnce() {
+        val f = Fixture(); f.controller.startRepair("hello")
+        f.port.ready(); f.port.ready() // duplicate callback must not double-prompt
+        assertEquals(1, f.manager.current()!!.steps.count { it.name == "ready" })
+        assertEquals(1, f.readyEvents.size)
+    }
+
+    @Test fun speechOnsetIsRecordedOnlyAfterReadiness() {
+        val f = Fixture(); f.controller.startRepair("hello")
+        f.port.ready(); f.port.speechBegan()
+        val names = f.manager.current()!!.steps.map { it.name }
+        assertTrue(names.indexOf("ready") < names.indexOf("speech_began"))
+        assertTrue(f.manager.current()!!.steps.any { it.name == "speech_began" })
+    }
+
+    @Test fun readinessArrivingAfterCaptureResultIsIgnored() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.port.heard("hello")
+        f.port.ready()
+        assertEquals(0, f.readyEvents.size)
+    }
+
+    @Test fun retestReadinessPromptsAgainForTheNewCapture() {
+        val f = Fixture()
+        f.controller.startRepair("hello"); f.port.ready()
+        f.port.error(5) // lifecycle failure after readiness -> reset -> retest capture
+        f.port.completeReset(); f.port.ready()
+        assertEquals(2, f.readyEvents.size)
+        assertEquals(VoiceRepairState.RETESTING, f.readyEvents.last().state)
+    }
+
+    @Test fun cancelledCaptureNeverFiresReadinessCallback() {
+        val f = Fixture(); f.controller.startRepair("hello"); f.controller.cancel()
+        f.port.ready()
+        assertEquals(0, f.readyEvents.size)
+        assertEquals(VoiceRepairState.CANCELLED, f.state())
     }
 }

@@ -10,6 +10,13 @@ object VoiceRepairReporter {
         append(" attempts=").append(session.attemptCount).append('/').append(session.maxAttempts)
         append(" repair=").append(session.repairAction.name)
         if (session.repairAppliedAtMs != null) append(" applied=true")
+        // Redacted onset latency relative to the current capture: how long the recognizer took to
+        // report readiness and (if it did) the first speech onset. Timestamps only, never audio.
+        val start = session.steps.lastOrNull { it.name == "test_start" || it.name == "retest_start" }?.timestampMs
+        val ready = session.steps.lastOrNull { it.name == "ready" }?.timestampMs
+        val speech = session.steps.lastOrNull { it.name == "speech_began" }?.timestampMs
+        if (start != null && ready != null && ready >= start) append(" ready_ms=").append(ready - start)
+        if (start != null && speech != null && speech >= start) append(" speech_ms=").append(speech - start)
         when (session.state) {
             VoiceRepairState.SUCCESS, VoiceRepairState.HEALTHY -> append(" verified=true")
             else -> if (session.cancelled) append(" cancelled=true") else if (session.interrupted) append(" interrupted=true")
@@ -65,6 +72,7 @@ object VoiceRepairReporter {
                 append(testTiming(session.firstTest)).append(". ")
             }
             VoiceRepairCause.DEADLINE_EXCEEDED -> append("The test did not finish before its deadline. ")
+            VoiceRepairCause.READY_TIMEOUT -> append("The microphone never actually opened for listening in time, so I did not ask you to speak. ")
             VoiceRepairCause.BUSY_RUNTIME -> append("The microphone was busy, so the test could not start. ")
             VoiceRepairCause.CANCELLED_BY_OWNER -> append("The test was cancelled. ")
             VoiceRepairCause.UNSUPPORTED_REPAIR -> append("The recognizer could not be safely rebuilt, so I stopped after one attempt. ")

@@ -9,6 +9,7 @@ import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import com.pineapple.sageos2.speech.CommandSpeechTurnOwnership
 import com.pineapple.sageos2.speech.CommandSpeechTurnState
+import com.pineapple.sageos2.speech.SageSpeechIntents
 import java.lang.reflect.Field
 import java.lang.reflect.Method
 import java.io.File
@@ -541,6 +542,26 @@ class SageSherpaRecognitionServiceLifecycleTest {
         joinWorker()
     }
 
+    /**
+     * The wake-tail discard is a command-turn remedy: a voice-repair diagnostic capture starts on an
+     * already-idle microphone, so the request that marks it must suppress the discard. This drives
+     * the production onStartListening, so it fails against a recognizer that ignores the intent mark.
+     */
+    @Test fun diagnosticCaptureIntentSuppressesTheWakeTailDiscard() {
+        fakeSherpaReady()
+
+        val diagnostic = newCallback(service)
+        val marked = android.content.Intent().putExtra(SageSpeechIntents.EXTRA_DIAGNOSTIC_CAPTURE, true)
+        synchronized(recognizerLock()) {
+            onStartListening(diagnostic, marked)
+            val state = liveTurnOrNull()
+            assertNotNull("a marked diagnostic turn must be admitted", state)
+            assertTrue("a diagnostic capture must skip the wake-tail discard", state!!.diagnosticCapture)
+            assertEquals(0, state.tailDiscardChunks(4))
+        }
+        joinWorker()
+    }
+
     // ---- exactly one terminal outcome --------------------------------------------------------
 
     /**
@@ -673,8 +694,11 @@ class SageSherpaRecognitionServiceLifecycleTest {
 
     /** The real admission path, including its device, availability and ownership gates. */
     private fun onStartListening(callback: RecognitionService.Callback) =
+        onStartListening(callback, null)
+
+    private fun onStartListening(callback: RecognitionService.Callback, intent: android.content.Intent?) =
         method("onStartListening", android.content.Intent::class.java, RecognitionService.Callback::class.java)
-            .invoke(service, null, callback)
+            .invoke(service, intent, callback)
 
     private fun recognizerLock(): Any =
         SageSherpaRecognitionService::class.java.getDeclaredField("RECOGNIZER_LOCK")

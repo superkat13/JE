@@ -17,7 +17,16 @@ import java.util.concurrent.atomic.AtomicBoolean
  */
 class CommandSpeechTurnState(
     /** The live turn's callback, or the token standing in for it off-device. */
-    val callback: Any
+    val callback: Any,
+    /**
+     * True for a voice-repair diagnostic capture.
+     *
+     * A diagnostic capture starts on an already-idle microphone: the wake engine has been stopped
+     * and its stop acknowledged before the recognizer opens, so there is no wake-phrase tail to
+     * clear. The command-turn tail discard exists only to remove that residue, and applying it here
+     * would drop the first [tailDiscardChunks]-worth of the owner's own test phrase.
+     */
+    val diagnosticCapture: Boolean = false
 ) {
 
     /**
@@ -68,4 +77,13 @@ class CommandSpeechTurnState(
 
     /** True when [callback] is this turn's own callback. */
     fun owns(callback: Any?): Boolean = callback != null && this.callback === callback
+
+    /**
+     * How many leading audio reads this turn must discard before it is ready.
+     *
+     * A command turn discards [commandTailChunks] to drop the residue of the just-finished wake
+     * phrase. A diagnostic capture discards none: the microphone was already idle, so every read
+     * belongs to the phrase being tested.
+     */
+    fun tailDiscardChunks(commandTailChunks: Int): Int = if (diagnosticCapture) 0 else commandTailChunks
 }

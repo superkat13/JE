@@ -7,15 +7,27 @@ import com.pineapple.sageos2.runtime.ScheduledHandle
  * acquire reserves an idle microphone window; capture results must NEVER enter normal command routing.
  * release cancels outstanding work for this owner only and restores its previous listening mode.
  * reset completes only after resource teardown/recreation, not after merely posting a runnable.
+ * ready fires only when the recognizer itself has actually signalled readiness (never a timer);
+ * speechBegan fires on the recognizer's onset event. Both are best-effort and may never fire.
  */
 interface VoiceDiagnosticPort {
     fun acquire(owner: String): Boolean
-    fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit)
+    fun capture(
+        owner: String,
+        expected: String,
+        ready: () -> Unit = {},
+        speechBegan: () -> Unit = {},
+        result: (VoiceRepairTestResult) -> Unit
+    )
     fun reset(owner: String, completed: (Boolean) -> Unit)
     fun release(owner: String)
 }
 
-data class VoiceRepairOrchestratorConfig(val timeoutMs: Long = 60_000L)
+data class VoiceRepairOrchestratorConfig(
+    val timeoutMs: Long = 60_000L,
+    /** How long to wait for the recognizer's own readiness before refusing honestly. */
+    val readyTimeoutMs: Long = 15_000L
+)
 
 /** All callbacks carry both session ownership and operation identity, including timeout/reset. */
 class VoiceRepairOrchestrator(
@@ -24,13 +36,16 @@ class VoiceRepairOrchestrator(
     private val scheduler: RuntimeScheduler,
     private val config: VoiceRepairOrchestratorConfig = VoiceRepairOrchestratorConfig(),
     private val clockMs: () -> Long = System::currentTimeMillis,
-    private val onChanged: (VoiceRepairSession) -> Unit = {}
+    private val onChanged: (VoiceRepairSession) -> Unit = {},
+    /** Fired once per capture, only after the recognizer reports it is truly accepting audio. */
+    private val onReady: (VoiceRepairSession) -> Unit = {}
 ) {
     private var owner: String? = null
     private var operation = 0L
     private var deadline: ScheduledHandle? = null
+    private var readyDeadline: ScheduledHandle? = null
 
-    init { require(config.timeoutMs > 0) }
+    init { require(config.timeoutMs > 0); require(config.readyTimeoutMs > 0) }
 
     /** Returns false for an occupied runtime, without interrupting its current turn. */
     @Synchronized fun startRepair(testPhrase: String): Boolean {
@@ -73,12 +88,52 @@ class VoiceRepairOrchestrator(
         publish(next)
         if (live(id) == null) return
         val token = ++operation
-        try { port.capture(id, next.testPhrase) { result -> captured(id, token, retest, result) } }
-        catch (_: Exception) { fail(id, VoiceRepairCause.UNSUPPORTED_REPAIR) }
+        readyDeadline?.cancel()
+        readyDeadline = scheduler.schedule(config.readyTimeoutMs) { readinessTimeout(id, token) }
+        try {
+            port.capture(
+                id,
+                next.testPhrase,
+                ready = { ready(id, token) },
+                speechBegan = { speechBegan(id, token) },
+                result = { result -> captured(id, token, retest, result) }
+            )
+        } catch (_: Exception) { fail(id, VoiceRepairCause.UNSUPPORTED_REPAIR) }
+    }
+
+    /** The recognizer itself reported readiness; this is the only trigger for the owner prompt. */
+    @Synchronized private fun ready(id: String, token: Long) {
+        if (token != operation) return
+        val current = live(id) ?: return
+        if (current.state !in WAITING_STATES) return
+        if (stampedSinceCaptureStart(current.steps, READY_STEP)) return
+        readyDeadline?.cancel(); readyDeadline = null
+        val stamped = manager.update(current.copy(steps = current.steps + VoiceRepairStep(READY_STEP, clockMs())))
+        publish(stamped)
+        onReady(stamped)
+    }
+
+    /** The recognizer reported the onset of speech; recorded redacted, never a prompt trigger. */
+    @Synchronized private fun speechBegan(id: String, token: Long) {
+        if (token != operation) return
+        val current = live(id) ?: return
+        if (current.state !in WAITING_STATES) return
+        if (stampedSinceCaptureStart(current.steps, SPEECH_STEP)) return
+        publish(manager.update(current.copy(steps = current.steps + VoiceRepairStep(SPEECH_STEP, clockMs()))))
+    }
+
+    /** No readiness callback arrived: refuse honestly instead of telling the owner to speak. */
+    @Synchronized private fun readinessTimeout(id: String, token: Long) {
+        if (token != operation) return
+        val current = live(id) ?: return
+        if (current.state !in WAITING_STATES) return
+        if (stampedSinceCaptureStart(current.steps, READY_STEP)) return
+        fail(id, VoiceRepairCause.READY_TIMEOUT)
     }
 
     @Synchronized private fun captured(id: String, token: Long, retest: Boolean, result: VoiceRepairTestResult) {
         if (token != operation) return
+        readyDeadline?.cancel(); readyDeadline = null
         val current = live(id) ?: return
         ++operation // duplicate callbacks cannot trigger a second reset or complete a later phase
         val evidence = result.copy(expected = current.testPhrase)
@@ -144,6 +199,8 @@ class VoiceRepairOrchestrator(
         ++operation
         deadline?.cancel()
         deadline = null
+        readyDeadline?.cancel()
+        readyDeadline = null
         // Ownership is retired before release so synchronous/late adapter callbacks cannot re-enter.
         try { port.release(id) } catch (_: Exception) { /* adapter must independently ensure cleanup */ }
     }
@@ -156,8 +213,25 @@ class VoiceRepairOrchestrator(
     }
 
     companion object {
+        private const val READY_STEP = "ready"
+        private const val SPEECH_STEP = "speech_began"
         private val TERMINAL = setOf(VoiceRepairState.SUCCESS, VoiceRepairState.HEALTHY, VoiceRepairState.FAILED,
             VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)
+        /** States in which a capture is live and readiness/onset callbacks are still meaningful. */
+        private val WAITING_STATES = setOf(VoiceRepairState.TESTING_EXPECTED, VoiceRepairState.RETESTING)
+
+        /**
+         * True when [name] is already stamped for the *current* capture.
+         *
+         * Steps accumulate across a whole session, so a plain "any ready step" test would let the
+         * first capture's readiness suppress the retest's prompt. The baseline is the last capture
+         * start, which is what makes each capture's readiness independent.
+         */
+        private fun stampedSinceCaptureStart(steps: List<VoiceRepairStep>, name: String): Boolean {
+            val start = steps.indexOfLast { it.name == "test_start" || it.name == "retest_start" }
+            val from = if (start < 0) 0 else start + 1
+            return (from until steps.size).any { steps[it].name == name }
+        }
         private fun matches(expected: String, actual: String?) = actual?.trim()?.equals(expected.trim(), ignoreCase = true) == true
         private fun classify(result: VoiceRepairTestResult) = when (result.errorCode) {
             null -> if (result.recognized.isNullOrBlank()) VoiceRepairCause.NO_SPEECH else VoiceRepairCause.WRONG_TRANSCRIPT

@@ -443,6 +443,8 @@ class AndroidSpeechPort(
     fun captureDiagnosticPhrase(
         owner: String,
         expected: String,
+        onReady: () -> Unit = {},
+        onSpeechBegan: () -> Unit = {},
         onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
     ) {
         val epoch = diagnosticEpoch
@@ -451,7 +453,7 @@ class AndroidSpeechPort(
                 return@post
             }
             if (!diagnosticReady && !diagnosticStopFailed) {
-                waitingCapture = { captureDiagnosticPhrase(owner, expected, onResult) }
+                waitingCapture = { captureDiagnosticPhrase(owner, expected, onReady, onSpeechBegan, onResult) }
                 return@post
             }
             val startMs = System.currentTimeMillis()
@@ -492,11 +494,15 @@ class AndroidSpeechPort(
                 putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
                 putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
                 putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+                // Tells the local sherpa service this capture starts on an already-idle microphone
+                // (the wake engine stop was acknowledged), so it must not discard the wake tail —
+                // that tail is the beginning of the owner's phrase.
+                putExtra(SageSpeechIntents.EXTRA_DIAGNOSTIC_CAPTURE, true)
             }
 
             try {
                 recognizer?.setRecognitionListener(
-                    DiagnosticRecognitionListener(sessionToken, owner, expected, startMs, onResult)
+                    DiagnosticRecognitionListener(sessionToken, owner, expected, startMs, onReady, onSpeechBegan, onResult)
                 )
                 recognizer?.startListening(intent)
             } catch (t: Throwable) {
@@ -523,6 +529,8 @@ class AndroidSpeechPort(
         private val owner: String,
         private val expected: String,
         private val startMs: Long,
+        private val onReady: () -> Unit,
+        private val onSpeechBegan: () -> Unit,
         private val onResult: (com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult) -> Unit
     ) : RecognitionListener {
         override fun onResults(results: Bundle?) {
@@ -559,10 +567,12 @@ class AndroidSpeechPort(
         override fun onReadyForSpeech(params: Bundle?) {
             if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
             listener?.onSpeechDiagnostic("diagnostic recognizer ready backend=$recognizerBackend")
+            onReady()
         }
         override fun onBeginningOfSpeech() {
             if (destroyed || !diagnosticSessions.isCurrent(sessionToken) || diagnosticOwner != owner) return
             listener?.onSpeechDiagnostic("diagnostic recognizer speech began backend=$recognizerBackend")
+            onSpeechBegan()
         }
         override fun onRmsChanged(rmsdB: Float) = Unit
         override fun onBufferReceived(buffer: ByteArray?) = Unit

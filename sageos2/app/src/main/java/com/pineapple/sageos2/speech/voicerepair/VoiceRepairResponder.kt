@@ -55,7 +55,8 @@ class VoiceRepairResponder(
         onDiagnostic(if (started) "voice repair session started; awaiting phrase capture"
             else "voice repair start refused; nothing changed or verified")
         if (started) {
-            return "Microphone test started. Say “$phrase” now while I listen. I will tell you what I actually heard."
+            return "Microphone test starting. Wait for me to say the microphone is actually listening, " +
+                "then say “$phrase”. I'll tell you what I actually heard."
         }
         return when (manager.current()?.cause) {
             VoiceRepairCause.BUSY_RUNTIME -> "I couldn't open the microphone right now because another part of Sage is using it. Try again in a moment."
@@ -79,8 +80,13 @@ class VoiceRepairResponder(
     private fun statusReply(): String {
         val active = manager.current()
         if (active != null && active.state in ACTIVE_STATES) {
-            return "Your voice test is running; the phrase I'm listening for is “${active.testPhrase}”. " +
-                "Say “cancel voice repair” to stop it."
+            return if (active.steps.any { it.name == "ready" }) {
+                "Your voice test is running and my microphone is listening now; please say “${active.testPhrase}”. " +
+                    "Say “cancel voice repair” to stop it."
+            } else {
+                "Your voice test is running, but my microphone is not listening yet. Wait for me to say it is " +
+                    "listening, then say “${active.testPhrase}”. Say “cancel voice repair” to stop it."
+            }
         }
         val interrupted = interruptedNotice()
         val report = latestReport()

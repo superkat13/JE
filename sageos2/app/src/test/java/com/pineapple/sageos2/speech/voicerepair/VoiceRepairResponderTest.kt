@@ -47,8 +47,10 @@ class VoiceRepairResponderTest {
         )
         reply("fix my voice", local)
         val started = reply("good morning Sage", local)
-        assertTrue(started.contains("Microphone test started"))
+        assertTrue(started.contains("Microphone test starting"))
         assertTrue(started.contains("good morning Sage"))
+        assertTrue(started.contains("actually listening"))
+        assertFalse(started.contains("now while I listen"))
         assertEquals(1, calls)
         assertEquals("good morning Sage", received)
     }
