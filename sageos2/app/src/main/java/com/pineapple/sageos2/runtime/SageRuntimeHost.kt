@@ -27,6 +27,7 @@ import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExport
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairExportRenderer
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOrchestrator
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairCompletionPresenter
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairOutcomeNotifier
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairReporter
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSession
@@ -275,17 +276,18 @@ class SageRuntimeHost private constructor(context: Context) {
         )
     }
 
-    private var presentedVoiceRepairOutcome: Pair<String, VoiceRepairState>? = null
+    private val voiceRepairOutcomeNotifier by lazy {
+        VoiceRepairOutcomeNotifier(
+            history = history,
+            notify = { text -> observer.onTextResponse(0L, text) }
+        )
+    }
 
-    /** Presents a finished capture outcome to the owner via the text-response channel (outside
-     *  any turn state machine) exactly once per terminal result state for a session.
+    /** Persists a finished capture outcome as one Sage conversation entry before notifying the UI,
+     *  outside any turn state machine, exactly once per terminal result state for a session.
      */
     private fun presentVoiceRepairOutcome(session: VoiceRepairSession) {
-        val text = VoiceRepairCompletionPresenter.ownerText(session) ?: return
-        val key = session.id to session.state
-        if (presentedVoiceRepairOutcome == key) return
-        presentedVoiceRepairOutcome = key
-        observer.onTextResponse(0L, text)
+        voiceRepairOutcomeNotifier.onTerminal(session)
     }
 
     /** Owner-facing report of the most recent completed voice test, or "" when none exists. */
