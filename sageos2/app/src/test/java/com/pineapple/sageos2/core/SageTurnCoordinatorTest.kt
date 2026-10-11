@@ -166,6 +166,24 @@ class SageTurnCoordinatorTest {
         assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
     }
 
+    @Test fun microphoneHandoffFailureExplainsItWasNeverReady() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val turn = c.snapshot().activeTurnId
+        val generation = c.snapshot().recognizerGeneration
+        assertFalse(c.snapshot().commandRecognizerReady)
+        val effects = c.handle(SageEvent.RecognitionFailed(turn, generation, 3))
+        assertTrue(effects.contains(SageEffect.Speak(
+            turn, "My microphone wasn't ready, so I couldn't hear you."
+        )))
+        assertEquals(SageRuntimeState.SPEAKING, c.snapshot().state)
+        assertFalse(c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.SpeechFinished(turn))
+        c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertEquals(SageListeningMode.WAKE_ONLY, c.snapshot().listeningMode)
+    }
+
     @Test fun recognitionFailureSpeaksOnceThenClosesToWakeWithoutListeningAgain() {
         val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
         c.handle(SageEvent.PushToTalkRequested)
