@@ -79,7 +79,10 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
                 error("Unresolved Sage Core write journal detected; reconciliation required")
             }
             // Otherwise a pending write exists - attempt to recover it first
-            if (!recoverPendingWrite()) {
+            recoverPendingWrite()
+            // Re-check after recovery attempt
+            val journalAfter = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
+            if (journalAfter != null) {
                 error("Unresolved Sage Core write journal detected; reconciliation required")
             }
         }
