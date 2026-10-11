@@ -89,14 +89,25 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     /** Durably retain a damaged `current` value (any type) before it is ever replaced. */
     private fun preserveDamagedCurrent() {
         val raw: Any = runCatching { prefs.all[KEY_CURRENT] }.getOrNull() ?: return
-        val index = runCatching { prefs.getInt(KEY_FORENSIC_COUNT, 0) }.getOrDefault(0)
-        // Idempotent: if the newest forensic copy already holds these exact damaged bytes (e.g. a
-        // roll-forward was retried), do not create a second duplicate backup.
-        val lastKey = "$FORENSIC_PREFIX$index"
-        if (index > 0 && runCatching { prefs.all[lastKey] }.getOrNull() == raw) return
-        val key = "$FORENSIC_PREFIX${index + 1}"
+        val count = runCatching { prefs.getInt(KEY_FORENSIC_COUNT, 0) }.getOrDefault(0)
+        // Idempotent: if the most recent forensic copy already holds these exact damaged bytes,
+        // do not create a second duplicate backup.
+        if (count > 0) {
+            val lastKey = "$FORENSIC_PREFIX$count"
+            if (runCatching { prefs.all[lastKey] }.getOrNull() == raw) return
+        }
+        // Find the next free forensic key (never overwrite existing). Counter must always advance.
+        var nextIndex = count + 1
+        while (prefs.contains("$FORENSIC_PREFIX$nextIndex")) {
+            nextIndex++
+            if (nextIndex > count + 1000) {
+                // Fail closed rather than overwriting existing forensics
+                error("Sage Core forensic key space exhausted")
+            }
+        }
+        val key = "$FORENSIC_PREFIX$nextIndex"
         val editor = prefs.edit()
-            .putInt(KEY_FORENSIC_COUNT, index)
+            .putInt(KEY_FORENSIC_COUNT, nextIndex)
             .putString("$key.type", raw.javaClass.simpleName)
             .putLong("$key.at", System.currentTimeMillis())
         when (raw) {
