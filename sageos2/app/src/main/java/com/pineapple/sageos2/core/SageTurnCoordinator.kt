@@ -13,6 +13,9 @@ data class SageRuntimeSnapshot(
     val commandRecognizerReady: Boolean = false
 )
 
+/** Android SpeechRecognizer.ERROR_AUDIO == 3. Keep core's pure-JVM routing free of Android SDK dependencies. */
+private const val RECOGNIZER_AUDIO_ERROR = 3
+
 class SageTurnCoordinator(
     private val router: SageCommandRouter = SageCommandRouter(),
     private val typedQueueCapacity: Int = 16,
@@ -147,7 +150,10 @@ class SageTurnCoordinator(
         return listOf(
             changeListening(SageListeningMode.OFF),
             SageEffect.RecordDiagnostic("recognition failed code=${event.code}"),
-            SageEffect.Speak(activeTurnId, "I didn't catch that.")
+            SageEffect.Speak(activeTurnId,
+                if (event.code == RECOGNIZER_AUDIO_ERROR) "My microphone wasn't ready, so I couldn't hear you."
+                else "I didn't catch that."
+            )
         )
     }
 
