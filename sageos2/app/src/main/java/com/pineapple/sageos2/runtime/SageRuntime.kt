@@ -70,6 +70,8 @@ class SageRuntime(
             override fun onWakeDetected(hit: WakeHit) = submit(SageEvent.WakeDetected(hit.generation, hit.profileId, hit.modeId, hit.acknowledgement, hit.command))
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) = submit(SageEvent.TranscriptFinal(turnId, generation, text))
             override fun onRecognitionError(turnId: Long, generation: Long, code: Int) = submit(SageEvent.RecognitionFailed(turnId, generation, code))
+            override fun onCommandRecognizerReady(turnId: Long, generation: Long) =
+                submit(SageEvent.CommandRecognizerReady(turnId, generation))
             override fun onSpeechDiagnostic(message: String) = observer.onDiagnostic("speech: $message")
         })
     }
@@ -171,7 +173,8 @@ class SageRuntime(
 
     private fun process(effect: SageEffect) {
         when (effect) {
-            is SageEffect.SetListeningMode -> speech.setListening(effect.mode, effect.generation, effect.turnId)
+            is SageEffect.SetListeningMode ->
+                speech.setListening(effect.mode, effect.generation, effect.turnId, effect.wakeTailPresent)
             is SageEffect.ActivateMode -> modes.activate(effect.profileId, effect.modeId)
             is SageEffect.RecordOwnerInput -> recordOwnerInput(effect)
             is SageEffect.EmitTextResponse -> {
