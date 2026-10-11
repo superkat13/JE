@@ -40,6 +40,9 @@ class AndroidSpeechPort(
     private var diagnosticReady = false
     private var diagnosticStopFailed = false
     private var cancelWakeBarrier: (() -> Unit)? = null
+    /** Ordinary Push-to-Talk also needs to wait for the isolated wake microphone to stop. */
+    private var cancelCommandWakeBarrier: (() -> Unit)? = null
+    private var commandWakeBarrierEpoch = 0L
     private var waitingCapture: (() -> Unit)? = null
     private var speechActive = false
     private val deferredSpeech = java.util.ArrayDeque<PendingSpeech>()
@@ -78,6 +81,7 @@ class AndroidSpeechPort(
     override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long, wakeTailPresent: Boolean) {
         onMain {
             if (destroyed) return@onMain
+            val leavingWakeOnly = this.desiredMode == SageListeningMode.WAKE_ONLY
             this.desiredMode = mode
             this.generation = generation
             this.turnId = turnId
@@ -88,7 +92,14 @@ class AndroidSpeechPort(
             when (mode) {
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
-                SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
+                SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> {
+                    if (leavingWakeOnly && wakeWordEngine is RemoteWakeWordEngine) {
+                        // RemoteWakeWordEngine.stop() only queues an IPC message; it does not
+                        // release the other process's AudioRecord before returning. Normal Talk
+                        // must not open a second microphone until that remote stop is confirmed.
+                        awaitCommandWakeStop(mode, turnId, generation)
+                    } else startRecognition(turnId, generation)
+                }
             }
         }
     }
@@ -294,9 +305,35 @@ class AndroidSpeechPort(
     }
 
     private fun stopInput() {
+        // A mode change, new turn, TTS or shutdown invalidates any delayed STOP reply.
+        commandWakeBarrierEpoch++
+        cancelCommandWakeBarrier?.invoke()
+        cancelCommandWakeBarrier = null
         try { wakeWordEngine.stop() } catch (_: Throwable) {}
         sessions.invalidate()
         try { recognizer?.cancel() } catch (_: Throwable) {}
+    }
+
+    private fun awaitCommandWakeStop(mode: SageListeningMode, expectedTurn: Long, expectedGeneration: Long) {
+        val epoch = ++commandWakeBarrierEpoch
+        val cancel = awaitRemoteWakeStop { stopped ->
+            if (destroyed || diagnosticOwner != null || epoch != commandWakeBarrierEpoch ||
+                desiredMode != mode || turnId != expectedTurn || generation != expectedGeneration) {
+                return@awaitRemoteWakeStop
+            }
+            cancelCommandWakeBarrier = null
+            if (stopped) {
+                startRecognition(expectedTurn, expectedGeneration)
+            } else {
+                // Fail closed. Do not silently capture with two services competing for the mic.
+                listener?.onSpeechDiagnostic("command microphone handoff failed or timed out")
+                listener?.onRecognitionError(expectedTurn, expectedGeneration, SpeechRecognizer.ERROR_AUDIO)
+            }
+        }
+        if (epoch == commandWakeBarrierEpoch && desiredMode == mode &&
+            generation == expectedGeneration && turnId == expectedTurn && !destroyed) {
+            cancelCommandWakeBarrier = cancel
+        } else cancel()
     }
 
     @SuppressLint("NewApi") // The only caller selects this branch after an explicit API 31 check.
