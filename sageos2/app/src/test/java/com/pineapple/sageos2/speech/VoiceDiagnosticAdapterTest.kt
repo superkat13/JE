@@ -43,6 +43,7 @@ class VoiceDiagnosticAdapterTest {
     private val normal = mutableListOf<String>()
     private val errors = mutableListOf<Int>()
     private var wakeHits = 0
+    private val readyCommands = mutableListOf<Pair<Long, Long>>()
 
     @Before fun setup() {
         ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
@@ -53,6 +54,9 @@ class VoiceDiagnosticAdapterTest {
             override fun onWakeDetected(hit: WakeHit) { wakeHits++ }
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) { normal.add(text) }
             override fun onRecognitionError(turnId: Long, generation: Long, code: Int) { errors.add(code) }
+            override fun onCommandRecognizerReady(turnId: Long, generation: Long) {
+                readyCommands += turnId to generation
+            }
         })
         adapter = VoiceDiagnosticAdapter(port)
         idle()
@@ -111,6 +115,38 @@ class VoiceDiagnosticAdapterTest {
         assertEquals(2, ready); assertEquals(1, speech)
         assertIsolated()
     }
+    @Test fun normalVoiceIntentsDistinguishManualWakeAndFollowUp() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        assertFalse("manual Talk retains onset", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true))
+
+        port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        assertTrue("wake-triggered command uses existing tail protection", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false))
+
+        port.setListening(SageListeningMode.FOLLOW_UP, 5, 12, wakeTailPresent = true); idle()
+        assertFalse("follow-ups never discard a wake tail", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true))
+    }
+
+    @Test fun realRecognitionReadyCallbackIsScopedToLiveTurnAndGeneration() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        val previous = recognizer().callback!!
+        previous.onReadyForSpeech(null)
+        assertEquals(listOf(11L to 3L), readyCommands)
+
+        port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        previous.onReadyForSpeech(null)
+        assertEquals("old callback must not activate current UI", listOf(11L to 3L), readyCommands)
+        val current = recognizer().callback!!
+        current.onReadyForSpeech(null)
+        assertEquals(listOf(11L to 3L, 12L to 4L), readyCommands)
+
+        port.setListening(SageListeningMode.OFF, 5, 0); idle()
+        current.onReadyForSpeech(null)
+        assertEquals("cancelled callback must stay silent", 2, readyCommands.size)
+    }
+
     @Test fun modeAndSpeechChangesCannotCancelOrReplaceDiagnostic() {
         acquire(); capture()
         val active = recognizer(); val callback = active.callback; val cancels = active.cancels
