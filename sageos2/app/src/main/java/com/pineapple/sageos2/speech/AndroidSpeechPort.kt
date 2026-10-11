@@ -93,7 +93,8 @@ class AndroidSpeechPort(
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
                 SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> {
-                    if (leavingWakeOnly && wakeWordEngine is RemoteWakeWordEngine) {
+                    if (mode == SageListeningMode.COMMAND && wakeWordEngine is RemoteWakeWordEngine &&
+                        (leavingWakeOnly || wakeTailPresent)) {
                         // RemoteWakeWordEngine.stop() only queues an IPC message; it does not
                         // release the other process's AudioRecord before returning. Normal Talk
                         // must not open a second microphone until that remote stop is confirmed.
