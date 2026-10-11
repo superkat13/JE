@@ -175,7 +175,7 @@ class SageTurnCoordinatorTest {
         assertFalse(c.snapshot().commandRecognizerReady)
         val effects = c.handle(SageEvent.RecognitionFailed(turn, generation, 3))
         assertTrue(effects.contains(SageEffect.Speak(
-            turn, "My microphone wasn't ready, so I couldn't hear you."
+            turn, "There was a microphone problem, so I couldn't hear you."
         )))
         assertEquals(SageRuntimeState.SPEAKING, c.snapshot().state)
         assertFalse(c.snapshot().commandRecognizerReady)
