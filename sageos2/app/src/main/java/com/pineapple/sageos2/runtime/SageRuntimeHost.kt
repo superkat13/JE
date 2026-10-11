@@ -45,6 +45,13 @@ import com.pineapple.sageos2.diagnostics.DiagnosticTaskSummary
 import com.pineapple.sageos2.diagnostics.SharedPreferencesTraceStore
 import com.pineapple.sageos2.forge.ForgeClient
 import com.pineapple.sageos2.forge.ForgeStore
+import com.pineapple.sageos2.identity.LegacyCoreRecovery
+import com.pineapple.sageos2.identity.LegacyCoreSource
+import com.pineapple.sageos2.identity.SageCoreCurrentStatus
+import com.pineapple.sageos2.identity.SageCoreHealth
+import com.pineapple.sageos2.identity.SageCoreHealthReader
+import com.pineapple.sageos2.identity.SageCoreRestorePreview
+import com.pineapple.sageos2.identity.SageCoreSnapshot
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.learning.SharedPreferencesLearnedPhraseStore
 import com.pineapple.sageos2.localapi.SageLocalApiServer
@@ -111,6 +118,8 @@ class SageRuntimeHost private constructor(context: Context) {
     val rootBroker = SocketRootBrokerClient()
     val chickenTonightScope = SharedPreferencesChickenTonightScopeStore(appContext)
     private val ownerContinuityImporter = OwnerContinuityImporter(appContext, core, memory)
+    private val sageCoreHealthReader = SageCoreHealthReader(appContext, core, LegacyCoreSource(appContext))
+    private val legacyCoreRecovery = LegacyCoreRecovery(core, LegacyCoreSource(appContext))
 
     @Volatile private var legacyMigrationReport = runLegacyMigration()
     @Volatile private var legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
@@ -357,11 +366,39 @@ class SageRuntimeHost private constructor(context: Context) {
             wakeReady = wakeHealth.ready,
             wakeDetail = wakeHealth.detail,
             coreRevision = core.current().revision,
-            legacyCorePresent = legacyMigrationReport.legacyCorePresent,
+            legacyCorePresent = legacyMigrationReport.legacyCorePresent || legacyMigrationReport.legacyPreviousCorePresent,
             migrationErrors = legacyMigrationReport.errors,
             commandSpeechReady = SageSpeechBackendState.sherpaReady(appContext),
-            commandSpeechDetail = SageSpeechBackendState.readinessDetail(appContext)
+            commandSpeechDetail = SageSpeechBackendState.readinessDetail(appContext),
+            coreCurrentDamaged = core.currentStatus() == SageCoreCurrentStatus.INVALID,
+            coreRecoverableRevision = core.newestRecoverableRevision()
         )
+    }
+
+    fun sageCoreHealth(): SageCoreHealth = sageCoreHealthReader.assess()
+
+    fun sageCoreSafeDiagnostics(): String = sageCoreHealthReader.assess().safeReport()
+
+    fun previewSageCoreRestore(revision: Long): SageCoreRestorePreview? = core.previewRestore(revision)
+
+    fun previewLegacyCoreRestore(): SageCoreRestorePreview? = legacyCoreRecovery.preview()
+
+    /** Owner-approved restore of an intact stored snapshot as a new revision. Never silent. */
+    fun restoreSageCoreRevision(revision: Long): SageCoreSnapshot? {
+        val restored = core.restore(revision) ?: return null
+        traces.record("owner_core", "owner-approved restore from revision=$revision as revision=${restored.revision}")
+        runCatching { runSelfCareCheck() }
+            .onFailure { traces.record("self_care", "post-core-restore check failed: ${it.message ?: it::class.java.simpleName}") }
+        return restored
+    }
+
+    /** Owner-approved recovery from a Sage 1.33.3 legacy Core (current or previous-only). */
+    fun restoreLegacyCore(): SageCoreSnapshot? {
+        val restored = legacyCoreRecovery.restore() ?: return null
+        traces.record("owner_core", "owner-approved legacy Core recovery as revision=${restored.revision}")
+        runCatching { runSelfCareCheck() }
+            .onFailure { traces.record("self_care", "post-legacy-core-recovery check failed: ${it.message ?: it::class.java.simpleName}") }
+        return restored
     }
 
     fun submitText(text: String) { start(); runtime.submit(SageEvent.TextSubmitted(text)) }

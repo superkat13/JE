@@ -6,6 +6,7 @@ import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskState
+import com.pineapple.sageos2.identity.SageCoreCurrentStatus
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.memory.TwinMemoryRecord
@@ -89,6 +90,7 @@ class LegacySageMigration(
             legacyOwnerAppsPresent = source.ownerApps,
             legacyWakePresent = source.wake,
             legacyAutonomyPresent = source.autonomy,
+            legacyPreviousCorePresent = source.corePrevious,
             errors = errors
         )
     }
@@ -103,6 +105,7 @@ class LegacySageMigration(
         val legacyAutonomy = appContext.getSharedPreferences(LEGACY_AUTONOMY_PREFS, Context.MODE_PRIVATE)
         return LegacySourcePresence(
             core = probe("core") { legacyCore.getString(LEGACY_CORE_TEXT, "").orEmpty().isNotBlank() },
+            corePrevious = probe("core_previous") { legacyCore.getString(LEGACY_CORE_PREVIOUS, "").orEmpty().isNotBlank() },
             memory = probe("memory") { legacyState.getStringSet(LEGACY_MEMORY_ITEMS, emptySet()).orEmpty().isNotEmpty() },
             ownerApps = probe("owner_apps") { legacyApps.getString(LEGACY_OWNER_APPS_KEY, "").orEmpty().isNotBlank() },
             wake = probe("wake") { legacyState.getStringSet(LEGACY_WAKE_PROFILES, emptySet()).orEmpty().isNotEmpty() ||
@@ -112,6 +115,9 @@ class LegacySageMigration(
     }
 
     private fun importCore(): Boolean {
+        // Never auto-merge a legacy payload onto a damaged current record: the owner must review a
+        // real recovery candidate instead of having fallback identity silently written as "restored".
+        if (core.currentStatus() == SageCoreCurrentStatus.INVALID) return false
         val legacy = appContext.getSharedPreferences(LEGACY_CORE_PREFS, Context.MODE_PRIVATE)
         if (!legacy.contains(LEGACY_CORE_TEXT)) return false
         val currentText = legacy.getString(LEGACY_CORE_TEXT, "").orEmpty().trim()
@@ -320,6 +326,7 @@ class LegacySageMigration(
 
 data class LegacySourcePresence(
     val core: Boolean = false,
+    val corePrevious: Boolean = false,
     val memory: Boolean = false,
     val ownerApps: Boolean = false,
     val wake: Boolean = false,
@@ -339,6 +346,7 @@ data class LegacyMigrationReport(
     val legacyOwnerAppsPresent: Boolean = false,
     val legacyWakePresent: Boolean = false,
     val legacyAutonomyPresent: Boolean = false,
+    val legacyPreviousCorePresent: Boolean = false,
     val errors: List<String> = emptyList()
 ) {
     fun summary(): String = buildString {
@@ -353,6 +361,7 @@ data class LegacyMigrationReport(
         append(",apps=").append(legacyOwnerAppsPresent)
         append(",wake=").append(legacyWakePresent)
         append(",autonomy=").append(legacyAutonomyPresent).append(']')
+        if (legacyPreviousCorePresent) append(" legacyPreviousCore=true")
         if (errors.isNotEmpty()) append(" errors=").append(errors.joinToString(" | "))
     }
 }

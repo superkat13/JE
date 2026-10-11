@@ -85,6 +85,48 @@ class SelfCareManagerTest {
         assertEquals(TaskState.COMPLETED, store.get("selfcare:command_speech_not_ready")!!.state)
     }
 
+    @Test fun recoverableCoreIsActionableAndNotReportedAsPlainEmpty() {
+        val store = FakeStore()
+        val findings = SelfCareManager(store).reconcile(
+            SelfCareSnapshot(true, "ready", true, "ready", 0, false, coreRecoverableRevision = 1),
+            nowMs = 100L
+        )
+        assertEquals(listOf("core_recoverable"), findings.map { it.code })
+        assertTrue(store.get("selfcare:core_recoverable")!!.nextStep.contains("restore it yourself"))
+        assertEquals(null, store.get("selfcare:core_empty"))
+    }
+
+    @Test fun damagedCoreWithoutHistoryIsDistinctFromSimplyEmpty() {
+        val store = FakeStore()
+        val findings = SelfCareManager(store).reconcile(
+            SelfCareSnapshot(true, "ready", true, "ready", 0, false, coreCurrentDamaged = true),
+            nowMs = 100L
+        )
+        assertEquals(listOf("core_damaged"), findings.map { it.code })
+    }
+
+    @Test fun validCoreClearsRecoverableFinding() {
+        val store = FakeStore()
+        val manager = SelfCareManager(store)
+        manager.reconcile(
+            SelfCareSnapshot(true, "ready", true, "ready", 0, false, coreRecoverableRevision = 1),
+            nowMs = 100L
+        )
+        manager.reconcile(SelfCareSnapshot(true, "ready", true, "ready", 2, true), nowMs = 200L)
+        assertEquals(TaskState.COMPLETED, store.get("selfcare:core_recoverable")!!.state)
+    }
+
+    @Test fun repeatedIdenticalFindingDoesNotChurnTimestamp() {
+        val store = FakeStore()
+        val manager = SelfCareManager(store)
+        manager.reconcile(SelfCareSnapshot(true, "ready", false, "wake failed", 2, true), 100L)
+        val first = store.get("selfcare:wake_not_ready")!!
+        manager.reconcile(SelfCareSnapshot(true, "ready", false, "wake failed", 2, true), 9_999L)
+        val second = store.get("selfcare:wake_not_ready")!!
+        assertEquals(first, second)
+        assertEquals(100L, second.updatedAtMs)
+    }
+
     private class FakeStore : TaskContinuityStore {
         private val values = linkedMapOf<String, TaskCheckpoint>()
         override fun upsert(checkpoint: TaskCheckpoint) { values[checkpoint.taskId] = checkpoint }

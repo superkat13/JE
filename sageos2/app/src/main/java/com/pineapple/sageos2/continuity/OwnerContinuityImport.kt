@@ -191,7 +191,7 @@ class OwnerContinuityImporter(
             .putBoolean("digest_$digest", true)
             .putString("source_$digest", incoming.source)
             .putLong("imported_at_$digest", nowMs)
-            .apply()
+            .commit()
 
         return OwnerContinuityImportResult(
             source = incoming.source,

@@ -51,6 +51,7 @@ import com.pineapple.sageos2.memory.TwinMemorySubject
 import com.pineapple.sageos2.mode.SageTone
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
+import com.pineapple.sageos2.identity.SageCoreCurrentStatus
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.speech.WakeProfile
 import com.pineapple.sageos2.workflow.ChickenTonightModule
@@ -460,6 +461,7 @@ open class MainActivity : Activity() {
     }
 
     private fun showCore() {
+        val health = host.sageCoreHealth()
         val core = host.core.current()
         val form = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         form.addView(sectionTitle("Sage's inner notes • saved version ${core.revision}"))
@@ -467,6 +469,44 @@ open class MainActivity : Activity() {
             text = "This is Sage's long-term picture of herself and the way you work together. Every save keeps the previous version."
             textSize = 14f
         })
+
+        form.addView(TextView(this).apply {
+            text = health.ownerHeadline()
+            textSize = 16f
+            setPadding(0, dp(10), 0, dp(2))
+        })
+        form.addView(TextView(this).apply {
+            text = buildString {
+                append("Saved versions kept: ").append(health.validRevisions.size)
+                health.validRevisions.maxOrNull()?.let { append(" (latest intact version ").append(it).append(')') }
+                append("\nLegacy 1.33.3 Core available: ")
+                    .append(health.legacyCurrentAvailable || health.legacyPreviousAvailable)
+            }
+            textSize = 13f
+        })
+
+        if (health.currentStatus == SageCoreCurrentStatus.INVALID) {
+            form.addView(TextView(this).apply {
+                text = "The saved current Core record is damaged. Nothing has been changed or deleted. Review a snapshot or import an owner package below, then confirm."
+                textSize = 13f
+                setPadding(0, dp(6), 0, dp(6))
+            })
+        }
+
+        health.newestRecoverableRevision?.let { revision ->
+            form.addView(Button(this).apply {
+                text = "Review saved snapshot version $revision"
+                isAllCaps = false
+                setOnClickListener { showRestoreSnapshotDialog(revision) }
+            })
+        }
+        if (health.legacyCurrentAvailable || health.legacyPreviousAvailable) {
+            form.addView(Button(this).apply {
+                text = "Review legacy 1.33.3 Core"
+                isAllCaps = false
+                setOnClickListener { showLegacyCoreDialog() }
+            })
+        }
 
         val identity = editor("Who Sage is", core.twinIdentity, 5)
         val principles = editor("What matters to Sage • one per line", core.principles.joinToString("\n"), 5)
@@ -511,6 +551,14 @@ open class MainActivity : Activity() {
             }
         })
         form.addView(Button(this).apply {
+            text = "Copy safe diagnostics"
+            isAllCaps = false
+            setOnClickListener {
+                copyToClipboard("Sage Core diagnostics", host.sageCoreSafeDiagnostics())
+                Toast.makeText(this@MainActivity, "Safe diagnostics copied (no private content)", Toast.LENGTH_SHORT).show()
+            }
+        })
+        form.addView(Button(this).apply {
             text = "Copy advanced identity data"
             setOnClickListener {
                 copyToClipboard("Sage Core", host.core.exportJson())
@@ -523,6 +571,56 @@ open class MainActivity : Activity() {
             setOnClickListener { showOwnerContinuityImport() }
         })
         body.addView(scroll(form))
+    }
+
+    private fun showRestoreSnapshotDialog(revision: Long) {
+        val preview = host.previewSageCoreRestore(revision)
+        if (preview == null) {
+            Toast.makeText(this, "That snapshot could not be read", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Restore saved snapshot")
+            .setMessage(
+                "Restore the intact snapshot from version $revision as a new version. " +
+                    "Every existing version is kept and nothing is deleted.\n\n${preview.safeSummary()}"
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Restore") { _, _ ->
+                val restored = host.restoreSageCoreRevision(revision)
+                Toast.makeText(
+                    this,
+                    if (restored != null) "Restored as version ${restored.revision}" else "Restore failed; nothing changed",
+                    Toast.LENGTH_LONG
+                ).show()
+                showPanel(Panel.CORE)
+            }
+            .show()
+    }
+
+    private fun showLegacyCoreDialog() {
+        val preview = host.previewLegacyCoreRestore()
+        if (preview == null) {
+            Toast.makeText(this, "No readable legacy Core source", Toast.LENGTH_SHORT).show()
+            return
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Restore legacy 1.33.3 Core")
+            .setMessage(
+                "Import the owner-authored Sage 1.33.3 Core as a new version. Existing versions are kept and " +
+                    "the legacy source is left untouched.\n\n${preview.safeSummary()}"
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Restore") { _, _ ->
+                val restored = host.restoreLegacyCore()
+                Toast.makeText(
+                    this,
+                    if (restored != null) "Recovered as version ${restored.revision}" else "No readable legacy Core source",
+                    Toast.LENGTH_LONG
+                ).show()
+                showPanel(Panel.CORE)
+            }
+            .show()
     }
 
     private fun showOwnerContinuityImport() {
