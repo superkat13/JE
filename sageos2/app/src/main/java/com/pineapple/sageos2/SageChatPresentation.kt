@@ -26,7 +26,9 @@ object SageChatPresentation {
             SageRuntimeState.IDLE_WAKE -> "Here with you" to null
             SageRuntimeState.ACKNOWLEDGING_WAKE -> "Right here" to null
             SageRuntimeState.COMMAND_LISTENING,
-            SageRuntimeState.FOLLOW_UP_LISTENING -> "Listening" to "I'm listening"
+            SageRuntimeState.FOLLOW_UP_LISTENING ->
+                if (snapshot.commandRecognizerReady) "Listening" to "I'm listening"
+                else "Getting voice ready" to "I'm opening the microphone"
             SageRuntimeState.THINKING_FAST -> "On it" to "I'm taking care of that"
             SageRuntimeState.THINKING_DEEP -> when (brainProgress) {
                 BrainProgressStage.LOADING_MODEL ->
