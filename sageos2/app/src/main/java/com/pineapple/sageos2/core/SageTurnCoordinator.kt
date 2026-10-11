@@ -151,7 +151,7 @@ class SageTurnCoordinator(
             changeListening(SageListeningMode.OFF),
             SageEffect.RecordDiagnostic("recognition failed code=${event.code}"),
             SageEffect.Speak(activeTurnId,
-                if (event.code == RECOGNIZER_AUDIO_ERROR) "My microphone wasn't ready, so I couldn't hear you."
+                if (event.code == RECOGNIZER_AUDIO_ERROR) "There was a microphone problem, so I couldn't hear you."
                 else "I didn't catch that."
             )
         )
