@@ -1,7 +1,13 @@
 package com.pineapple.sageos2.core
 
 sealed interface SageEffect {
-    data class SetListeningMode(val mode: SageListeningMode, val generation: Long, val turnId: Long = 0L) : SageEffect
+    /** Wake-tail removal is reserved for a real wake-triggered command, never manual or follow-up. */
+    data class SetListeningMode(
+        val mode: SageListeningMode,
+        val generation: Long,
+        val turnId: Long = 0L,
+        val wakeTailPresent: Boolean = false
+    ) : SageEffect
     data class ActivateMode(val profileId: String, val modeId: String?) : SageEffect
     data class RecordOwnerInput(val turnId: Long, val text: String, val origin: TurnOrigin) : SageEffect
     data class Speak(val turnId: Long, val text: String) : SageEffect
