@@ -89,8 +89,12 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     /** Durably retain a damaged `current` value (any type) before it is ever replaced. */
     private fun preserveDamagedCurrent() {
         val raw: Any = runCatching { prefs.all[KEY_CURRENT] }.getOrNull() ?: return
-        val index = runCatching { prefs.getInt(KEY_FORENSIC_COUNT, 0) }.getOrDefault(0) + 1
-        val key = "$FORENSIC_PREFIX$index"
+        val index = runCatching { prefs.getInt(KEY_FORENSIC_COUNT, 0) }.getOrDefault(0)
+        // Idempotent: if the newest forensic copy already holds these exact damaged bytes (e.g. a
+        // roll-forward was retried), do not create a second duplicate backup.
+        val lastKey = "$FORENSIC_PREFIX$index"
+        if (index > 0 && runCatching { prefs.all[lastKey] }.getOrNull() == raw) return
+        val key = "$FORENSIC_PREFIX${index + 1}"
         val editor = prefs.edit()
             .putInt(KEY_FORENSIC_COUNT, index)
             .putString("$key.type", raw.javaClass.simpleName)
@@ -225,6 +229,10 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         }
         val currentValid = currentValidOrNull()
         if (currentValid == null || journal.revision > currentValid.revision) {
+            // Never let an automatic roll-forward overwrite an unreadable `current` record without
+            // durably retaining its original raw bytes first (the same guarantee ordinary replaces
+            // uphold). This preserves damaged but owner-authored data even across power loss.
+            if (currentStatus() == SageCoreCurrentStatus.INVALID) preserveDamagedCurrent()
             check(prefs.edit().putString(KEY_CURRENT, journalRaw).remove(KEY_JOURNAL).commit()) {
                 "Sage Core journal roll-forward failed"
             }

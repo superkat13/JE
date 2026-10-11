@@ -152,8 +152,20 @@ object OwnerContinuityMerger {
     private fun mergeList(left: List<String>, right: List<String>): List<String> =
         (left + right).distinctBy { it.lowercase(Locale.US).trim() }
 
-    private fun mergeParagraphs(left: String, right: String): String =
-        listOf(left.trim(), right.trim()).filter { it.isNotEmpty() }.distinct().joinToString("\n\n")
+    private fun mergeParagraphs(left: String, right: String): String {
+        val currentBlock = left.trim()
+        val incomingBlock = right.trim()
+        if (incomingBlock.isEmpty()) return currentBlock
+        if (currentBlock.isEmpty()) return incomingBlock
+        // Deduplicate at the block level (prior merges join blocks with blank lines) so a retried,
+        // partially-applied import cannot append a second copy of the same owner note.
+        val blocks = currentBlock.split("\n\n").map { it.trim() }.filter { it.isNotEmpty() }
+        return if (blocks.any { it.equals(incomingBlock, ignoreCase = true) }) {
+            currentBlock
+        } else {
+            listOf(currentBlock, incomingBlock).joinToString("\n\n")
+        }
+    }
 }
 
 class OwnerContinuityImporter(
