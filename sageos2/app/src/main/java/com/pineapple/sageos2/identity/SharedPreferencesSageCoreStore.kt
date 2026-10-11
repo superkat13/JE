@@ -67,7 +67,22 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     override fun current(): SageCoreSnapshot = currentValidOrNull() ?: EmptySageCoreProvider.current()
 
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
-        runCatching { recoverPendingWrite() }
+        // Ensure no unresolved write journal is left from a previous failed reconciliation;
+        // an inconsistent journal must be preserved for diagnosis and the operation must fail closed.
+        val journalRawBefore = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
+        if (journalRawBefore != null) {
+            val journalValid = journalRawBefore.takeIf { isAuthenticRecord(it, null) }
+                ?.let { runCatching { decode(it) }.getOrNull() }
+            val historyForKey = journalValid?.let { historyRaw(it.revision) }
+            if (historyForKey == null || historyForKey != journalRawBefore) {
+                // Unresolved/inconsistent journal: do not overwrite; fail closed to preserve evidence
+                error("Unresolved Sage Core write journal detected; reconciliation required")
+            }
+            // Otherwise a pending write exists - attempt to recover it first
+            if (!recoverPendingWrite()) {
+                error("Unresolved Sage Core write journal detected; reconciliation required")
+            }
+        }
         // Never silently destroy an unreadable `current` record. Before promoting anything, retain the
         // original raw bytes (whatever their type) under a durable forensic key so the owner can still
         // recover the damaged data even after an ordinary save.

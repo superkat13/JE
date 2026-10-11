@@ -555,16 +555,13 @@ open class MainActivity : Activity() {
             isEnabled = core.revision > 1
             setOnClickListener {
                 val current = host.core.current()
-                val previous = if (current.revision > 1) {
-                    (current.revision - 1 downTo 1).firstNotNullOfOrNull(host.core::revision)
+                val previousRev = if (current.revision > 1) {
+                    (current.revision - 1 downTo 1).firstNotNullOfOrNull(host.core::revision)?.revision
                 } else null
-                if (previous == null) {
+                if (previousRev == null) {
                     Toast.makeText(this@MainActivity, "No earlier stored revision", Toast.LENGTH_SHORT).show()
                 } else {
-                    val restored = host.core.restore(previous.revision)
-                    host.traces.record("owner_core", "Sage Core restored from revision=${previous.revision} as revision=${restored?.revision}")
-                    Toast.makeText(this@MainActivity, "Restored revision ${previous.revision}", Toast.LENGTH_SHORT).show()
-                    showPanel(Panel.CORE)
+                    showRestoreSnapshotDialog(previousRev)
                 }
             }
         })

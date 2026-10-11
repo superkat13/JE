@@ -22,13 +22,24 @@ object SageCorePreviewText {
         list("Promises Sage keeps", candidate.before.selfRestrictions, candidate.after.selfRestrictions)
         value("Notes you share with Sage", candidate.before.notes, candidate.after.notes)
         list("Preferred names", candidate.before.ownerModel.preferredNames, candidate.after.ownerModel.preferredNames)
-        list("What matters to us", candidate.before.ownerModel.preferences, candidate.after.ownerModel.preferences)
+        list("Working style", candidate.before.ownerModel.workingStyle, candidate.after.ownerModel.workingStyle)
+        list("Owner preferences", candidate.before.ownerModel.preferences, candidate.after.ownerModel.preferences)
+        list("Habits", candidate.before.ownerModel.habits, candidate.after.ownerModel.habits)
+        list("Trusted tools", candidate.before.ownerModel.trustedTools, candidate.after.ownerModel.trustedTools)
+        list("Recurring choices", candidate.before.ownerModel.recurringChoices, candidate.after.ownerModel.recurringChoices)
+        map("Learned facts", candidate.before.ownerModel.learnedFacts, candidate.after.ownerModel.learnedFacts)
+        list("Vocabulary", mapToList(candidate.before.ownerModel.vocabulary), mapToList(candidate.after.ownerModel.vocabulary))
+        value("Sage identity", candidate.before.sageSelfModel.identity, candidate.after.sageSelfModel.identity)
+        list("Capabilities", candidate.before.sageSelfModel.capabilities, candidate.after.sageSelfModel.capabilities)
+        list("Limitations", candidate.before.sageSelfModel.limitations, candidate.after.sageSelfModel.limitations)
         list("Experiences", candidate.before.sageSelfModel.experiences, candidate.after.sageSelfModel.experiences)
-        projects("Projects", candidate.before.sharedContinuity.activeProjects, candidate.after.sharedContinuity.activeProjects)
+        map("Active projects", candidate.before.sharedContinuity.activeProjects, candidate.after.sharedContinuity.activeProjects)
         list("Decisions we keep", candidate.before.sharedContinuity.durableDecisions, candidate.after.sharedContinuity.durableDecisions)
         list("Current work", candidate.before.sharedContinuity.activeTasks, candidate.after.sharedContinuity.activeTasks)
         list("Lessons learned", candidate.before.sharedContinuity.lessonsLearned, candidate.after.sharedContinuity.lessonsLearned)
     }.trim()
+
+    private fun mapToList(map: Map<String, String>): List<String> = map.toSortedMap().map { (k, v) -> "$k = $v" }
 
     private fun StringBuilder.value(label: String, before: String, after: String) {
         if (before == after) return
@@ -45,6 +56,16 @@ object SageCorePreviewText {
         appendLines(before)
         appendLine("After:")
         appendLines(after)
+        appendLine()
+    }
+
+    private fun StringBuilder.map(label: String, before: Map<String, String>, after: Map<String, String>) {
+        if (before == after) return
+        appendLine("# $label")
+        appendLine("Before:")
+        appendLines(mapToList(before))
+        appendLine("After:")
+        appendLines(mapToList(after))
         appendLine()
     }
 
