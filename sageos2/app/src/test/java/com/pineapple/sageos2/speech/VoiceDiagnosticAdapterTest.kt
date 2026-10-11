@@ -124,6 +124,7 @@ class VoiceDiagnosticAdapterTest {
             .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true))
 
         port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        context.acknowledgeStop(); idle()
         assertTrue("wake-triggered command uses existing tail protection", recognizer().lastIntent!!
             .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false))
 
@@ -150,6 +151,18 @@ class VoiceDiagnosticAdapterTest {
         assertEquals(listOf(12L to 6L), readyCommands)
     }
 
+    @Test fun wakeCommandAlsoWaitsForRemoteStopAcknowledgement() {
+        // Wake acknowledgement speech has completed; the isolated wake process may still
+        // be releasing its microphone. Wake-origin commands must obey the same barrier.
+        port.setListening(SageListeningMode.OFF, 2, 0); idle()
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = true); idle()
+        assertNull("wake-triggered command must wait for the isolated process",
+            ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        context.acknowledgeStop(); idle()
+        assertTrue(recognizer().lastIntent!!.getBooleanExtra(
+            SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false))
+    }
+
     @Test fun missingManualTalkStopAckFailsClosedWithoutOpeningRecognizer() {
         port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
         assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
@@ -167,6 +180,7 @@ class VoiceDiagnosticAdapterTest {
         assertEquals(listOf(11L to 3L), readyCommands)
 
         port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        context.acknowledgeStop(); idle()
         previous.onReadyForSpeech(null)
         assertEquals("old callback must not activate current UI", listOf(11L to 3L), readyCommands)
         val current = recognizer().callback!!
