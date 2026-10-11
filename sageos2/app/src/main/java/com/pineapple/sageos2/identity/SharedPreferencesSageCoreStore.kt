@@ -30,7 +30,7 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     fun currentStatus(): SageCoreCurrentStatus {
         if (!currentPresent()) return SageCoreCurrentStatus.MISSING
         val raw = currentRaw() ?: return SageCoreCurrentStatus.INVALID
-        return if (runCatching { decode(raw) }.isSuccess) SageCoreCurrentStatus.VALID
+        return if (isAuthenticRecord(raw, null)) SageCoreCurrentStatus.VALID
         else SageCoreCurrentStatus.INVALID
     }
 
@@ -41,7 +41,23 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
 
     /** Decoded `current` only when it is genuinely valid; null for missing or damaged. */
     fun currentValidOrNull(): SageCoreSnapshot? =
-        currentRaw()?.let { raw -> runCatching { decode(raw) }.getOrNull() }
+        currentRaw()?.takeIf { isAuthenticRecord(it, null) }?.let { raw -> runCatching { decode(raw) }.getOrNull() }
+
+    /**
+     * Whether raw bytes represent an authentic saved snapshot rather than a permissively-decoded
+     * skeleton. A real record must be a JSON object with a strictly positive revision and a genuine
+     * nonblank identity. When [expectedKeyRevision] is provided (a `revision_<n>` slot), the embedded
+     * revision must match the slot so a forged or copied record cannot masquerade as that revision.
+     */
+    private fun isAuthenticRecord(raw: String, expectedKeyRevision: Long?): Boolean {
+        val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return false
+        if (!obj.has("revision")) return false
+        val revision = obj.optLong("revision", 0L)
+        if (revision <= 0L) return false
+        if (expectedKeyRevision != null && revision != expectedKeyRevision) return false
+        if (!obj.has("twinIdentity")) return false
+        return obj.optString("twinIdentity", "").trim().isNotEmpty()
+    }
 
     /**
      * Safe read for ordinary callers. A damaged or missing record returns the canonical Sage
@@ -52,6 +68,10 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
 
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
         runCatching { recoverPendingWrite() }
+        // Never silently destroy an unreadable `current` record. Before promoting anything, retain the
+        // original raw bytes (whatever their type) under a durable forensic key so the owner can still
+        // recover the damaged data even after an ordinary save.
+        if (currentStatus() == SageCoreCurrentStatus.INVALID) preserveDamagedCurrent()
         val revision = nextRevision(next.revision)
         val saved = next.copy(revision = revision)
         val encoded = encode(saved)
@@ -66,8 +86,29 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         saved
     }
 
+    /** Durably retain a damaged `current` value (any type) before it is ever replaced. */
+    private fun preserveDamagedCurrent() {
+        val raw: Any = runCatching { prefs.all[KEY_CURRENT] }.getOrNull() ?: return
+        val index = runCatching { prefs.getInt(KEY_FORENSIC_COUNT, 0) }.getOrDefault(0) + 1
+        val key = "$FORENSIC_PREFIX$index"
+        val editor = prefs.edit()
+            .putInt(KEY_FORENSIC_COUNT, index)
+            .putString("$key.type", raw.javaClass.simpleName)
+            .putLong("$key.at", System.currentTimeMillis())
+        when (raw) {
+            is String -> editor.putString(key, raw)
+            is Int -> editor.putInt(key, raw)
+            is Long -> editor.putLong(key, raw)
+            is Float -> editor.putFloat(key, raw)
+            is Boolean -> editor.putBoolean(key, raw)
+            is Set<*> -> @Suppress("UNCHECKED_CAST") editor.putStringSet(key, raw.map { it.toString() }.toSet())
+            else -> editor.putString(key, raw.toString())
+        }
+        check(editor.commit()) { "Sage Core forensic backup failed" }
+    }
+
     fun revision(revision: Long): SageCoreSnapshot? =
-        historyRaw(revision)?.let { runCatching { decode(it) }.getOrNull() }
+        historyRaw(revision)?.takeIf { isAuthenticRecord(it, revision) }?.let { runCatching { decode(it) }.getOrNull() }
 
     /** Raw bytes of an immutable snapshot, for digests/previews. Never mutates. */
     fun historyRaw(revision: Long): String? =
@@ -77,14 +118,25 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
      * Restore the *content* of an earlier snapshot as a brand-new, higher revision. The source
      * snapshot is left byte-for-byte intact.
      */
-    fun restore(revision: Long): SageCoreSnapshot? = locked {
-        val source = revision(revision) ?: return@locked null
+    fun restore(revision: Long): SageCoreSnapshot? = restore(revision, null, null)
+
+    /**
+     * Owner-approved restore bound to the exact preview the owner saw. When [expectedDigest] or
+     * [expectedTargetRevision] is supplied and no longer matches, nothing is written and null is
+     * returned, so a candidate that changed after review can never be applied by a stale confirmation.
+     */
+    fun restore(revision: Long, expectedDigest: String?, expectedTargetRevision: Long?): SageCoreSnapshot? = locked {
+        val raw = historyRaw(revision) ?: return@locked null
+        if (!isAuthenticRecord(raw, revision)) return@locked null
+        if (expectedDigest != null && sageCoreSha256(raw) != expectedDigest) return@locked null
+        val source = runCatching { decode(raw) }.getOrNull() ?: return@locked null
+        if (expectedTargetRevision != null && nextRevision(source.revision) != expectedTargetRevision) return@locked null
         replace(source)
     }
 
-    /** Every `revision_<n>` key that currently decodes to a valid snapshot, sorted ascending. */
+    /** Every `revision_<n>` key that currently holds an authentic snapshot, sorted ascending. */
     fun validRevisions(): List<Long> = revisionKeys()
-        .filter { r -> historyRaw(r)?.let { runCatching { decode(it) }.isSuccess } == true }
+        .filter { r -> historyRaw(r)?.let { isAuthenticRecord(it, r) } == true }
         .sorted()
 
     /** Highest verified valid revision across history and a valid current. */
@@ -109,6 +161,7 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     /** Compute the safe preview of restoring a stored revision, without writing anything. */
     fun previewRestore(revision: Long): SageCoreRestorePreview? {
         val raw = historyRaw(revision) ?: return null
+        if (!isAuthenticRecord(raw, revision)) return null
         val candidate = runCatching { decode(raw) }.getOrNull() ?: return null
         return previewOf("stored snapshot v$revision", raw, candidate)
     }
@@ -119,30 +172,65 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         return SageCoreRestorePreview(
             sourceLabel = sourceLabel,
             sourceRevision = candidate.revision,
-            sourceDigest = sha256(raw),
-            targetRevision = nextRevision(candidate.revision),
+            sourceDigest = sageCoreSha256(raw),
+            targetRevision = previewTargetRevision(candidate.revision),
             changedFields = changedTopLevelFields(current, candidate),
             fieldCounts = fieldCounts(candidate)
         )
     }
 
     /**
-     * Roll a torn two-phase write forward. Idempotent: safe to call on every open and on retry.
+     * Build an owner-facing restoration candidate carrying the actual before/after snapshots. This is
+     * private to the device and must never be logged, exported, or placed in diagnostics. The digest
+     * and target revision returned here bind the later confirmation to exactly what was reviewed.
+     */
+    fun candidateForRestore(revision: Long): SageCoreRestoreCandidate? {
+        val raw = historyRaw(revision) ?: return null
+        if (!isAuthenticRecord(raw, revision)) return null
+        val after = runCatching { decode(raw) }.getOrNull() ?: return null
+        val before = currentValidOrNull() ?: EmptySageCoreProvider.current()
+        return SageCoreRestoreCandidate(
+            sourceLabel = "saved snapshot version $revision",
+            sourceRevision = revision,
+            targetRevision = previewTargetRevision(after.revision),
+            sourceDigest = sageCoreSha256(raw),
+            before = before,
+            after = after,
+            changedFields = changedTopLevelFields(currentValidOrNull(), after)
+        )
+    }
+
+    /** The revision a snapshot restore/import would be written as right now, without writing. */
+    fun previewTargetRevision(incoming: Long): Long = locked { nextRevision(incoming) }
+
+    internal fun changedTopLevelFieldsOf(current: SageCoreSnapshot?, candidate: SageCoreSnapshot): List<String> =
+        changedTopLevelFields(current, candidate)
+
+    /**
+     * Roll a torn two-phase write forward, but only when the journal is an authentic record and its
+     * bytes exactly match the immutable `revision_<n>` snapshot it claims to complete. A journal that
+     * is unreadable or inconsistent with history fails closed: both raw entries are preserved for
+     * diagnosis and nothing is promoted. Idempotent and safe to call on every open and on retry.
      * Returns true only when `current` was actually advanced from the journal.
      */
     fun recoverPendingWrite(): Boolean = locked {
         val journalRaw = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull() ?: return@locked false
-        val journal = runCatching { decode(journalRaw) }.getOrNull()
-        if (journal == null) {
-            prefs.edit().remove(KEY_JOURNAL).commit()
+        val journal = journalRaw.takeIf { isAuthenticRecord(it, null) }
+            ?.let { runCatching { decode(it) }.getOrNull() }
+            ?: return@locked false
+        val historyForKey = historyRaw(journal.revision)
+        if (historyForKey == null || historyForKey != journalRaw) {
+            // Inconsistent journal/history: leave both untouched for diagnosis, promote nothing.
             return@locked false
         }
         val currentValid = currentValidOrNull()
         if (currentValid == null || journal.revision > currentValid.revision) {
-            prefs.edit().putString(KEY_CURRENT, journalRaw).remove(KEY_JOURNAL).commit()
+            check(prefs.edit().putString(KEY_CURRENT, journalRaw).remove(KEY_JOURNAL).commit()) {
+                "Sage Core journal roll-forward failed"
+            }
             true
         } else {
-            prefs.edit().remove(KEY_JOURNAL).commit()
+            check(prefs.edit().remove(KEY_JOURNAL).commit()) { "Sage Core journal clear failed" }
             false
         }
     }
@@ -155,8 +243,9 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
             val match = REVISION_KEY.matchEntire(key) ?: return@forEach
             val number = match.groupValues[1].toLongOrNull() ?: return@forEach
             usedKeys += number
-            historyRaw(number)?.let { raw -> runCatching { decode(raw) }.getOrNull() }
-                ?.let { maxVerified = maxOf(maxVerified, it.revision, number) }
+            historyRaw(number)?.takeIf { isAuthenticRecord(it, number) }?.let { raw ->
+                runCatching { decode(raw) }.getOrNull()
+            }?.let { maxVerified = maxOf(maxVerified, it.revision, number) }
         }
         var candidate = maxOf(maxVerified, incoming) + 1
         while (candidate in usedKeys) candidate++
@@ -297,6 +386,8 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         private const val PREFS = "sage_core_v2"
         private const val KEY_CURRENT = "current"
         private const val KEY_JOURNAL = "write_journal"
+        private const val KEY_FORENSIC_COUNT = "forensic_damaged_current_count"
+        private const val FORENSIC_PREFIX = "forensic_damaged_current_"
         private val REVISION_KEY = Regex("revision_(\\d+)")
 
         val TOP_LEVEL_FIELDS = listOf(
@@ -308,13 +399,14 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         private val WRITE_LOCK = Any()
     }
 
-    private fun sha256(value: String): String =
-        MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") {
-            String.format(Locale.US, "%02x", it.toInt() and 0xff)
-        }
-
     private fun <T> locked(block: () -> T): T = synchronized(WRITE_LOCK) { block() }
 }
+
+/** Stable SHA-256 hex helper shared across Core recovery and continuity binding. */
+internal fun sageCoreSha256(value: String): String =
+    MessageDigest.getInstance("SHA-256").digest(value.toByteArray(Charsets.UTF_8)).joinToString("") {
+        String.format(Locale.US, "%02x", it.toInt() and 0xff)
+    }
 
 enum class SageCoreCurrentStatus { MISSING, VALID, INVALID }
 
@@ -334,4 +426,28 @@ data class SageCoreRestorePreview(
         append("; digest ").append(sourceDigest.take(12))
         append("; fields changing: ").append(if (changedFields.isEmpty()) "none" else changedFields.joinToString())
     }
+}
+
+/**
+ * Owner-facing restoration candidate that carries the actual before/after identity so the owner can
+ * read exactly what they are approving. This object holds private Core content and MUST stay on the
+ * device: it is never logged, exported, placed in diagnostics, or sent off-device. [toString] is
+ * deliberately redacted so accidental interpolation cannot leak identity text.
+ */
+class SageCoreRestoreCandidate internal constructor(
+    val sourceLabel: String,
+    val sourceRevision: Long,
+    val targetRevision: Long,
+    val sourceDigest: String,
+    val before: SageCoreSnapshot,
+    val after: SageCoreSnapshot,
+    val changedFields: List<String>
+) {
+    /** True only when this candidate is byte-identical to what the owner reviewed. */
+    fun matches(expectedDigest: String, expectedTargetRevision: Long): Boolean =
+        sourceDigest == expectedDigest && targetRevision == expectedTargetRevision
+
+    override fun toString(): String =
+        "SageCoreRestoreCandidate(source=$sourceLabel, digest=${sourceDigest.take(12)}, " +
+            "target=$targetRevision, fields=${changedFields.size})"
 }

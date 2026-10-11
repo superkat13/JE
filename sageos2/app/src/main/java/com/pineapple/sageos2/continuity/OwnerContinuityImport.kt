@@ -165,10 +165,19 @@ class OwnerContinuityImporter(
 
     @Synchronized
     fun import(raw: String, nowMs: Long = System.currentTimeMillis()): OwnerContinuityImportResult {
+        // Validate the whole package before any mutation so a malformed package can never leave a
+        // partial write or a stray pending marker behind.
         val incoming = OwnerContinuityCodec.decode(raw)
         val digest = sha256(raw.trim())
         if (prefs.getBoolean("digest_$digest", false)) {
             return OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
+        }
+
+        // Durable intent marker. If the process dies after this point, the work below is idempotent
+        // (core merge is additive/distinct and memories upsert by subject+key), so a retry safely
+        // finishes the same import instead of double-applying it.
+        check(prefs.edit().putBoolean("pending_$digest", true).commit()) {
+            "could not record pending owner continuity import"
         }
 
         val current = core.current()
@@ -187,11 +196,14 @@ class OwnerContinuityImporter(
             )
         }
 
-        prefs.edit()
-            .putBoolean("digest_$digest", true)
-            .putString("source_$digest", incoming.source)
-            .putLong("imported_at_$digest", nowMs)
-            .commit()
+        check(
+            prefs.edit()
+                .putBoolean("digest_$digest", true)
+                .putString("source_$digest", incoming.source)
+                .putLong("imported_at_$digest", nowMs)
+                .remove("pending_$digest")
+                .commit()
+        ) { "could not finalize owner continuity import; it will retry safely on the next attempt" }
 
         return OwnerContinuityImportResult(
             source = incoming.source,
@@ -200,6 +212,16 @@ class OwnerContinuityImporter(
             memoriesApplied = incoming.memories.size
         )
     }
+
+    /** True when a prior import of this exact package was started but never finalized. */
+    fun hasPending(digest: String): Boolean = prefs.getBoolean("pending_$digest", false)
+
+    /** Count of imports that started but never finalized, for honest self-care/diagnostics. */
+    fun pendingImportCount(): Int =
+        runCatching { prefs.all.keys.count { it.startsWith("pending_") && prefs.getBoolean(it, false) } }.getOrDefault(0)
+
+    /** Digest used to key import markers, exposed so callers can query pending state. */
+    fun digestOf(raw: String): String = sha256(raw.trim())
 
     private fun sha256(value: String): String {
         val digest = MessageDigest.getInstance("SHA-256").digest(value.toByteArray(StandardCharsets.UTF_8))

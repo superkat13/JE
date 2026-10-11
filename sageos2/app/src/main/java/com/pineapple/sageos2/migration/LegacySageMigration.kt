@@ -6,7 +6,6 @@ import com.pineapple.sageos2.apps.SharedPreferencesOwnerAppRegistry
 import com.pineapple.sageos2.continuity.SharedPreferencesTaskContinuityStore
 import com.pineapple.sageos2.continuity.TaskCheckpoint
 import com.pineapple.sageos2.continuity.TaskState
-import com.pineapple.sageos2.identity.SageCoreCurrentStatus
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.memory.TwinMemoryRecord
@@ -115,32 +114,10 @@ class LegacySageMigration(
     }
 
     private fun importCore(): Boolean {
-        // Never auto-merge a legacy payload onto a damaged current record: the owner must review a
-        // real recovery candidate instead of having fallback identity silently written as "restored".
-        if (core.currentStatus() == SageCoreCurrentStatus.INVALID) return false
-        val legacy = appContext.getSharedPreferences(LEGACY_CORE_PREFS, Context.MODE_PRIVATE)
-        if (!legacy.contains(LEGACY_CORE_TEXT)) return false
-        val currentText = legacy.getString(LEGACY_CORE_TEXT, "").orEmpty().trim()
-        if (currentText.isEmpty()) return false
-
-        val markerText = "Imported Sage 1.33.3 owner instructions:"
-        if (core.current().notes.contains(markerText)) return false
-
-        val current = core.current()
-        val previousText = legacy.getString(LEGACY_CORE_PREVIOUS, "").orEmpty().trim()
-        if (current.revision == 0L && previousText.isNotEmpty() && previousText != currentText) {
-            core.replace(
-                current.copy(
-                    notes = mergeParagraphs(
-                        current.notes,
-                        "Imported previous Sage 1.33.3 Core revision:\n$previousText"
-                    )
-                )
-            )
-        }
-        val latest = core.current()
-        core.replace(latest.copy(notes = mergeParagraphs(latest.notes, "$markerText\n$currentText")))
-        return true
+        // Legacy Core text is NEVER auto-written. It is surfaced as a review-only recovery candidate
+        // (see LegacyCoreRecovery / SageCoreHealthReader) and only applied after explicit owner
+        // approval through the recovery UI. The genuine Sage 1.33.3 source preferences are left intact.
+        return false
     }
 
     private fun importMemories(nowMs: Long): Int {

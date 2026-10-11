@@ -179,15 +179,47 @@ class LegacyCoreRecovery(
 
     fun preview(): SageCoreRestorePreview? {
         val candidate = candidate() ?: return null
-        val merged = merge(base = store.currentValidOrNull() ?: EmptySageCoreProvider.current(), candidate)
+        val merged = merge(base = base(), candidate)
         return store.previewOf("legacy:${candidate.sourceKey}", candidate.text, merged)
     }
 
-    fun restore(): SageCoreSnapshot? {
+    /**
+     * Private, on-device before/after candidate carrying the real legacy identity text for the owner
+     * to read before approving. Never logged, exported, or sent off-device.
+     */
+    fun previewCandidate(): SageCoreRestoreCandidate? {
         val candidate = candidate() ?: return null
-        val merged = merge(base = store.currentValidOrNull() ?: EmptySageCoreProvider.current(), candidate)
+        val before = base()
+        val merged = merge(before, candidate)
+        return SageCoreRestoreCandidate(
+            sourceLabel = "legacy Sage 1.33.3 Core (${candidate.sourceKey})",
+            sourceRevision = merged.revision,
+            targetRevision = store.previewTargetRevision(merged.revision),
+            sourceDigest = legacyDigest(candidate),
+            before = before,
+            after = merged,
+            changedFields = store.changedTopLevelFieldsOf(store.currentValidOrNull(), merged)
+        )
+    }
+
+    fun restore(): SageCoreSnapshot? = restore(null, null)
+
+    /**
+     * Owner-approved legacy recovery bound to the exact preview the owner saw. A stale confirmation
+     * (candidate digest or target revision changed after review) writes nothing and returns null.
+     */
+    fun restore(expectedDigest: String?, expectedTargetRevision: Long?): SageCoreSnapshot? {
+        val candidate = candidate() ?: return null
+        val merged = merge(base = base(), candidate)
+        if (expectedDigest != null && legacyDigest(candidate) != expectedDigest) return null
+        if (expectedTargetRevision != null && store.previewTargetRevision(merged.revision) != expectedTargetRevision) return null
         return store.replace(merged)
     }
+
+    private fun base(): SageCoreSnapshot = store.currentValidOrNull() ?: EmptySageCoreProvider.current()
+
+    private fun legacyDigest(candidate: LegacyCoreCandidate): String =
+        sageCoreSha256("${candidate.sourceKey}\u0000${candidate.text}")
 
     private fun merge(base: SageCoreSnapshot, candidate: LegacyCoreCandidate): SageCoreSnapshot {
         val block = "${LegacyCoreSource.IMPORT_MARKER} (${candidate.sourceKey}):\n${candidate.text}"

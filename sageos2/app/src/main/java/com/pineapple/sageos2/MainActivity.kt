@@ -52,6 +52,8 @@ import com.pineapple.sageos2.mode.SageTone
 import com.pineapple.sageos2.runtime.SageRuntimeHost
 import com.pineapple.sageos2.runtime.SageRuntimeListener
 import com.pineapple.sageos2.identity.SageCoreCurrentStatus
+import com.pineapple.sageos2.identity.SageCorePreviewText
+import com.pineapple.sageos2.identity.SageCoreRestoreCandidate
 import com.pineapple.sageos2.speech.SharedPreferencesWakeProfileStore
 import com.pineapple.sageos2.speech.WakeProfile
 import com.pineapple.sageos2.workflow.ChickenTonightModule
@@ -517,21 +519,37 @@ open class MainActivity : Activity() {
 
         form.addView(Button(this).apply {
             text = "Save Sage's changes"
+            isEnabled = health.currentStatus != SageCoreCurrentStatus.INVALID
             setOnClickListener {
-                val saved = host.core.replace(
-                    host.core.current().copy(
-                        twinIdentity = identity.text.toString().trim(),
-                        principles = lines(principles.text.toString()),
-                        preferences = lines(preferences.text.toString()),
-                        selfRestrictions = lines(restrictions.text.toString()),
-                        notes = notes.text.toString().trim()
+                runCatching {
+                    host.core.replace(
+                        host.core.current().copy(
+                            twinIdentity = identity.text.toString().trim(),
+                            principles = lines(principles.text.toString()),
+                            preferences = lines(preferences.text.toString()),
+                            selfRestrictions = lines(restrictions.text.toString()),
+                            notes = notes.text.toString().trim()
+                        )
                     )
-                )
-                host.traces.record("owner_core", "Sage Core saved revision=${saved.revision}")
-                Toast.makeText(this@MainActivity, "Saved as version ${saved.revision}", Toast.LENGTH_SHORT).show()
-                showPanel(Panel.CORE)
+                }.onSuccess { saved ->
+                    host.traces.record("owner_core", "Sage Core saved revision=${saved.revision}")
+                    Toast.makeText(this@MainActivity, "Saved as version ${saved.revision}", Toast.LENGTH_SHORT).show()
+                    showPanel(Panel.CORE)
+                }.onFailure { error ->
+                    Toast.makeText(
+                        this@MainActivity,
+                        "Save failed and nothing was deleted: ${error.message ?: error::class.java.simpleName}",
+                        Toast.LENGTH_LONG
+                    ).show()
+                }
             }
         })
+        if (health.currentStatus == SageCoreCurrentStatus.INVALID) {
+            form.addView(TextView(this).apply {
+                text = "Saving is disabled while the current record is damaged. Review a saved snapshot or the legacy Core above, or restore an owner continuity package, then confirm. Your damaged record has been preserved for recovery."
+                textSize = 12f
+            })
+        }
         form.addView(Button(this).apply {
             text = "Restore the previous version"
             isEnabled = core.revision > 1
@@ -574,48 +592,56 @@ open class MainActivity : Activity() {
     }
 
     private fun showRestoreSnapshotDialog(revision: Long) {
-        val preview = host.previewSageCoreRestore(revision)
-        if (preview == null) {
+        val candidate = host.sageCoreRestoreCandidate(revision)
+        if (candidate == null) {
             Toast.makeText(this, "That snapshot could not be read", Toast.LENGTH_SHORT).show()
             return
         }
-        AlertDialog.Builder(this)
-            .setTitle("Restore saved snapshot")
-            .setMessage(
-                "Restore the intact snapshot from version $revision as a new version. " +
-                    "Every existing version is kept and nothing is deleted.\n\n${preview.safeSummary()}"
-            )
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Restore") { _, _ ->
-                val restored = host.restoreSageCoreRevision(revision)
-                Toast.makeText(
-                    this,
-                    if (restored != null) "Restored as version ${restored.revision}" else "Restore failed; nothing changed",
-                    Toast.LENGTH_LONG
-                ).show()
-                showPanel(Panel.CORE)
-            }
-            .show()
+        showCorePreviewDialog(candidate) { digest, targetRevision ->
+            host.restoreSageCoreRevision(revision, digest, targetRevision)
+        }
     }
 
     private fun showLegacyCoreDialog() {
-        val preview = host.previewLegacyCoreRestore()
-        if (preview == null) {
+        val candidate = host.legacyCoreRestoreCandidate()
+        if (candidate == null) {
             Toast.makeText(this, "No readable legacy Core source", Toast.LENGTH_SHORT).show()
             return
         }
+        showCorePreviewDialog(candidate) { digest, targetRevision ->
+            host.restoreLegacyCore(digest, targetRevision)
+        }
+    }
+
+    /**
+     * Private on-device review of the exact owner-authored identity that a restore would apply. The
+     * content is shown only here, never logged or copied to diagnostics, and the confirmation is bound
+     * to the previewed candidate so a candidate that changed after review cannot be applied.
+     */
+    private fun showCorePreviewDialog(
+        candidate: SageCoreRestoreCandidate,
+        apply: (digest: String, targetRevision: Long) -> com.pineapple.sageos2.identity.SageCoreSnapshot?
+    ) {
+        val previewText = TextView(this).apply {
+            text = SageCorePreviewText.render(candidate)
+            textSize = 13f
+            setTextIsSelectable(true)
+        }
+        val scrollView = ScrollView(this).apply {
+            setPadding(dp(18), 0, dp(18), 0)
+            addView(previewText)
+        }
         AlertDialog.Builder(this)
-            .setTitle("Restore legacy 1.33.3 Core")
-            .setMessage(
-                "Import the owner-authored Sage 1.33.3 Core as a new version. Existing versions are kept and " +
-                    "the legacy source is left untouched.\n\n${preview.safeSummary()}"
-            )
+            .setTitle("Review restored identity")
+            .setMessage("This is exactly what will change. Nothing is deleted; every earlier version is kept.")
+            .setView(scrollView)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Restore") { _, _ ->
-                val restored = host.restoreLegacyCore()
+                val restored = apply(candidate.sourceDigest, candidate.targetRevision)
                 Toast.makeText(
                     this,
-                    if (restored != null) "Recovered as version ${restored.revision}" else "No readable legacy Core source",
+                    if (restored != null) "Restored as version ${restored.revision}"
+                    else "Nothing changed. The candidate changed since you reviewed it, or it could not be read. Please review again.",
                     Toast.LENGTH_LONG
                 ).show()
                 showPanel(Panel.CORE)

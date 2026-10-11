@@ -50,6 +50,7 @@ import com.pineapple.sageos2.identity.LegacyCoreSource
 import com.pineapple.sageos2.identity.SageCoreCurrentStatus
 import com.pineapple.sageos2.identity.SageCoreHealth
 import com.pineapple.sageos2.identity.SageCoreHealthReader
+import com.pineapple.sageos2.identity.SageCoreRestoreCandidate
 import com.pineapple.sageos2.identity.SageCoreRestorePreview
 import com.pineapple.sageos2.identity.SageCoreSnapshot
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
@@ -383,18 +384,31 @@ class SageRuntimeHost private constructor(context: Context) {
 
     fun previewLegacyCoreRestore(): SageCoreRestorePreview? = legacyCoreRecovery.preview()
 
-    /** Owner-approved restore of an intact stored snapshot as a new revision. Never silent. */
-    fun restoreSageCoreRevision(revision: Long): SageCoreSnapshot? {
-        val restored = core.restore(revision) ?: return null
+    /** Private on-device before/after candidate for the owner to read. Never logged or exported. */
+    fun sageCoreRestoreCandidate(revision: Long): SageCoreRestoreCandidate? = core.candidateForRestore(revision)
+
+    fun legacyCoreRestoreCandidate(): SageCoreRestoreCandidate? = legacyCoreRecovery.previewCandidate()
+
+    /**
+     * Owner-approved restore of an intact stored snapshot as a new revision. When a preview digest and
+     * target revision are supplied, the write is bound to exactly that reviewed candidate; a stale
+     * confirmation changes nothing.
+     */
+    fun restoreSageCoreRevision(
+        revision: Long,
+        expectedDigest: String? = null,
+        expectedTargetRevision: Long? = null
+    ): SageCoreSnapshot? {
+        val restored = core.restore(revision, expectedDigest, expectedTargetRevision) ?: return null
         traces.record("owner_core", "owner-approved restore from revision=$revision as revision=${restored.revision}")
         runCatching { runSelfCareCheck() }
             .onFailure { traces.record("self_care", "post-core-restore check failed: ${it.message ?: it::class.java.simpleName}") }
         return restored
     }
 
-    /** Owner-approved recovery from a Sage 1.33.3 legacy Core (current or previous-only). */
-    fun restoreLegacyCore(): SageCoreSnapshot? {
-        val restored = legacyCoreRecovery.restore() ?: return null
+    /** Owner-approved recovery from a Sage 1.33.3 legacy Core (current or previous-only), bound to preview. */
+    fun restoreLegacyCore(expectedDigest: String? = null, expectedTargetRevision: Long? = null): SageCoreSnapshot? {
+        val restored = legacyCoreRecovery.restore(expectedDigest, expectedTargetRevision) ?: return null
         traces.record("owner_core", "owner-approved legacy Core recovery as revision=${restored.revision}")
         runCatching { runSelfCareCheck() }
             .onFailure { traces.record("self_care", "post-legacy-core-recovery check failed: ${it.message ?: it::class.java.simpleName}") }
