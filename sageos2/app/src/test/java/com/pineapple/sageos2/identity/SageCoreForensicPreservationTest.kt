@@ -92,7 +92,6 @@ class SageCoreForensicPreservationTest {
         // Should not overwrite forensic_damaged_current_2; should advance to 3
         assertEquals(3, corePrefs().getInt("forensic_damaged_current_count", -1))
         assertEquals(damaged1, corePrefs().getString("forensic_damaged_current_1", null))
-        assertEquals(damaged2, corePrefs().getString("forensic_damaged_current_2", null))
         assertEquals("occupied", corePrefs().getString("forensic_damaged_current_2", null))
         assertEquals(damaged2, corePrefs().getString("forensic_damaged_current_3", null))
     }
