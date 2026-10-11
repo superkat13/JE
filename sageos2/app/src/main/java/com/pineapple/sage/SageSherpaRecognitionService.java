@@ -183,7 +183,11 @@ public final class SageSherpaRecognitionService extends RecognitionService {
         // has been stopped and acknowledged, so it must not discard the wake tail below.
         boolean diagnosticCapture = intent != null
                 && intent.getBooleanExtra(com.pineapple.sageos2.speech.SageSpeechIntents.EXTRA_DIAGNOSTIC_CAPTURE, false);
-        CommandSpeechTurnState state = new CommandSpeechTurnState(callback, diagnosticCapture);
+        // A normal recognizer intent must declare whether there was a wake-word handoff.
+        // Unmarked/legacy intents retain the previous tail discard; diagnosed captures never do.
+        boolean wakeTailPresent = intent == null || intent.getBooleanExtra(
+                com.pineapple.sageos2.speech.SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true);
+        CommandSpeechTurnState state = new CommandSpeechTurnState(callback, diagnosticCapture, wakeTailPresent);
         if (!claimDeviceFor(state)) {
             emitError(callback, SpeechRecognizer.ERROR_RECOGNIZER_BUSY);
             return;
@@ -375,12 +379,13 @@ public final class SageSherpaRecognitionService extends RecognitionService {
             // results. Discarding the first few reads removes it. This is deliberately not fed to
             // the recognizer at all, so it cannot consume the utterance budget.
             //
-            // A diagnostic capture has no wake tail to remove: the wake engine was stopped and its
-            // stop acknowledged before this recognizer opened, so the first read is the start of the
-            // owner's own phrase. Its tail discard is therefore zero, and this is the point the
-            // prefix loss was fixed — the onset is fed to the recognizer from the first frame.
+            // A diagnostic, manual Talk, or follow-up capture has no wake phrase to remove.
+            // Their intents suppress this discard so the owner's very first audio frame is kept.
+            // A wake-triggered command keeps the tail removal, and an unmarked legacy intent
+            // retains the prior behaviour until the caller supplies explicit provenance.
             int tailDiscardChunks = state.tailDiscardChunks(WAKE_TAIL_DISCARD_CHUNKS);
             Log.i(DIAG_TAG, "turn[tailDiscard] diagnostic=" + state.getDiagnosticCapture()
+                    + " wakeTailPresent=" + state.getWakeTailPresent()
                     + " chunks=" + tailDiscardChunks);
             short[] discard = new short[READ_SAMPLES];
             int discarded = 0;

@@ -562,6 +562,41 @@ class SageSherpaRecognitionServiceLifecycleTest {
         joinWorker()
     }
 
+    /**
+     * Drive production RecognitionService.onStartListening rather than a synthetic policy object.
+     * A normal turn with explicit non-wake provenance must not discard manual Talk's first audio.
+     */
+    @Test fun markedManualTurnSuppressesWakeTailDiscardInRealAdmission() {
+        fakeSherpaReady()
+        val manual = newCallback(service)
+        val intent = android.content.Intent().putExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false)
+        synchronized(recognizerLock()) {
+            onStartListening(manual, intent)
+            val state = liveTurnOrNull()
+            assertNotNull("manual command must be admitted", state)
+            assertFalse(state!!.diagnosticCapture)
+            assertFalse(state.wakeTailPresent)
+            assertEquals(0, state.tailDiscardChunks(4))
+        }
+        joinWorker()
+    }
+
+    /** Explicitly wake-triggered turns retain the previously calibrated wake-tail discard. */
+    @Test fun markedWakeTurnRetainsWakeTailDiscardInRealAdmission() {
+        fakeSherpaReady()
+        val wake = newCallback(service)
+        val intent = android.content.Intent().putExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true)
+        synchronized(recognizerLock()) {
+            onStartListening(wake, intent)
+            val state = liveTurnOrNull()
+            assertNotNull("wake command must be admitted", state)
+            assertFalse(state!!.diagnosticCapture)
+            assertTrue(state.wakeTailPresent)
+            assertEquals(4, state.tailDiscardChunks(4))
+        }
+        joinWorker()
+    }
+
     // ---- exactly one terminal outcome --------------------------------------------------------
 
     /**

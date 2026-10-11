@@ -1,10 +1,61 @@
 package com.pineapple.sageos2.core
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageTurnCoordinatorTest {
+    @Test fun captureProvenanceSeparatesManualTalkWakeAndFollowUp() {
+        val manual = SageTurnCoordinator()
+        manual.handle(SageEvent.Start)
+        val manualEffects = manual.handle(SageEvent.PushToTalkRequested)
+        val manualCapture = manualEffects.filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.COMMAND, manualCapture.mode)
+        assertFalse("pressing Talk has no wake audio tail", manualCapture.wakeTailPresent)
+
+        val wake = SageTurnCoordinator()
+        wake.handle(SageEvent.Start)
+        wake.handle(SageEvent.WakeDetected(wake.snapshot().recognizerGeneration))
+        val id = wake.snapshot().activeTurnId
+        val cmd = wake.handle(SageEvent.WakeAcknowledgementSpoken(id))
+            .filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.COMMAND, cmd.mode)
+        assertTrue("a wake-triggered command keeps existing tail policy", cmd.wakeTailPresent)
+
+        val generation = wake.snapshot().recognizerGeneration
+        wake.handle(SageEvent.TranscriptFinal(id, generation, "hello"))
+        wake.handle(SageEvent.ResponseReady(id, "hi", true))
+        wake.handle(SageEvent.SpeechFinished(id))
+        val follow = wake.handle(SageEvent.EchoGuardElapsed(id))
+            .filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.FOLLOW_UP, follow.mode)
+        assertFalse("a follow-up is not a wake-phrase handoff", follow.wakeTailPresent)
+    }
+
+    @Test fun recognizerReadyIsScopedToCurrentTurnAndGeneration() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val s1 = c.snapshot()
+        assertFalse(s1.commandRecognizerReady)
+        c.handle(SageEvent.CommandRecognizerReady(s1.activeTurnId, s1.recognizerGeneration))
+        assertTrue(c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.CommandRecognizerReady(s1.activeTurnId, s1.recognizerGeneration))
+        assertTrue(c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.RecognitionFailed(s1.activeTurnId, s1.recognizerGeneration, 7))
+        assertFalse("speech is no longer captured after failure", c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.SpeechFinished(s1.activeTurnId))
+        c.handle(SageEvent.EchoGuardElapsed(s1.activeTurnId))
+        c.handle(SageEvent.PushToTalkRequested)
+        val s2 = c.snapshot()
+        assertFalse(s2.commandRecognizerReady)
+        c.handle(SageEvent.CommandRecognizerReady(s1.activeTurnId, s1.recognizerGeneration))
+        assertFalse("stale readiness must not activate a new capture", c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.CommandRecognizerReady(s2.activeTurnId, s2.recognizerGeneration))
+        assertTrue(c.snapshot().commandRecognizerReady)
+    }
+
     @Test fun wakeFlowSaysYesThenListensForCommand() {
         val c = SageTurnCoordinator(); c.handle(SageEvent.Start)
         val g = c.snapshot().recognizerGeneration
@@ -113,6 +164,24 @@ class SageTurnCoordinatorTest {
         assertEquals(SageRuntimeState.FOLLOW_UP_LISTENING, c.snapshot().state)
         c.handle(SageEvent.FollowUpExpired(turn))
         assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+    }
+
+    @Test fun microphoneHandoffFailureExplainsItWasNeverReady() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        c.handle(SageEvent.PushToTalkRequested)
+        val turn = c.snapshot().activeTurnId
+        val generation = c.snapshot().recognizerGeneration
+        assertFalse(c.snapshot().commandRecognizerReady)
+        val effects = c.handle(SageEvent.RecognitionFailed(turn, generation, 3))
+        assertTrue(effects.contains(SageEffect.Speak(
+            turn, "There was a microphone problem, so I couldn't hear you."
+        )))
+        assertEquals(SageRuntimeState.SPEAKING, c.snapshot().state)
+        assertFalse(c.snapshot().commandRecognizerReady)
+        c.handle(SageEvent.SpeechFinished(turn))
+        c.handle(SageEvent.EchoGuardElapsed(turn))
+        assertEquals(SageListeningMode.WAKE_ONLY, c.snapshot().listeningMode)
     }
 
     @Test fun recognitionFailureSpeaksOnceThenClosesToWakeWithoutListeningAgain() {

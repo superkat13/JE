@@ -27,6 +27,32 @@ class SageRuntimeTest {
         assertEquals(SageRuntimeState.ACKNOWLEDGING_WAKE, f.runtime.snapshot().state)
     }
 
+    @Test fun runtimeRoutesRealReadinessAndManualTalkProvenance() {
+        val f = Fixture()
+        f.runtime.start()
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        val capture = f.runtime.snapshot()
+        assertFalse(capture.commandRecognizerReady)
+        assertEquals(SageListeningMode.COMMAND, f.speech.lastCapture?.first)
+        assertFalse("manual Talk must keep first audio frames", f.speech.lastCapture!!.second)
+
+        f.speech.listener!!.onCommandRecognizerReady(capture.activeTurnId, capture.recognizerGeneration)
+        assertTrue(f.runtime.snapshot().commandRecognizerReady)
+        f.speech.listener!!.onRecognitionError(capture.activeTurnId, capture.recognizerGeneration, 7)
+        assertFalse(f.runtime.snapshot().commandRecognizerReady)
+        f.speech.listener!!.onCommandRecognizerReady(capture.activeTurnId, capture.recognizerGeneration)
+        assertFalse("late readiness cannot revive a failed turn", f.runtime.snapshot().commandRecognizerReady)
+    }
+
+    @Test fun runtimeRoutesWakeCommandProvenanceWithoutTouchingTypedTurns() {
+        val f = Fixture()
+        f.runtime.start()
+        f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
+        f.speech.completeLastSpeech()
+        assertEquals(SageListeningMode.COMMAND, f.speech.lastCapture?.first)
+        assertTrue("wake command preserves existing tail handling", f.speech.lastCapture!!.second)
+    }
+
     @Test fun savedWakeCommandUsesExistingFastActionPath() {
         val f = Fixture()
         f.runtime.start()
@@ -895,7 +921,11 @@ class SageRuntimeTest {
     private class FakeSpeech : SpeechPort {
         var listener: SpeechInputListener? = null; val spoken = mutableListOf<Pair<Long,String>>(); private var completion:(()->Unit)?=null
         override fun attach(listener: SpeechInputListener){this.listener=listener}
+        var lastCapture: Pair<SageListeningMode, Boolean>? = null
         override fun setListening(mode:SageListeningMode,generation:Long,turnId:Long)=Unit
+        override fun setListening(mode:SageListeningMode,generation:Long,turnId:Long,wakeTailPresent:Boolean) {
+            lastCapture = mode to wakeTailPresent
+        }
         override fun speak(turnId:Long,text:String,onComplete:()->Unit){spoken+=turnId to text; completion=onComplete}
         override fun speakTransient(text:String)=Unit
         fun completeLastSpeech(){val c=completion?:error("no speech"); completion=null; c()}

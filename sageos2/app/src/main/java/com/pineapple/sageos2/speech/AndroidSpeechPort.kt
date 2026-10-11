@@ -40,6 +40,9 @@ class AndroidSpeechPort(
     private var diagnosticReady = false
     private var diagnosticStopFailed = false
     private var cancelWakeBarrier: (() -> Unit)? = null
+    /** Ordinary Push-to-Talk also needs to wait for the isolated wake microphone to stop. */
+    private var cancelCommandWakeBarrier: (() -> Unit)? = null
+    private var commandWakeBarrierEpoch = 0L
     private var waitingCapture: (() -> Unit)? = null
     private var speechActive = false
     private val deferredSpeech = java.util.ArrayDeque<PendingSpeech>()
@@ -50,6 +53,8 @@ class AndroidSpeechPort(
     private var desiredMode = SageListeningMode.OFF
     private var generation = 0L
     private var turnId = 0L
+    /** Capture provenance for this exact listening generation, not for a previous wake event. */
+    private var wakeTailPresent = true
     private var destroyed = false
 
     init {
@@ -70,19 +75,32 @@ class AndroidSpeechPort(
         if (Looper.myLooper() == main.looper) action() else main.post { action() }
     }
 
-    override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long) {
+    override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long) =
+        setListening(mode, generation, turnId, wakeTailPresent = true)
+
+    override fun setListening(mode: SageListeningMode, generation: Long, turnId: Long, wakeTailPresent: Boolean) {
         onMain {
             if (destroyed) return@onMain
+            val leavingWakeOnly = this.desiredMode == SageListeningMode.WAKE_ONLY
             this.desiredMode = mode
             this.generation = generation
             this.turnId = turnId
+            this.wakeTailPresent = wakeTailPresent
             if (diagnosticOwner != null) return@onMain
             stopInput()
             localFallbackAttempted = false
             when (mode) {
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
-                SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
+                SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> {
+                    if (mode == SageListeningMode.COMMAND && wakeWordEngine is RemoteWakeWordEngine &&
+                        (leavingWakeOnly || wakeTailPresent)) {
+                        // RemoteWakeWordEngine.stop() only queues an IPC message; it does not
+                        // release the other process's AudioRecord before returning. Normal Talk
+                        // must not open a second microphone until that remote stop is confirmed.
+                        awaitCommandWakeStop(mode, turnId, generation)
+                    } else startRecognition(turnId, generation)
+                }
             }
         }
     }
@@ -245,6 +263,10 @@ class AndroidSpeechPort(
             putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, false)
             putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, true)
             putExtra(RecognizerIntent.EXTRA_MAX_RESULTS, 3)
+            // Only a true wake-triggered command may discard wake-tail audio. Ordinary Talk and
+            // follow-up turns keep all samples, even their first 400ms.
+            putExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT,
+                this@AndroidSpeechPort.wakeTailPresent && desiredMode == SageListeningMode.COMMAND)
         }
         try { recognizer?.startListening(intent) }
         catch (t: Throwable) {
@@ -284,9 +306,35 @@ class AndroidSpeechPort(
     }
 
     private fun stopInput() {
+        // A mode change, new turn, TTS or shutdown invalidates any delayed STOP reply.
+        commandWakeBarrierEpoch++
+        cancelCommandWakeBarrier?.invoke()
+        cancelCommandWakeBarrier = null
         try { wakeWordEngine.stop() } catch (_: Throwable) {}
         sessions.invalidate()
         try { recognizer?.cancel() } catch (_: Throwable) {}
+    }
+
+    private fun awaitCommandWakeStop(mode: SageListeningMode, expectedTurn: Long, expectedGeneration: Long) {
+        val epoch = ++commandWakeBarrierEpoch
+        val cancel = awaitRemoteWakeStop { stopped ->
+            if (destroyed || diagnosticOwner != null || epoch != commandWakeBarrierEpoch ||
+                desiredMode != mode || turnId != expectedTurn || generation != expectedGeneration) {
+                return@awaitRemoteWakeStop
+            }
+            cancelCommandWakeBarrier = null
+            if (stopped) {
+                startRecognition(expectedTurn, expectedGeneration)
+            } else {
+                // Fail closed. Do not silently capture with two services competing for the mic.
+                listener?.onSpeechDiagnostic("command microphone handoff failed or timed out")
+                listener?.onRecognitionError(expectedTurn, expectedGeneration, SpeechRecognizer.ERROR_AUDIO)
+            }
+        }
+        if (epoch == commandWakeBarrierEpoch && desiredMode == mode &&
+            generation == expectedGeneration && turnId == expectedTurn && !destroyed) {
+            cancelCommandWakeBarrier = cancel
+        } else cancel()
     }
 
     @SuppressLint("NewApi") // The only caller selects this branch after an explicit API 31 check.
@@ -347,7 +395,11 @@ class AndroidSpeechPort(
         override fun onError(error: Int) =
             handleRecognitionError(session, capturedTurnId, capturedGeneration, error)
         override fun onReadyForSpeech(params: Bundle?) {
+            if (destroyed || diagnosticOwner != null || !sessions.isCurrent(session) ||
+                capturedTurnId != turnId || capturedGeneration != generation ||
+                desiredMode !in setOf(SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP)) return
             listener?.onSpeechDiagnostic("command recognizer ready backend=$recognizerBackend")
+            listener?.onCommandRecognizerReady(capturedTurnId, capturedGeneration)
         }
         override fun onBeginningOfSpeech() {
             listener?.onSpeechDiagnostic("command recognizer speech began backend=$recognizerBackend")

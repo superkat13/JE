@@ -12,6 +12,8 @@ sealed interface SageEvent {
         val command: String? = null
     ) : SageEvent
     data class WakeAcknowledgementSpoken(val turnId: Long) : SageEvent
+    /** A genuine recognizer ready callback, tied to its owning turn and generation. */
+    data class CommandRecognizerReady(val turnId: Long, val recognizerGeneration: Long) : SageEvent
     data class TranscriptFinal(val turnId: Long, val recognizerGeneration: Long, val text: String) : SageEvent
     data class RecognitionFailed(val turnId: Long, val recognizerGeneration: Long, val code: Int) : SageEvent
     data class TextSubmitted(val text: String) : SageEvent

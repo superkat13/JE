@@ -26,7 +26,13 @@ class CommandSpeechTurnState(
      * clear. The command-turn tail discard exists only to remove that residue, and applying it here
      * would drop the first [tailDiscardChunks]-worth of the owner's own test phrase.
      */
-    val diagnosticCapture: Boolean = false
+    val diagnosticCapture: Boolean = false,
+    /**
+     * True only when the caller has a wake-word audio tail to clear. Absence of a provenance
+     * marker retains the old four-chunk behaviour for backwards compatibility; explicit
+     * push-to-talk and follow-up turns set this false to preserve speech onset.
+     */
+    val wakeTailPresent: Boolean = true
 ) {
 
     /**
@@ -81,9 +87,10 @@ class CommandSpeechTurnState(
     /**
      * How many leading audio reads this turn must discard before it is ready.
      *
-     * A command turn discards [commandTailChunks] to drop the residue of the just-finished wake
-     * phrase. A diagnostic capture discards none: the microphone was already idle, so every read
-     * belongs to the phrase being tested.
+     * Discard only when a wake-word tail is actually expected. Diagnostic captures never discard,
+     * even if an old caller supplies a wake-tail marker by mistake. The default for unmarked
+     * legacy command intents remains unchanged until callers explicitly describe their origin.
      */
-    fun tailDiscardChunks(commandTailChunks: Int): Int = if (diagnosticCapture) 0 else commandTailChunks
+    fun tailDiscardChunks(commandTailChunks: Int): Int =
+        if (diagnosticCapture || !wakeTailPresent) 0 else commandTailChunks
 }

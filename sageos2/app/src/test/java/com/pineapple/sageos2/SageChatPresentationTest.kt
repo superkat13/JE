@@ -47,6 +47,17 @@ class SageChatPresentationTest {
         assertNull(ui.waitingMessage)
     }
 
+    @Test fun voiceListeningCannotBeClaimedBeforeTheRecognizerIsReady() {
+        for (mode in listOf(SageRuntimeState.COMMAND_LISTENING, SageRuntimeState.FOLLOW_UP_LISTENING)) {
+            val waiting = SageChatPresentation.present(snapshot(mode))
+            assertEquals("Getting voice ready", waiting.presence)
+            assertEquals("I'm opening the microphone", waiting.activity)
+            val ready = SageChatPresentation.present(snapshot(mode).copy(commandRecognizerReady = true))
+            assertEquals("Listening", ready.presence)
+            assertEquals("I'm listening", ready.activity)
+        }
+    }
+
     @Test fun queuedMessagesAreExplainedInOwnerLanguage() {
         val ui = SageChatPresentation.present(snapshot(SageRuntimeState.THINKING_DEEP, queued = 2))
         assertEquals("Sent — 2 messages are waiting", ui.waitingMessage)

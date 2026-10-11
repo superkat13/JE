@@ -43,6 +43,7 @@ class VoiceDiagnosticAdapterTest {
     private val normal = mutableListOf<String>()
     private val errors = mutableListOf<Int>()
     private var wakeHits = 0
+    private val readyCommands = mutableListOf<Pair<Long, Long>>()
 
     @Before fun setup() {
         ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
@@ -53,6 +54,9 @@ class VoiceDiagnosticAdapterTest {
             override fun onWakeDetected(hit: WakeHit) { wakeHits++ }
             override fun onTranscriptFinal(turnId: Long, generation: Long, text: String) { normal.add(text) }
             override fun onRecognitionError(turnId: Long, generation: Long, code: Int) { errors.add(code) }
+            override fun onCommandRecognizerReady(turnId: Long, generation: Long) {
+                readyCommands += turnId to generation
+            }
         })
         adapter = VoiceDiagnosticAdapter(port)
         idle()
@@ -111,6 +115,83 @@ class VoiceDiagnosticAdapterTest {
         assertEquals(2, ready); assertEquals(1, speech)
         assertIsolated()
     }
+    @Test fun normalVoiceIntentsDistinguishManualWakeAndFollowUp() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        assertNull("command must wait until the separate wake mic has stopped",
+            ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        context.acknowledgeStop(); idle()
+        assertFalse("manual Talk retains onset", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true))
+
+        port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        context.acknowledgeStop(); idle()
+        assertTrue("wake-triggered command uses existing tail protection", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false))
+
+        port.setListening(SageListeningMode.FOLLOW_UP, 5, 12, wakeTailPresent = true); idle()
+        assertFalse("follow-ups never discard a wake tail", recognizer().lastIntent!!
+            .getBooleanExtra(SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, true))
+    }
+
+    @Test fun cancelledManualTalkCannotBeResurrectedByOldWakeStopReply() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        val cancelledStop = context.stopReplies.last()
+        port.setListening(SageListeningMode.OFF, 4, 0); idle()
+        context.acknowledgeStop(reply = cancelledStop); idle()
+        assertNull("old stop acknowledgment cannot open a cancelled command",
+            ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+
+        port.setListening(SageListeningMode.WAKE_ONLY, 5, 0); idle()
+        port.setListening(SageListeningMode.COMMAND, 6, 12, wakeTailPresent = false); idle()
+        assertNull("new command waits for its own stop", ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        context.acknowledgeStop(); idle()
+        assertEquals(1, recognizer().starts)
+        recognizer().callback!!.onReadyForSpeech(null)
+        assertEquals(listOf(12L to 6L), readyCommands)
+    }
+
+    @Test fun wakeCommandAlsoWaitsForRemoteStopAcknowledgement() {
+        // Wake acknowledgement speech has completed; the isolated wake process may still
+        // be releasing its microphone. Wake-origin commands must obey the same barrier.
+        port.setListening(SageListeningMode.OFF, 2, 0); idle()
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = true); idle()
+        assertNull("wake-triggered command must wait for the isolated process",
+            ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        context.acknowledgeStop(); idle()
+        assertTrue(recognizer().lastIntent!!.getBooleanExtra(
+            SageSpeechIntents.EXTRA_WAKE_TAIL_PRESENT, false))
+    }
+
+    @Test fun missingManualTalkStopAckFailsClosedWithoutOpeningRecognizer() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        advance(5_001)
+        assertEquals(listOf(SpeechRecognizer.ERROR_AUDIO), errors)
+        assertNull("timeout must not open a second microphone",
+            ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+    }
+
+    @Test fun realRecognitionReadyCallbackIsScopedToLiveTurnAndGeneration() {
+        port.setListening(SageListeningMode.COMMAND, 3, 11, wakeTailPresent = false); idle()
+        context.acknowledgeStop(); idle()
+        val previous = recognizer().callback!!
+        previous.onReadyForSpeech(null)
+        assertEquals(listOf(11L to 3L), readyCommands)
+
+        port.setListening(SageListeningMode.COMMAND, 4, 12, wakeTailPresent = true); idle()
+        context.acknowledgeStop(); idle()
+        previous.onReadyForSpeech(null)
+        assertEquals("old callback must not activate current UI", listOf(11L to 3L), readyCommands)
+        val current = recognizer().callback!!
+        current.onReadyForSpeech(null)
+        assertEquals(listOf(11L to 3L, 12L to 4L), readyCommands)
+
+        port.setListening(SageListeningMode.OFF, 5, 0); idle()
+        current.onReadyForSpeech(null)
+        assertEquals("cancelled callback must stay silent", 2, readyCommands.size)
+    }
+
     @Test fun modeAndSpeechChangesCannotCancelOrReplaceDiagnostic() {
         acquire(); capture()
         val active = recognizer(); val callback = active.callback; val cancels = active.cancels
@@ -144,6 +225,7 @@ class VoiceDiagnosticAdapterTest {
     @Test fun blankDuplicateBusyAndOffMainAdmissionAreRejected() {
         assertFalse(adapter.acquire(" "))
         port.setListening(SageListeningMode.COMMAND, 2, 2); idle()
+        context.acknowledgeStop(); idle()
         val command = recognizer(); val cancels = command.cancels
         assertFalse(adapter.acquire("one")); assertEquals(cancels, command.cancels)
         port.setListening(SageListeningMode.OFF, 3, 3); idle()

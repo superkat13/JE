@@ -8,8 +8,13 @@ data class SageRuntimeSnapshot(
     val activeTurnId: Long,
     val activeTurnOrigin: TurnOrigin,
     val recognizerGeneration: Long,
-    val queuedTextCount: Int
+    val queuedTextCount: Int,
+    /** True only after onReadyForSpeech for this live command capture. */
+    val commandRecognizerReady: Boolean = false
 )
+
+/** Android SpeechRecognizer.ERROR_AUDIO == 3. Keep core's pure-JVM routing free of Android SDK dependencies. */
+private const val RECOGNIZER_AUDIO_ERROR = 3
 
 class SageTurnCoordinator(
     private val router: SageCommandRouter = SageCommandRouter(),
@@ -26,6 +31,7 @@ class SageTurnCoordinator(
     private var activeTurnId = 0L
     private var activeTurnOrigin = TurnOrigin.NONE
     private var recognizerGeneration = 0L
+    private var commandRecognizerReady = false
     private var nextTurnId = 1L
     private var followUpAfterSpeech = false
     private var pendingWakeCommand: String? = null
@@ -33,7 +39,8 @@ class SageTurnCoordinator(
     private val pendingTypedInputs = ArrayDeque<PendingTypedInput>()
 
     @Synchronized fun snapshot() = SageRuntimeSnapshot(
-        state, listeningMode, activeTurnId, activeTurnOrigin, recognizerGeneration, pendingTypedInputs.size
+        state, listeningMode, activeTurnId, activeTurnOrigin, recognizerGeneration,
+        pendingTypedInputs.size, commandRecognizerReady
     )
 
     @Synchronized fun handle(event: SageEvent): List<SageEffect> = when (event) {
@@ -42,6 +49,7 @@ class SageTurnCoordinator(
         SageEvent.PushToTalkRequested -> onPushToTalk()
         is SageEvent.WakeDetected -> onWake(event)
         is SageEvent.WakeAcknowledgementSpoken -> onWakeAckSpoken(event)
+        is SageEvent.CommandRecognizerReady -> onCommandRecognizerReady(event)
         is SageEvent.TranscriptFinal -> onTranscript(event)
         is SageEvent.RecognitionFailed -> onRecognitionFailed(event)
         is SageEvent.TextSubmitted -> onText(event)
@@ -108,6 +116,17 @@ class SageTurnCoordinator(
         return listOf(changeListening(SageListeningMode.COMMAND, activeTurnId))
     }
 
+    /** Ignore readiness from a cancelled or superseded recognizer, including duplicate callbacks. */
+    private fun onCommandRecognizerReady(event: SageEvent.CommandRecognizerReady): List<SageEffect> {
+        if (!validRecognition(event.turnId, event.recognizerGeneration)) return stale("command readiness turn/generation mismatch")
+        val listening = (state == SageRuntimeState.COMMAND_LISTENING && listeningMode == SageListeningMode.COMMAND) ||
+            (state == SageRuntimeState.FOLLOW_UP_LISTENING && listeningMode == SageListeningMode.FOLLOW_UP)
+        if (!listening) return stale("command readiness in $state/$listeningMode")
+        if (commandRecognizerReady) return emptyList()
+        commandRecognizerReady = true
+        return emptyList()
+    }
+
     private fun onTranscript(event: SageEvent.TranscriptFinal): List<SageEffect> {
         if (!validRecognition(event.turnId, event.recognizerGeneration)) return stale("transcript turn/generation mismatch")
         val expected = when (state) {
@@ -131,7 +150,10 @@ class SageTurnCoordinator(
         return listOf(
             changeListening(SageListeningMode.OFF),
             SageEffect.RecordDiagnostic("recognition failed code=${event.code}"),
-            SageEffect.Speak(activeTurnId, "I didn't catch that.")
+            SageEffect.Speak(activeTurnId,
+                if (event.code == RECOGNIZER_AUDIO_ERROR) "There was a microphone problem, so I couldn't hear you."
+                else "I didn't catch that."
+            )
         )
     }
 
@@ -311,7 +333,10 @@ class SageTurnCoordinator(
     private fun changeListening(mode: SageListeningMode, turnId: Long = 0L): SageEffect.SetListeningMode {
         recognizerGeneration += 1
         listeningMode = mode
-        return SageEffect.SetListeningMode(mode, recognizerGeneration, turnId)
+        commandRecognizerReady = false
+        // Follow-ups have no immediate wake-word tail even if their original turn began via wake.
+        val tail = mode == SageListeningMode.COMMAND && activeTurnOrigin == TurnOrigin.VOICE_WAKE
+        return SageEffect.SetListeningMode(mode, recognizerGeneration, turnId, wakeTailPresent = tail)
     }
 
     private fun stale(reason: String) = listOf(SageEffect.IgnoreStaleCallback(reason))
