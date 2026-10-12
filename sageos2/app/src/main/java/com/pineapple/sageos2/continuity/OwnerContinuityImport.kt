@@ -70,8 +70,8 @@ object OwnerContinuityCodec {
         require(source.isNotEmpty()) { "continuity source is required" }
 
         val core = root.optJSONObject("core") ?: JSONObject()
-        val twinIdentity = core.optString("twinIdentity").trim().takeIf { it.isNotEmpty() }?.take(2_000)
-        val notes = core.optString("notes").trim().take(12_000)
+        val twinIdentity = checkedTrim(core.optString("twinIdentity"), 2_000).takeIf { it.isNotEmpty() }
+        val notes = checkedTrim(core.optString("notes"), 12_000)
         val projects = core.optJSONObject("activeProjects").stringMap(32, 120, 1_000)
         val memories = root.optJSONArray("memories").memories()
 
@@ -139,8 +139,17 @@ object OwnerContinuityCodec {
         }
     }
 
-    private fun clean(value: String, maxChars: Int): String =
-        value.replace(Regex("\\s+"), " ").trim().take(maxChars)
+    private fun clean(value: String, maxChars: Int): String {
+        val normalized = value.replace(Regex("\\s+"), " ").trim()
+        require(normalized.length <= maxChars) { "continuity value exceeds $maxChars characters; nothing was imported" }
+        return normalized
+    }
+
+    private fun checkedTrim(value: String, maxChars: Int): String {
+        val trimmed = value.trim()
+        require(trimmed.length <= maxChars) { "continuity value exceeds $maxChars characters; nothing was imported" }
+        return trimmed
+    }
 }
 
 object OwnerContinuityMerger {
