@@ -112,7 +112,7 @@ class OwnerContinuityApprovalGateTest {
         assertFalse(imported.alreadyImported)
         assertEquals("imported identity", core.current().twinIdentity)
         val once = core.current()
-        val retry = importer.importBound(raw, preview.digest)
+        val retry = importer.importBound(raw, preview.digest, preview.before, preview.reviewedMemoryRevision)
         assertTrue(retry.alreadyImported)
         assertEquals(once, core.current())
         assertFalse(importer.hasPending(preview.digest))
