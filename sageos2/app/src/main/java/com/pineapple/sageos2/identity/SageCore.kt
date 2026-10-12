@@ -10,7 +10,9 @@ data class SageCoreSnapshot(
     val principles: List<String>,
     val preferences: List<String>,
     val selfRestrictions: List<String>,
-    val notes: String = ""
+    val notes: String = "",
+    /** Storage provenance; never inferred from fallback text. */
+    val provenance: String = "unknown"
 )
 
 data class OwnerModel(

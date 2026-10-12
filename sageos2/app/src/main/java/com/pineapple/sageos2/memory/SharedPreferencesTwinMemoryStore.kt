@@ -1,6 +1,7 @@
 package com.pineapple.sageos2.memory
 
 import android.content.Context
+import com.pineapple.sageos2.identity.SageContinuityWriteLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.util.UUID
@@ -13,7 +14,6 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
         return runCatching { decode(raw) }.getOrElse { EmptyTwinMemoryProvider.snapshot() }
     }
 
-    @Synchronized
     override fun remember(
         subject: TwinMemorySubject,
         key: String,
@@ -21,7 +21,7 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
         source: TwinMemorySource,
         confidence: Double,
         nowEpochMs: Long
-    ): TwinMemoryRecord {
+    ): TwinMemoryRecord = synchronized(SageContinuityWriteLock.monitor) {
         val current = snapshot()
         val existing = current.records.firstOrNull { it.active && it.subject == subject && it.key.equals(key, ignoreCase = true) }
         val record = if (existing == null) {
@@ -46,29 +46,27 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
         }
         val nextRecords = current.records.filterNot { it.id == record.id } + record
         save(TwinMemorySnapshot(current.revision + 1, nextRecords))
-        return record
+        record
     }
 
-    @Synchronized
-    override fun forget(id: String, nowEpochMs: Long): Boolean {
+    override fun forget(id: String, nowEpochMs: Long): Boolean = synchronized(SageContinuityWriteLock.monitor) {
         val current = snapshot()
-        val target = current.records.firstOrNull { it.id == id } ?: return false
+        val target = current.records.firstOrNull { it.id == id } ?: return@synchronized false
         val next = current.records.map {
             if (it.id == id) target.copy(active = false, updatedAtEpochMs = nowEpochMs) else it
         }
         save(TwinMemorySnapshot(current.revision + 1, next))
-        return true
+        true
     }
 
-    @Synchronized
-    fun replace(snapshot: TwinMemorySnapshot) {
+    fun replace(snapshot: TwinMemorySnapshot) = synchronized(SageContinuityWriteLock.monitor) {
         save(snapshot.copy(revision = maxOf(this.snapshot().revision + 1, snapshot.revision)))
     }
 
     fun exportJson(): String = encode(snapshot())
 
     private fun save(snapshot: TwinMemorySnapshot) {
-        prefs.edit().putString(KEY_STATE, encode(snapshot)).apply()
+        check(prefs.edit().putString(KEY_STATE, encode(snapshot)).commit()) { "Twin memory save failed" }
     }
 
     private fun encode(snapshot: TwinMemorySnapshot): String = JSONObject().apply {

@@ -89,6 +89,7 @@ class LegacySageMigration(
             legacyOwnerAppsPresent = source.ownerApps,
             legacyWakePresent = source.wake,
             legacyAutonomyPresent = source.autonomy,
+            legacyPreviousCorePresent = source.corePrevious,
             errors = errors
         )
     }
@@ -103,6 +104,7 @@ class LegacySageMigration(
         val legacyAutonomy = appContext.getSharedPreferences(LEGACY_AUTONOMY_PREFS, Context.MODE_PRIVATE)
         return LegacySourcePresence(
             core = probe("core") { legacyCore.getString(LEGACY_CORE_TEXT, "").orEmpty().isNotBlank() },
+            corePrevious = probe("core_previous") { legacyCore.getString(LEGACY_CORE_PREVIOUS, "").orEmpty().isNotBlank() },
             memory = probe("memory") { legacyState.getStringSet(LEGACY_MEMORY_ITEMS, emptySet()).orEmpty().isNotEmpty() },
             ownerApps = probe("owner_apps") { legacyApps.getString(LEGACY_OWNER_APPS_KEY, "").orEmpty().isNotBlank() },
             wake = probe("wake") { legacyState.getStringSet(LEGACY_WAKE_PROFILES, emptySet()).orEmpty().isNotEmpty() ||
@@ -112,29 +114,10 @@ class LegacySageMigration(
     }
 
     private fun importCore(): Boolean {
-        val legacy = appContext.getSharedPreferences(LEGACY_CORE_PREFS, Context.MODE_PRIVATE)
-        if (!legacy.contains(LEGACY_CORE_TEXT)) return false
-        val currentText = legacy.getString(LEGACY_CORE_TEXT, "").orEmpty().trim()
-        if (currentText.isEmpty()) return false
-
-        val markerText = "Imported Sage 1.33.3 owner instructions:"
-        if (core.current().notes.contains(markerText)) return false
-
-        val current = core.current()
-        val previousText = legacy.getString(LEGACY_CORE_PREVIOUS, "").orEmpty().trim()
-        if (current.revision == 0L && previousText.isNotEmpty() && previousText != currentText) {
-            core.replace(
-                current.copy(
-                    notes = mergeParagraphs(
-                        current.notes,
-                        "Imported previous Sage 1.33.3 Core revision:\n$previousText"
-                    )
-                )
-            )
-        }
-        val latest = core.current()
-        core.replace(latest.copy(notes = mergeParagraphs(latest.notes, "$markerText\n$currentText")))
-        return true
+        // Legacy Core text is NEVER auto-written. It is surfaced as a review-only recovery candidate
+        // (see LegacyCoreRecovery / SageCoreHealthReader) and only applied after explicit owner
+        // approval through the recovery UI. The genuine Sage 1.33.3 source preferences are left intact.
+        return false
     }
 
     private fun importMemories(nowMs: Long): Int {
@@ -320,6 +303,7 @@ class LegacySageMigration(
 
 data class LegacySourcePresence(
     val core: Boolean = false,
+    val corePrevious: Boolean = false,
     val memory: Boolean = false,
     val ownerApps: Boolean = false,
     val wake: Boolean = false,
@@ -339,6 +323,7 @@ data class LegacyMigrationReport(
     val legacyOwnerAppsPresent: Boolean = false,
     val legacyWakePresent: Boolean = false,
     val legacyAutonomyPresent: Boolean = false,
+    val legacyPreviousCorePresent: Boolean = false,
     val errors: List<String> = emptyList()
 ) {
     fun summary(): String = buildString {
@@ -353,6 +338,7 @@ data class LegacyMigrationReport(
         append(",apps=").append(legacyOwnerAppsPresent)
         append(",wake=").append(legacyWakePresent)
         append(",autonomy=").append(legacyAutonomyPresent).append(']')
+        if (legacyPreviousCorePresent) append(" legacyPreviousCore=true")
         if (errors.isNotEmpty()) append(" errors=").append(errors.joinToString(" | "))
     }
 }
