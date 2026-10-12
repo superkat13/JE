@@ -450,7 +450,7 @@ class SageRuntimeHost private constructor(context: Context) {
         val result = ownerContinuityImporter.import(raw)
         traces.record(
             "owner_continuity",
-            "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
+            "import already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
         )
         runCatching { runSelfCareCheck() }
             .onFailure { traces.record("self_care", "post-import check failed: ${it.message ?: it::class.java.simpleName}") }
@@ -461,7 +461,7 @@ class SageRuntimeHost private constructor(context: Context) {
         val result = ownerContinuityImporter.importBound(raw, expectedDigest, expectedCore, expectedMemoryRev)
         traces.record(
             "owner_continuity",
-            "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
+            "import already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
         )
         runCatching { runSelfCareCheck() }
             .onFailure { traces.record("self_care", "post-import check failed: ${it.message ?: it::class.java.simpleName}") }
