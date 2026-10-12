@@ -3,6 +3,7 @@ package com.pineapple.sageos2.continuity
 import android.content.Context
 import com.pineapple.sageos2.identity.SageCoreSnapshot
 import com.pineapple.sageos2.identity.SharedPreferencesSageCoreStore
+import com.pineapple.sageos2.identity.SageContinuityWriteLock
 import com.pineapple.sageos2.memory.SharedPreferencesTwinMemoryStore
 import com.pineapple.sageos2.memory.TwinMemorySource
 import com.pineapple.sageos2.memory.TwinMemorySubject
@@ -33,6 +34,14 @@ data class OwnerContinuityPackage(
     val memories: List<OwnerContinuityMemory> = emptyList()
 )
 
+/** Owner-visible, private memory effects; never log the before/after values. */
+data class OwnerContinuityMemoryChange(
+    val subject: TwinMemorySubject,
+    val key: String,
+    val beforeValue: String?,
+    val afterValue: String
+)
+
 data class OwnerContinuityImportPreview(
     val source: String,
     val before: SageCoreSnapshot,
@@ -42,7 +51,8 @@ data class OwnerContinuityImportPreview(
     val alreadyImported: Boolean = false,
     val digest: String = "",
     /** Captured with the owner preview; do not re-read at confirmation time. */
-    val reviewedMemoryRevision: Long = 0L
+    val reviewedMemoryRevision: Long = 0L,
+    val memoryChanges: List<OwnerContinuityMemoryChange> = emptyList()
 )
 
 data class OwnerContinuityImportResult(
@@ -196,58 +206,64 @@ class OwnerContinuityImporter(
 ) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
-    @Synchronized
-    fun preview(raw: String): OwnerContinuityImportPreview {
+    fun preview(raw: String): OwnerContinuityImportPreview = synchronized(SageContinuityWriteLock.monitor) {
         val trimmed = raw.trim()
-        val incoming = runCatching { OwnerContinuityCodec.decode(trimmed) }.getOrNull() ?: throw IllegalArgumentException("invalid continuity package")
+        val incoming = OwnerContinuityCodec.decode(trimmed)
         val digest = sha256(trimmed)
-        if (prefs.getBoolean("digest_$digest", false)) {
-            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true, digest, memory.snapshot().revision)
-        }
         val current = core.current()
+        val existingMemory = memory.snapshot()
+        if (prefs.getBoolean("digest_$digest", false)) {
+            return@synchronized OwnerContinuityImportPreview(
+                incoming.source, current, current, false, 0, true, digest, existingMemory.revision
+            )
+        }
         val merged = OwnerContinuityMerger.merge(current, incoming)
         val coreChanged = merged.copy(revision = current.revision) != current
-        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size, digest = digest, reviewedMemoryRevision = memory.snapshot().revision)
+        val changes = incoming.memories.map { item ->
+            val before = existingMemory.records.firstOrNull { record ->
+                record.active && record.subject == item.subject && record.key.equals(item.key, ignoreCase = true)
+            }
+            OwnerContinuityMemoryChange(item.subject, item.key, before?.value, item.value)
+        }
+        OwnerContinuityImportPreview(
+            incoming.source, current, merged, coreChanged, incoming.memories.size,
+            digest = digest, reviewedMemoryRevision = existingMemory.revision,
+            memoryChanges = changes
+        )
     }
 
-    @Synchronized
-    fun importBound(raw: String, expectedDigest: String?, expectedCore: com.pineapple.sageos2.identity.SageCoreSnapshot? = null, expectedMemoryRev: Long? = null): OwnerContinuityImportResult {
+    /** Owner-approved path; the source and BOTH reviewed baselines are mandatory. */
+    fun importBound(
+        raw: String,
+        expectedDigest: String,
+        expectedCore: SageCoreSnapshot,
+        expectedMemoryRev: Long
+    ): OwnerContinuityImportResult = synchronized(SageContinuityWriteLock.monitor) {
         val trimmed = raw.trim()
         val digest = sha256(trimmed)
-        if (expectedDigest != null && digest != expectedDigest) {
-            throw IllegalStateException("stale continuity package confirmation")
-        }
+        if (digest != expectedDigest) throw IllegalStateException("stale continuity package confirmation")
         val incoming = OwnerContinuityCodec.decode(trimmed)
         if (prefs.getBoolean("digest_$digest", false)) {
-            return OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
-        }
-        // Bind to reviewed state
-        if (expectedCore != null && expectedCore != core.current()) {
-            throw IllegalStateException("stale continuity package confirmation")
-        }
-        // memory revision binding if provided
-        try {
-            val memSnap = memory.snapshot()
-            if (expectedMemoryRev != null && memSnap.revision != expectedMemoryRev) {
-                throw IllegalStateException("stale continuity package confirmation")
-            }
-        } catch (e: Exception) {
-            throw IllegalStateException("stale continuity package confirmation")
+            return@synchronized OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
         }
 
+        // All normal Core/memory writes use the same process lock: no writer can slip between
+        // comparing the preview baselines and applying the import.
+        val current = core.current()
+        if (current != expectedCore || memory.snapshot().revision != expectedMemoryRev) {
+            throw IllegalStateException("stale continuity package confirmation")
+        }
+        val merged = OwnerContinuityMerger.merge(current, incoming)
+        val coreChanged = merged.copy(revision = current.revision) != current
+        if (coreChanged && current.revision == 0L && incoming.twinIdentity.isNullOrBlank()) {
+            throw IllegalArgumentException("new Core identity must come from the owner, not the fallback")
+        }
+
+        // Only after approval and baseline validation may we write the durable intent marker.
         check(prefs.edit().putBoolean("pending_$digest", true).commit()) {
             "could not record pending owner continuity import"
         }
-
-        val current = core.current()
-        if (expectedCore != null && expectedCore != current) {
-            prefs.edit().remove("pending_$digest").commit()
-            throw IllegalStateException("stale continuity package confirmation")
-        }
-        val merged = OwnerContinuityMerger.merge(current, incoming)
-        val coreChanged = merged.copy(revision = current.revision) != current
         val savedCore = if (coreChanged) core.replace(merged) else current
-
         incoming.memories.forEach { item ->
             memory.remember(
                 subject = item.subject,
@@ -258,7 +274,6 @@ class OwnerContinuityImporter(
                 nowEpochMs = System.currentTimeMillis()
             )
         }
-
         check(
             prefs.edit()
                 .putBoolean("digest_$digest", true)
@@ -267,8 +282,7 @@ class OwnerContinuityImporter(
                 .remove("pending_$digest")
                 .commit()
         ) { "could not finalize owner continuity import; it will retry safely on the next attempt" }
-
-        return OwnerContinuityImportResult(
+        OwnerContinuityImportResult(
             source = incoming.source,
             alreadyImported = false,
             coreRevision = savedCore.revision,
