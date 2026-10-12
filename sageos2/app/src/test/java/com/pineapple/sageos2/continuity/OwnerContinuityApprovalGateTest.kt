@@ -118,6 +118,30 @@ class OwnerContinuityApprovalGateTest {
         assertFalse(importer.hasPending(preview.digest))
     }
 
+    @Test fun memoryPreviewShowsActualReplacementWithoutWritingAnything() {
+        val core = core()
+        val memory = memory()
+        memory.remember(
+            TwinMemorySubject.PROJECT, "current work", "existing private note",
+            TwinMemorySource.EXPLICIT_OWNER, 1.0, 100L
+        )
+        val importer = importer(core, memory)
+        val beforeCore = core.current()
+        val beforeMemory = memory.snapshot()
+        val preview = importer.preview(memoryPackage())
+
+        assertEquals(beforeMemory.revision, preview.reviewedMemoryRevision)
+        assertEquals(1, preview.memoryChanges.size)
+        val change = preview.memoryChanges.single()
+        assertEquals(TwinMemorySubject.PROJECT, change.subject)
+        assertEquals("current work", change.key)
+        assertEquals("existing private note", change.beforeValue)
+        assertEquals("imported value", change.afterValue)
+        assertEquals(beforeCore, core.current())
+        assertEquals(beforeMemory, memory.snapshot())
+        assertFalse(importer.hasPending(preview.digest))
+    }
+
     @Test fun oversizedIdentityMustNotBeSilentlyClipped() {
         val raw = """{"schema":"sage-owner-continuity-v1","source":"long fixture",
             "core":{"twinIdentity":"${"X".repeat(2001)}"}}"""
