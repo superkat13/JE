@@ -744,7 +744,7 @@ open class MainActivity : Activity() {
             .setView(scrollView)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Import") { _, _ ->
-                runCatching { host.importOwnerContinuityBound(raw, preview.digest) }
+                runCatching { host.importOwnerContinuityBound(raw, preview.digest, preview.before, host.memory.snapshot().revision) }
                     .onSuccess { result ->
                         Toast.makeText(this, result.summary(), Toast.LENGTH_LONG).show()
                         showPanel(Panel.CORE)

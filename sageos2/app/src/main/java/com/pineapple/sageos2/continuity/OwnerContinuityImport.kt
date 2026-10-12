@@ -200,7 +200,7 @@ class OwnerContinuityImporter(
     }
 
     @Synchronized
-    fun importBound(raw: String, expectedDigest: String?): OwnerContinuityImportResult {
+    fun importBound(raw: String, expectedDigest: String?, expectedCore: com.pineapple.sageos2.identity.SageCoreSnapshot? = null, expectedMemoryRev: Long? = null): OwnerContinuityImportResult {
         val trimmed = raw.trim()
         val digest = sha256(trimmed)
         if (expectedDigest != null && digest != expectedDigest) {
@@ -210,12 +210,29 @@ class OwnerContinuityImporter(
         if (prefs.getBoolean("digest_$digest", false)) {
             return OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
         }
+        // Bind to reviewed state
+        if (expectedCore != null && expectedCore != core.current()) {
+            throw IllegalStateException("stale continuity package confirmation")
+        }
+        // memory revision binding if provided
+        try {
+            val memSnap = memory.snapshot()
+            if (expectedMemoryRev != null && memSnap.revision != expectedMemoryRev) {
+                throw IllegalStateException("stale continuity package confirmation")
+            }
+        } catch (e: Exception) {
+            throw IllegalStateException("stale continuity package confirmation")
+        }
 
         check(prefs.edit().putBoolean("pending_$digest", true).commit()) {
             "could not record pending owner continuity import"
         }
 
         val current = core.current()
+        if (expectedCore != null && expectedCore != current) {
+            prefs.edit().remove("pending_$digest").commit()
+            throw IllegalStateException("stale continuity package confirmation")
+        }
         val merged = OwnerContinuityMerger.merge(current, incoming)
         val coreChanged = merged.copy(revision = current.revision) != current
         val savedCore = if (coreChanged) core.replace(merged) else current

@@ -457,8 +457,8 @@ class SageRuntimeHost private constructor(context: Context) {
         return result
     }
 
-    fun importOwnerContinuityBound(raw: String, expectedDigest: String?): OwnerContinuityImportResult {
-        val result = ownerContinuityImporter.importBound(raw, expectedDigest)
+    fun importOwnerContinuityBound(raw: String, expectedDigest: String?, expectedCore: com.pineapple.sageos2.identity.SageCoreSnapshot? = null, expectedMemoryRev: Long? = null): OwnerContinuityImportResult {
+        val result = ownerContinuityImporter.importBound(raw, expectedDigest, expectedCore, expectedMemoryRev)
         traces.record(
             "owner_continuity",
             "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
@@ -596,3 +596,5 @@ class SageRuntimeHost private constructor(context: Context) {
 
     private fun queueOwnerTask(task: TaskCheckpoint): String? = runtime.queueOwnerResume(task)
 }
+
+    fun hasPendingImport(digest: String): Boolean = ownerContinuityImporter.hasPending(digest)
