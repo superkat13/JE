@@ -1,26 +1,45 @@
-# Voice repair progress
+# Voice repair host handoff
 
-Branch: codex/voice-repair-host, based on opencode/voice-self-repair at 3b4340e4e50bb147b9779e715a53a542a38a7296.
+Branch: codex/voice-repair-host.
 Draft PR: https://github.com/superkat13/JE/pull/76 (target opencode/voice-self-repair).
-Implementation checkpoint: 5c6a2cb9c2be603ca664e35dac1b353eb11c0478.
+Tested code SHA: 480fbce2aef585c9d04e451773fc449f14b06833.
+Base and final fetched adapter SHA: 3b4340e4e50bb147b9779e715a53a542a38a7296.
+The final checkpoint commit changes this handoff only; its SHA is recorded in the PR body.
 
-Completed host work:
-- Local request opens dedicated expected-phrase input; it never enters normal command routing.
+## Completed host work
+
+- Local requests open a dedicated expected-phrase field. The phrase bypasses normal routing, tools, actions, conversation memory and ordinary diagnostic exports.
 - Deferred, bounded idle admission waits for the local reply to finish. Runtime input and recovery admission are reserved during capture/reset/retest.
-- Visible speak prompts, controller cancellation, Activity interruption, actual recognized words, backend/error/timing evidence, completed repair and retest results.
-- Private diagnostic-only persistence, interrupted/unverified restart recovery and ten-session history; explicit local document-picker export includes test words and evidence.
-- Added workflow, runtime isolation and persistence tests; added suites to the lab and enabled the existing full Android CI workflow for this PR target.
-- OpenCode-owned adapter, Android speech port, repair-capable interface and adapter tests untouched. VoiceDiagnosticPort, identity, models, signing and owner data unchanged.
+- Chat shows speak prompts, cancellation, actual recognized words, backend/error/timing evidence, completed repair and retest outcomes.
+- Cancel and Activity interruption reach the controller, invalidate pending admission, and release the diagnostic microphone before restoring the runtime's listening mode. Cancellation still releases resources when persistence fails.
+- Private diagnostic-only persistence restores incomplete sessions as interrupted/unverified, with ten-session history shown in Diagnostics. Explicit document-picker export includes only the chosen test's words and evidence; no automatic upload or raw audio recording.
+- Workflow, runtime isolation, Brain-unavailable local routing, deadline, late result and persistence tests are included in the integration lab. The existing full Android workflow now covers this PR target.
+- VoiceDiagnosticPort and OpenCode-owned adapter/speech/repair-capable files and adapter tests are unchanged. Identity, models, signing and owner data are unchanged. No APK was installed or numbered release published.
 
-Actual validation:
-- git diff --check passed at the first implementation checkpoint.
-- Local integration lab could not start: repository gradlew is not executable, and no installed Gradle was present.
-- Downloaded Gradle through the existing bootstrap; local compileDebugKotlin failed because its Java 25 Gradle daemon disappeared before compilation completed. No local compilation/test success claimed.
-- First CI run failed at compileDebugKotlin: an IntRange takeLast call was invalid. Corrected it to takeLast on a List. No tests executed on this attempt. Run: https://github.com/superkat13/JE/actions/runs/38284930544. Integration lab runs before full testDebugUnitTest, lintRelease and assembleDebug.
+## Before/after evidence
 
-Concrete integration dependency:
-Latest fetched OpenCode branch still contains scaffold VoiceDiagnosticAdapter.capture (no microphone capture). This prevents real adapter fail/reset/retest evidence. No adapter implementation substituted here. Device acceptance NOT RUN.
+Before: SageRuntimeHost supplied no start callback, so hearing requests reported that the workflow was not connected. VoiceRepairResponder cancellation only relabelled the session manager, leaving controller ownership untouched. There was no dedicated diagnostic input or persistent host session history.
 
-Exact next step: inspect CI job 114930902012, fix production/test failures, then fetch opencode/voice-self-repair again and integrate OpenCode's completed adapter when available. Record final CI totals and final SHA here.
+After: the local responder opens dedicated input even with Brain unavailable; admission waits for an idle runtime window; command-shaped phrases enter only diagnostic capture. Tests assert controller release, runtime release, stale callback rejection and interruption recovery, and distinguish a completed reset from a verified matching retest. Capture/reset/retest tests use injected diagnostic ports and do not demonstrate a physical microphone repair.
 
-Short tablet procedure (after completed adapter integration): type “fix your hearing”, enter a short expected phrase in the separate test box, tap Start test, speak only when prompted, repeat for a prompted retest, inspect both recognized transcripts and repair evidence. Cancel a second test and confirm normal Talk works again. Save the explicit local test export if unresolved. This procedure has not been run on hardware.
+## Actual validation
+
+Final CI: https://github.com/superkat13/JE/actions/runs/38286212342
+- Integration lab: 277 tests, 0 failures, 0 errors, 0 skipped.
+- Full Android/JVM suite: 465 tests, 0 failures, 0 errors, 0 skipped.
+- Android Kotlin compilation, testDebugUnitTest, lintRelease, assembleDebug, native inference and arm64 packaging checks passed.
+- git diff --check and protected ownership-path audit passed.
+
+Earlier CI caught an invalid IntRange takeLast call in the new persistence code. Corrected it to operate on a List; no assertion or fixture was weakened. The subsequent full run passed 464 tests; the final run includes one additional deadline cleanup test.
+
+Local validation limit: the initial lab bootstrap was unavailable as an executable; downloading Gradle through bash succeeded, but the local Java 25 Gradle daemon disappeared before compilation. Local Android compilation or test success is not claimed; the configured CI path supplied the successful results above.
+
+## Concrete remaining blocker
+
+The final fetch still contains scaffold VoiceDiagnosticAdapter.capture: it assigns a callback but never starts microphone capture. OpenCode owns that implementation. Therefore actual adapter reset/recreation -> recognized retest integration remains blocked, and hardware/device acceptance is NOT RUN. Do not merge or describe the owner's hearing problem as repaired on the strength of these host/controller tests.
+
+Exact next step: fetch OpenCode's completed adapter on opencode/voice-self-repair, integrate it without changing VoiceDiagnosticPort, run the real-adapter fault/reset/retest integration tests and the same Android CI gates, then perform the tablet procedure below. Do not restart the host implementation.
+
+## Short tablet procedure, after adapter integration
+
+Type “fix your hearing”, enter a short expected phrase in the separate test box, tap Start test, speak only at “Speak now”, and repeat the same phrase if a retest is prompted. Compare the actual words and repair evidence. Cancel another test, then confirm normal Talk works. If unresolved, use Save test export to save the explicit test locally. This procedure has not been run on hardware.
