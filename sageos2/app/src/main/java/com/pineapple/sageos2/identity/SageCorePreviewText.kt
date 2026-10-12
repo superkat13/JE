@@ -16,6 +16,7 @@ object SageCorePreviewText {
         appendLine("It will be saved as a new version (version ${candidate.targetRevision}).")
         appendLine("Nothing is deleted. Every earlier version is kept, including the current one.")
         appendLine()
+        value("Core provenance", candidate.before.provenance, candidate.after.provenance)
         value("Who Sage is", candidate.before.twinIdentity, candidate.after.twinIdentity)
         list("What matters to Sage", candidate.before.principles, candidate.after.principles)
         list("What Sage prefers", candidate.before.preferences, candidate.after.preferences)
