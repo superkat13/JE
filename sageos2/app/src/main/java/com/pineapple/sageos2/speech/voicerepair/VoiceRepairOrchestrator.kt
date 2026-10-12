@@ -52,14 +52,12 @@ class VoiceRepairOrchestrator(
 
     @Synchronized fun cancel() {
         if (owner == null) return
-        manager.cancel()?.let(::publish)
-        release()
+        try { manager.cancel()?.let(::publish) } finally { release() }
     }
 
     @Synchronized fun interrupt() {
         if (owner == null) return
-        manager.markInterrupted()?.let(::publish)
-        release()
+        try { manager.markInterrupted()?.let(::publish) } finally { release() }
     }
 
     @Synchronized fun resetRequested(): Boolean = manager.current()?.attemptCount == 1
@@ -134,8 +132,8 @@ class VoiceRepairOrchestrator(
 
     private fun finish(id: String, state: VoiceRepairState, cause: VoiceRepairCause) {
         val current = live(id) ?: return
-        publish(manager.update(current.copy(state = state, cause = cause, endedAtMs = clockMs())))
-        release()
+        try { publish(manager.update(current.copy(state = state, cause = cause, endedAtMs = clockMs()))) }
+        finally { release() }
     }
 
     private fun release() {

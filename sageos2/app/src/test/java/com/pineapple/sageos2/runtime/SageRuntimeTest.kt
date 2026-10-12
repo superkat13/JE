@@ -9,9 +9,9 @@ import com.pineapple.sageos2.core.*
 import com.pineapple.sageos2.identity.*
 import com.pineapple.sageos2.memory.*
 import com.pineapple.sageos2.maintenance.*
-import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
+import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.speech.*
 import com.pineapple.sageos2.workflow.WorkflowEngine
 import org.junit.Assert.assertEquals
@@ -21,6 +21,43 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageRuntimeTest {
+    @Test fun connectedHearingRequestWorksWhenBrainIsUnavailable() {
+        var opened = false
+        val responder = com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder(
+            EmptySagePersonalResponder,
+            com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager(),
+            startRepair = { opened = true; "Type a short expected phrase in the hearing test box." })
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(personal = responder)))
+        f.brain.ready = false
+        f.runtime.start(); f.runtime.submit(SageEvent.TextSubmitted("fix your hearing"))
+        assertTrue(opened); assertTrue(f.brain.requests.isEmpty()); assertTrue(f.fast.requests.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+    }
+
+    @Test fun diagnosticReservationBlocksNormalWordsWakeAndPushToTalkUntilReleased() {
+        val f = Fixture(); f.runtime.start()
+        assertTrue(f.runtime.reserveDiagnosticWindow())
+        assertFalse(f.runtime.reserveDiagnosticWindow())
+        val snapshot = f.runtime.snapshot()
+        f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
+        f.speech.listener!!.onTranscriptFinal(snapshot.activeTurnId, snapshot.recognizerGeneration, "send a message")
+        f.speech.listener!!.onWakeDetected(WakeHit(snapshot.recognizerGeneration, "sage", null, "Yes", "open youtube"))
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        assertTrue(f.fast.requests.isEmpty()); assertTrue(f.brain.requests.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        f.runtime.releaseDiagnosticWindow()
+        f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
+        assertEquals(1, f.fast.requests.size)
+    }
+
+    @Test fun diagnosticAdmissionDoesNotInterruptAnActiveBrainTurn() {
+        val f = Fixture(); f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("tell me a story"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        assertFalse(f.runtime.reserveDiagnosticWindow())
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+    }
+
     @Test fun speechInputIsAttachedDirectlyToSingleRuntimeCoordinator() {
         val f = Fixture(); f.runtime.start(); assertNotNull(f.speech.listener)
         f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))

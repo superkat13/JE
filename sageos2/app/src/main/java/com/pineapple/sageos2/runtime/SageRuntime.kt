@@ -112,6 +112,25 @@ class SageRuntime(
         speech.shutdown()
     }
 
+    private var diagnosticReserved = false
+
+    /** Shares the submit monitor: admission cannot race a new owner turn. */
+    @Synchronized fun reserveDiagnosticWindow(): Boolean {
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE || pendingOwnerResumeId != null) return false
+        diagnosticReserved = true
+        val snapshot = coordinator.snapshot()
+        speech.setListening(com.pineapple.sageos2.core.SageListeningMode.OFF, snapshot.recognizerGeneration, snapshot.activeTurnId)
+        return true
+    }
+
+    @Synchronized fun releaseDiagnosticWindow() {
+        if (!diagnosticReserved) return
+        diagnosticReserved = false
+        val snapshot = coordinator.snapshot()
+        speech.setListening(snapshot.listeningMode, snapshot.recognizerGeneration, snapshot.activeTurnId)
+        drainOwnerResume()
+    }
+
     private var pendingOwnerResumeId: String? = null
 
     /** Called by local routing: queue only, never re-enter the coordinator during route(). */
@@ -128,7 +147,7 @@ class SageRuntime(
     }
 
     private fun drainOwnerResume() {
-        if (coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
         val id = pendingOwnerResumeId ?: return
         pendingOwnerResumeId = null
         val current = taskContinuity?.get(id) ?: return
@@ -159,6 +178,10 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
+        if (diagnosticReserved && event != SageEvent.Stop) {
+            if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected("Finish or cancel the hearing test first.")
+            return
+        }
         process(coordinator.handle(event))
         observer.onStateChanged(coordinator.snapshot())
         drainOwnerResume()

@@ -5,7 +5,7 @@ on:
     branches: [sageos-2]
     paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml', '.github/workflows/test-sageos2-native-brain.yml']
   pull_request:
-    branches: [sageos-2]
+    branches: [sageos-2, opencode/voice-self-repair]
     paths: ['sageos2/**', '.github/workflows/verify-sageos2.yml', '.github/workflows/test-sageos2-native-brain.yml']
   workflow_dispatch:
 
@@ -271,6 +271,8 @@ jobs:
           python3 -m compileall -q sage_forge
           python3 -m unittest discover -v sage_forge/tests
 
+      - name: Run voice repair and runtime integration lab
+        run: python3 sageos2/tools/run-self-reliance-lab.py --gradle gradle
       - name: Verify core, root wire tests, compile native Brain, and build debug APK
         run: gradle -p sageos2 testDebugUnitTest lintRelease assembleDebug --stacktrace
       - name: Summarize unit and Android service test results
