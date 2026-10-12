@@ -760,7 +760,7 @@ open class MainActivity : Activity() {
         }
         AlertDialog.Builder(this)
             .setTitle("Review continuity changes")
-            .setMessage("This is exactly what will change. Nothing is deleted; existing history is kept.")
+            .setMessage("Review all Core and memory changes. Core revision history is retained, but imported memories can replace active entries with the same subject and key.")
             .setView(scrollView)
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Import") { _, _ ->
