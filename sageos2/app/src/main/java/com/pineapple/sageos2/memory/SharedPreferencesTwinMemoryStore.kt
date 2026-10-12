@@ -46,7 +46,7 @@ class SharedPreferencesTwinMemoryStore(context: Context) : TwinMemoryStore {
         }
         val nextRecords = current.records.filterNot { it.id == record.id } + record
         save(TwinMemorySnapshot(current.revision + 1, nextRecords))
-        return record
+        record
     }
 
     override fun forget(id: String, nowEpochMs: Long): Boolean = synchronized(SageContinuityWriteLock.monitor) {
