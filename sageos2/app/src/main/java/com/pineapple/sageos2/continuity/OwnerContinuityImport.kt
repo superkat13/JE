@@ -136,13 +136,13 @@ object OwnerContinuityCodec {
                 val value = clean(item.optString("value"), 2_000)
                 if (key.isEmpty() || value.isEmpty()) continue
                 val confidence = item.optDouble("confidence", 1.0)
-                require(confidence.isFinite()) { "invalid memory confidence at index $index" }
+                require(confidence.isFinite() && confidence in 0.0..1.0) { "invalid memory confidence at index $index" }
                 add(
                     OwnerContinuityMemory(
                         subject = subject,
                         key = key,
                         value = value,
-                        confidence = confidence.coerceIn(0.0, 1.0)
+                        confidence = confidence
                     )
                 )
             }
@@ -290,14 +290,13 @@ class OwnerContinuityImporter(
         )
     }
 
-    @Synchronized
-    fun import(raw: String, nowMs: Long = System.currentTimeMillis()): OwnerContinuityImportResult {
+    fun import(raw: String, nowMs: Long = System.currentTimeMillis()): OwnerContinuityImportResult = synchronized(SageContinuityWriteLock.monitor) {
         // Validate the whole package before any mutation so a malformed package can never leave a
         // partial write or a stray pending marker behind.
         val incoming = OwnerContinuityCodec.decode(raw)
         val digest = sha256(raw.trim())
         if (prefs.getBoolean("digest_$digest", false)) {
-            return OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
+            return@synchronized OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
         }
 
         // Durable intent marker. If the process dies after this point, the work below is idempotent
@@ -332,7 +331,7 @@ class OwnerContinuityImporter(
                 .commit()
         ) { "could not finalize owner continuity import; it will retry safely on the next attempt" }
 
-        return OwnerContinuityImportResult(
+        OwnerContinuityImportResult(
             source = incoming.source,
             alreadyImported = false,
             coreRevision = savedCore.revision,
