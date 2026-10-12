@@ -502,6 +502,26 @@ open class MainActivity : Activity() {
                 setOnClickListener { showRestoreSnapshotDialog(revision) }
             })
         }
+        if (health.currentStatus == SageCoreCurrentStatus.MISSING && health.validRevisions.isEmpty()) {
+            form.addView(Button(this).apply {
+                text = "Create new Core"
+                isAllCaps = false
+                setOnClickListener {
+                    AlertDialog.Builder(this@MainActivity)
+                        .setTitle("Create new Core")
+                        .setMessage("Create an explicit new Core identity? This will establish a fresh owner-twin Core.")
+                        .setNegativeButton("Cancel", null)
+                        .setPositiveButton("Create") { _, _ ->
+                            runCatching {
+                                host.core.replace(host.core.current().copy(notes = "Created new Core"))
+                            }.onSuccess {
+                                showPanel(Panel.CORE)
+                            }
+                        }
+                        .show()
+                }
+            })
+        }
         if (health.legacyCurrentAvailable || health.legacyPreviousAvailable) {
             form.addView(Button(this).apply {
                 text = "Review legacy 1.33.3 Core"
