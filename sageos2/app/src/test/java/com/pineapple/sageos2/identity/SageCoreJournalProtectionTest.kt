@@ -15,11 +15,11 @@ class SageCoreJournalProtectionTest {
     @Before
     fun setUp() {
         ctx = RuntimeEnvironment.getApplication()
-        ctx.getSharedPreferences("sage_core", Context.MODE_PRIVATE).edit().clear().commit()
+        ctx.getSharedPreferences("sage_core_v2", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
     private fun store() = SharedPreferencesSageCoreStore(ctx)
-    private fun prefs() = ctx.getSharedPreferences("sage_core", Context.MODE_PRIVATE)
+    private fun prefs() = ctx.getSharedPreferences("sage_core_v2", Context.MODE_PRIVATE)
 
     @Test
     fun replaceFailsClosedOnUnresolvedJournalWithMismatchedHistory() {
