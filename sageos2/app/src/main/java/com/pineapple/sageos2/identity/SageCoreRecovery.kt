@@ -223,7 +223,10 @@ class LegacyCoreRecovery(
 
     private fun merge(base: SageCoreSnapshot, candidate: LegacyCoreCandidate): SageCoreSnapshot {
         val block = "${LegacyCoreSource.IMPORT_MARKER} (${candidate.sourceKey}):\n${candidate.text}"
-        return base.copy(notes = mergeParagraphs(base.notes, block))
+        return base.copy(
+            notes = mergeParagraphs(base.notes, block),
+            provenance = if (base.revision == 0L) "legacy_owner_instructions" else base.provenance
+        )
     }
 
     private fun mergeParagraphs(left: String, right: String): String {
