@@ -6,6 +6,9 @@ import org.json.JSONObject
 import java.security.MessageDigest
 import java.util.Locale
 
+/** All app-owned Core and twin-memory mutations share this process-local lock. */
+internal object SageContinuityWriteLock { val monitor = Any() }
+
 /**
  * Durable, revision-monotonic, crash-safe persistence for Sage's Core.
  *
@@ -89,8 +92,7 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
             // Otherwise a pending write exists - attempt to recover it first
             recoverPendingWrite()
             // Re-check after recovery attempt
-            val journalAfter = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
-            if (journalAfter != null) {
+            if (runCatching { prefs.contains(KEY_JOURNAL) }.getOrElse { true }) {
                 error("Unresolved Sage Core write journal detected; reconciliation required")
             }
         }
@@ -444,11 +446,9 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
             "principles", "preferences", "selfRestrictions", "notes"
         )
 
-        /** Process-wide so independently constructed stores cannot race a write. */
-        private val WRITE_LOCK = Any()
     }
 
-    private fun <T> locked(block: () -> T): T = synchronized(WRITE_LOCK) { block() }
+    private fun <T> locked(block: () -> T): T = synchronized(SageContinuityWriteLock.monitor) { block() }
 }
 
 /** Stable SHA-256 hex helper shared across Core recovery and continuity binding. */
