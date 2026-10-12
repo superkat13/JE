@@ -73,6 +73,7 @@ class OwnerContinuityApprovalGateTest {
         val importer = importer(core, memory)
         val raw = memoryPackage()
         val preview = importer.preview(raw)
+        val reviewedMemoryRevision = memory.snapshot().revision
         val ownerUpdate = memory.remember(
             TwinMemorySubject.PROJECT, "current work", "newer owner value",
             TwinMemorySource.EXPLICIT_OWNER, 1.0, 200L
@@ -81,7 +82,7 @@ class OwnerContinuityApprovalGateTest {
         val beforeMemory = memory.snapshot()
 
         assertThrows(IllegalStateException::class.java) {
-            importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
+            importer.importBound(raw, preview.digest, preview.before, reviewedMemoryRevision)
         }
         assertEquals(beforeCore, core.current())
         assertEquals(beforeMemory, memory.snapshot())
@@ -107,7 +108,7 @@ class OwnerContinuityApprovalGateTest {
         val importer = importer(core, memory)
         val raw = identityPackage()
         val preview = importer.preview(raw)
-        val imported = importer.importBound(raw, preview.digest)
+        val imported = importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
         assertFalse(imported.alreadyImported)
         assertEquals("imported identity", core.current().twinIdentity)
         val once = core.current()
