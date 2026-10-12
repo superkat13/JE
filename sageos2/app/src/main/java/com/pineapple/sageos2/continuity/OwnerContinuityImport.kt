@@ -33,6 +33,15 @@ data class OwnerContinuityPackage(
     val memories: List<OwnerContinuityMemory> = emptyList()
 )
 
+data class OwnerContinuityImportPreview(
+    val source: String,
+    val before: SageCoreSnapshot,
+    val after: SageCoreSnapshot,
+    val coreChanged: Boolean,
+    val memories: Int,
+    val alreadyImported: Boolean = false
+)
+
 data class OwnerContinuityImportResult(
     val source: String,
     val alreadyImported: Boolean,
@@ -174,6 +183,19 @@ class OwnerContinuityImporter(
     private val memory: SharedPreferencesTwinMemoryStore
 ) {
     private val prefs = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+
+    @Synchronized
+    fun preview(raw: String): OwnerContinuityImportPreview {
+        val incoming = runCatching { OwnerContinuityCodec.decode(raw) }.getOrNull() ?: throw IllegalArgumentException("invalid continuity package")
+        val digest = sha256(raw.trim())
+        if (prefs.getBoolean("digest_$digest", false)) {
+            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true)
+        }
+        val current = core.current()
+        val merged = OwnerContinuityMerger.merge(current, incoming)
+        val coreChanged = merged.copy(revision = current.revision) != current
+        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size)
+    }
 
     @Synchronized
     fun import(raw: String, nowMs: Long = System.currentTimeMillis()): OwnerContinuityImportResult {

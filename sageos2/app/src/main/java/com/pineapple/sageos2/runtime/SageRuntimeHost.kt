@@ -444,6 +444,8 @@ class SageRuntimeHost private constructor(context: Context) {
     fun recoverableTasks() = tasks.active()
     fun recentConversation(limit: Int = 40): List<ConversationEntry> = history.recent(limit).entries
 
+    fun previewOwnerContinuity(raw: String): com.pineapple.sageos2.continuity.OwnerContinuityImportPreview = ownerContinuityImporter.preview(raw)
+
     fun importOwnerContinuity(raw: String): OwnerContinuityImportResult {
         val result = ownerContinuityImporter.import(raw)
         traces.record(

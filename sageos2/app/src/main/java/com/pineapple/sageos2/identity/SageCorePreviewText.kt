@@ -88,8 +88,6 @@ object SageCorePreviewText {
     }
 
     private fun clip(value: String): String {
-        val trimmed = value.trim()
-        return if (trimmed.length <= MAX_VALUE_CHARS) trimmed
-        else trimmed.take(MAX_VALUE_CHARS) + "…"
+        return value.trim()
     }
 }

@@ -519,8 +519,14 @@ open class MainActivity : Activity() {
 
         form.addView(Button(this).apply {
             text = "Save Sage's changes"
-            isEnabled = health.currentStatus != SageCoreCurrentStatus.INVALID
+            isEnabled = health.currentStatus != SageCoreCurrentStatus.INVALID && !(health.currentStatus == SageCoreCurrentStatus.MISSING && health.validRevisions.isEmpty())
             setOnClickListener {
+                // Prevent saving unchanged revision-0 fallback as a recovered/authenticated identity
+                val currentEffective = host.core.current()
+                if (health.currentStatus == SageCoreCurrentStatus.MISSING && health.validRevisions.isEmpty() && currentEffective.revision <= 0L) {
+                    Toast.makeText(this@MainActivity, "Create a new Core explicitly or recover from existing history", Toast.LENGTH_LONG).show()
+                    return@setOnClickListener
+                }
                 runCatching {
                     host.core.replace(
                         host.core.current().copy(
@@ -663,7 +669,7 @@ open class MainActivity : Activity() {
             .setTitle("Restore owner continuity")
             .setView(form)
             .setNegativeButton("Cancel", null)
-            .setPositiveButton("Import", null)
+            .setPositiveButton("Preview and Confirm", null)
             .create()
             .also { dialog ->
                 dialog.setOnShowListener {
@@ -673,23 +679,61 @@ open class MainActivity : Activity() {
                             Toast.makeText(this, "Paste the continuity package first", Toast.LENGTH_SHORT).show()
                             return@setOnClickListener
                         }
-                        runCatching { host.importOwnerContinuity(raw) }
-                            .onSuccess { result ->
-                                Toast.makeText(this, result.summary(), Toast.LENGTH_LONG).show()
-                                dialog.dismiss()
-                                showPanel(Panel.CORE)
-                            }
-                            .onFailure { error ->
-                                Toast.makeText(
-                                    this,
-                                    "Continuity import rejected: ${error.message ?: error::class.java.simpleName}",
-                                    Toast.LENGTH_LONG
-                                ).show()
-                            }
+                        try {
+                            val preview = host.previewOwnerContinuity(raw)
+                            showOwnerContinuityPreviewDialog(preview, raw)
+                            dialog.dismiss()
+                        } catch (e: Exception) {
+                            Toast.makeText(
+                                this,
+                                "Continuity package invalid: ${e.message ?: e::class.java.simpleName}",
+                                Toast.LENGTH_LONG
+                            ).show()
+                        }
                     }
                 }
                 dialog.show()
             }
+    }
+
+    private fun showOwnerContinuityPreviewDialog(
+        preview: com.pineapple.sageos2.continuity.OwnerContinuityImportPreview,
+        raw: String
+    ) {
+        val candidate = com.pineapple.sageos2.identity.SageCoreRestoreCandidate(
+            sourceLabel = "owner continuity: ${preview.source}",
+            sourceRevision = preview.after.revision,
+            targetRevision = host.core.previewTargetRevision(preview.after.revision),
+            sourceDigest = "", // not applicable; we use full package - but for simplicity just proceed
+            before = preview.before,
+            after = preview.after,
+            changedFields = host.core.changedTopLevelFieldsOf(preview.before, preview.after)
+        )
+        val previewText = android.widget.TextView(this).apply {
+            text = com.pineapple.sageos2.identity.SageCorePreviewText.render(candidate)
+            textSize = 13f
+            setTextIsSelectable(true)
+        }
+        val scrollView = android.widget.ScrollView(this).apply {
+            setPadding(dp(18), 0, dp(18), 0)
+            addView(previewText)
+        }
+        AlertDialog.Builder(this)
+            .setTitle("Review continuity changes")
+            .setMessage("This is exactly what will change. Nothing is deleted; existing history is kept.")
+            .setView(scrollView)
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Import") { _, _ ->
+                runCatching { host.importOwnerContinuity(raw) }
+                    .onSuccess { result ->
+                        Toast.makeText(this, result.summary(), Toast.LENGTH_LONG).show()
+                        showPanel(Panel.CORE)
+                    }
+                    .onFailure { error ->
+                        Toast.makeText(this, "Continuity import rejected: ${error.message ?: error::class.java.simpleName}", Toast.LENGTH_LONG).show()
+                    }
+            }
+            .show()
     }
 
     private fun showHealth() {

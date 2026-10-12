@@ -69,8 +69,13 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
         // Ensure no unresolved write journal is left from a previous failed reconciliation;
         // an inconsistent journal must be preserved for diagnosis and the operation must fail closed.
-        val journalRawBefore = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
-        if (journalRawBefore != null) {
+        val journalExists = runCatching { prefs.contains(KEY_JOURNAL) }.getOrDefault(false)
+        if (journalExists) {
+            val journalRawBefore = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
+            if (journalRawBefore == null) {
+                // Wrongly typed or unreadable journal; preserve original value and fail closed
+                error("Unresolved Sage Core write journal detected; reconciliation required")
+            }
             val journalValid = journalRawBefore.takeIf { isAuthenticRecord(it, null) }
                 ?.let { runCatching { decode(it) }.getOrNull() }
             val historyForKey = journalValid?.let { historyRaw(it.revision) }
@@ -247,29 +252,31 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
      * Returns true only when `current` was actually advanced from the journal.
      */
     fun recoverPendingWrite(): Boolean = locked {
-        val journalRaw = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull() ?: return@locked false
-        val journal = journalRaw.takeIf { isAuthenticRecord(it, null) }
-            ?.let { runCatching { decode(it) }.getOrNull() }
-            ?: return@locked false
-        val historyForKey = historyRaw(journal.revision)
-        if (historyForKey == null || historyForKey != journalRaw) {
-            // Inconsistent journal/history: leave both untouched for diagnosis, promote nothing.
-            return@locked false
-        }
-        val currentValid = currentValidOrNull()
-        if (currentValid == null || journal.revision > currentValid.revision) {
-            // Never let an automatic roll-forward overwrite an unreadable `current` record without
-            // durably retaining its original raw bytes first (the same guarantee ordinary replaces
-            // uphold). This preserves damaged but owner-authored data even across power loss.
-            if (currentStatus() == SageCoreCurrentStatus.INVALID) preserveDamagedCurrent()
-            check(prefs.edit().putString(KEY_CURRENT, journalRaw).remove(KEY_JOURNAL).commit()) {
-                "Sage Core journal roll-forward failed"
+        if (runCatching { prefs.contains(KEY_JOURNAL) }.getOrDefault(false)) {
+            val journalRaw = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
+            if (journalRaw == null) {
+                return@locked false
             }
-            true
-        } else {
-            check(prefs.edit().remove(KEY_JOURNAL).commit()) { "Sage Core journal clear failed" }
-            false
+            val journal = journalRaw.takeIf { isAuthenticRecord(it, null) }
+                ?.let { runCatching { decode(it) }.getOrNull() }
+                ?: return@locked false
+            val historyForKey = historyRaw(journal.revision)
+            if (historyForKey == null || historyForKey != journalRaw) {
+                return@locked false
+            }
+            val currentValid = currentValidOrNull()
+            if (currentValid == null || journal.revision > currentValid.revision) {
+                if (currentStatus() == SageCoreCurrentStatus.INVALID) preserveDamagedCurrent()
+                check(prefs.edit().putString(KEY_CURRENT, journalRaw).remove(KEY_JOURNAL).commit()) {
+                    "Sage Core journal roll-forward failed"
+                }
+                return@locked true
+            } else {
+                check(prefs.edit().remove(KEY_JOURNAL).commit()) { "Sage Core journal clear failed" }
+                return@locked false
+            }
         }
+        return@locked false
     }
 
     private fun nextRevision(incoming: Long): Long {
