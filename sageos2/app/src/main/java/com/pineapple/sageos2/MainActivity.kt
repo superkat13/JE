@@ -730,7 +730,20 @@ open class MainActivity : Activity() {
             changedFields = host.core.changedTopLevelFieldsOf(preview.before, preview.after)
         )
         val previewText = android.widget.TextView(this).apply {
-            text = com.pineapple.sageos2.identity.SageCorePreviewText.render(candidate)
+            text = buildString {
+                append(com.pineapple.sageos2.identity.SageCorePreviewText.render(candidate))
+                appendLine()
+                appendLine()
+                appendLine("# Imported memory changes (${preview.memoryChanges.size})")
+                if (preview.memoryChanges.isEmpty()) appendLine("(No memory changes)")
+                preview.memoryChanges.forEach { change ->
+                    appendLine("${change.subject} / ${change.key}")
+                    appendLine("Before: ${change.beforeValue ?: "(new memory)"}")
+                    appendLine("After: ${change.afterValue}")
+                    appendLine()
+                }
+                appendLine("Input note: surrounding spaces are trimmed; repeated whitespace is normalized in list, project and memory fields. Oversized values are rejected, never silently clipped.")
+            }
             textSize = 13f
             setTextIsSelectable(true)
         }
