@@ -75,8 +75,12 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         require(identity.length >= 12 && identity != EmptySageCoreProvider.current().twinIdentity) {
             "Enter an owner-authored Core identity (at least 12 characters)"
         }
-        check(currentStatus() == SageCoreCurrentStatus.MISSING && validRevisions().isEmpty()) {
-            "An existing or damaged Core requires review and recovery, not new creation"
+        check(
+            currentStatus() == SageCoreCurrentStatus.MISSING &&
+            revisionCount() == 0 &&
+            !prefs.contains(KEY_JOURNAL)
+        ) {
+            "An existing, historical or pending Core requires review and recovery, not new creation"
         }
         replace(EmptySageCoreProvider.current().copy(
             twinIdentity = identity,
