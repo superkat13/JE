@@ -69,6 +69,21 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
      */
     override fun current(): SageCoreSnapshot = currentValidOrNull() ?: EmptySageCoreProvider.current()
 
+    /** Owner-created, never auto-recovered. Fails closed if any Core already exists or is damaged. */
+    fun createNewCore(ownerAuthoredIdentity: String): SageCoreSnapshot = locked {
+        val identity = ownerAuthoredIdentity.trim()
+        require(identity.length >= 12 && identity != EmptySageCoreProvider.current().twinIdentity) {
+            "Enter an owner-authored Core identity (at least 12 characters)"
+        }
+        check(currentStatus() == SageCoreCurrentStatus.MISSING && validRevisions().isEmpty()) {
+            "An existing or damaged Core requires review and recovery, not new creation"
+        }
+        replace(EmptySageCoreProvider.current().copy(
+            twinIdentity = identity,
+            provenance = "owner_created"
+        ))
+    }
+
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
         // Ensure no unresolved write journal is left from a previous failed reconciliation;
         // an inconsistent journal must be preserved for diagnosis and the operation must fail closed.
