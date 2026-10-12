@@ -11,7 +11,7 @@ class SharedPreferencesVoiceRepairStore(context: Context) : VoiceRepairStore {
 
     override fun load(): List<VoiceRepairSession> = runCatching {
         val rows = JSONArray(prefs.getString("sessions", "[]"))
-        (0 until rows.length()).takeLast(VoiceRepairSessionManager.HISTORY_LIMIT).mapNotNull { index ->
+        (0 until rows.length()).toList().takeLast(VoiceRepairSessionManager.HISTORY_LIMIT).mapNotNull { index ->
             runCatching { decode(rows.getJSONObject(index)) }.getOrNull()
         }
     }.getOrDefault(emptyList())

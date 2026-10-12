@@ -26,19 +26,18 @@ class VoiceRepairResponder(
         return SagePersonalResolution.Reply(reply)
     }
 
-
     companion object {
         fun normalize(value: String): String {
-        var text = value.lowercase(Locale.ROOT).trim()
-            .replace(Regex("[.!?,;]+"), " ")
-            .replace(Regex("['\u2019]"), "")
-            .replace(Regex("\\s+"), " ").trim()
-        // Accept either order: "please Sage ..." and "Sage please ...".
-        while (text.startsWith("sage ") || text.startsWith("please ")) {
-            text = text.substringAfter(' ').trim()
+            var text = value.lowercase(Locale.ROOT).trim()
+                .replace(Regex("[.!?,;]+"), " ")
+                .replace(Regex("['\u2019]"), "")
+                .replace(Regex("\\s+"), " ").trim()
+            // Accept either order: "please Sage ..." and "Sage please ...".
+            while (text.startsWith("sage ") || text.startsWith("please ")) {
+                text = text.substringAfter(' ').trim()
+            }
+            return text.removeSuffix(" please").trim()
         }
-        return text.removeSuffix(" please").trim()
-    }
 
         fun isCancellation(rawText: String) = normalize(rawText) in CANCEL_COMMANDS
 

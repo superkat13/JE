@@ -748,6 +748,10 @@ open class MainActivity : Activity() {
             isAllCaps = false
             setOnClickListener { shareDiagnosticReport() }
         })
+        content.addView(sectionTitle("Recent hearing tests"))
+        host.voiceRepairHistory().asReversed().forEach { session ->
+            content.addView(info("Hearing test", com.pineapple.sageos2.speech.voicerepair.VoiceRepairPresentation.render(session)))
+        }
         content.addView(sectionTitle("Recent diagnostics"))
         val events = host.traces.recent(100).asReversed()
         if (events.isEmpty()) {

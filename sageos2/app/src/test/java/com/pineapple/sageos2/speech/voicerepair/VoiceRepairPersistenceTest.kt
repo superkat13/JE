@@ -4,6 +4,30 @@ import org.junit.Assert.*
 import org.junit.Test
 
 class VoiceRepairPersistenceTest {
+    @Test fun cancellationReleasesControllerEvenWhenPersistenceFails() {
+        var failSave = false
+        val store = object : VoiceRepairStore {
+            override fun load() = emptyList<VoiceRepairSession>()
+            override fun save(sessions: List<VoiceRepairSession>) { if (failSave) error("disk full") }
+        }
+        var released = false
+        val port = object : VoiceDiagnosticPort {
+            override fun acquire(owner: String) = true
+            override fun capture(owner: String, expected: String, result: (VoiceRepairTestResult) -> Unit) = Unit
+            override fun reset(owner: String, completed: (Boolean) -> Unit) = Unit
+            override fun release(owner: String) { released = true }
+        }
+        val scheduler = object : com.pineapple.sageos2.runtime.RuntimeScheduler {
+            override fun schedule(delayMs: Long, task: () -> Unit) = object : com.pineapple.sageos2.runtime.ScheduledHandle {
+                override fun cancel() = Unit
+            }
+        }
+        val controller = VoiceRepairOrchestrator(port, VoiceRepairSessionManager(store = store), scheduler)
+        controller.startRepair("hello"); failSave = true
+        runCatching { controller.cancel() }
+        assertTrue(released)
+    }
+
     @Test fun restartPreservesTestAndMarksUnfinishedRepairInterrupted() {
         val store = MemoryVoiceRepairStore()
         val first = VoiceRepairSessionManager(clockMs = { 100 }, store = store)

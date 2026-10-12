@@ -94,10 +94,11 @@ class VoiceRepairWorkflow(
         poll = null
         awaitingPhrase = false
         waitingForIdle = false
-        controller.cancel()
+        val saved = runCatching { controller.cancel() }.isSuccess
         running = false
         releaseReservation()
-        message = if (active) "Cancelled voice repair. No repair has been verified." else "No active voice repair session to cancel."
+        message = if (!saved) "Cancelled hearing test. The microphone was released, but the session could not be saved."
+            else if (active) "Cancelled voice repair. No repair has been verified." else "No active voice repair session to cancel."
         changed()
         return message
     }
@@ -109,10 +110,11 @@ class VoiceRepairWorkflow(
         val pending = awaitingPhrase || waitingForIdle
         awaitingPhrase = false
         waitingForIdle = false
-        controller.interrupt()
+        val saved = runCatching { controller.interrupt() }.isSuccess
         running = false
         releaseReservation()
-        if (pending) message = "Hearing test interrupted before capture. No repair was verified."
+        if (!saved) message = "Hearing test interrupted. The microphone was released, but the session could not be saved."
+        else if (pending) message = "Hearing test interrupted before capture. No repair was verified."
         changed()
     }
 
