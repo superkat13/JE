@@ -40,7 +40,9 @@ data class OwnerContinuityImportPreview(
     val coreChanged: Boolean,
     val memories: Int,
     val alreadyImported: Boolean = false,
-    val digest: String = ""
+    val digest: String = "",
+    /** Captured with the owner preview; do not re-read at confirmation time. */
+    val reviewedMemoryRevision: Long = 0L
 )
 
 data class OwnerContinuityImportResult(
@@ -191,12 +193,12 @@ class OwnerContinuityImporter(
         val incoming = runCatching { OwnerContinuityCodec.decode(trimmed) }.getOrNull() ?: throw IllegalArgumentException("invalid continuity package")
         val digest = sha256(trimmed)
         if (prefs.getBoolean("digest_$digest", false)) {
-            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true, digest)
+            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true, digest, memory.snapshot().revision)
         }
         val current = core.current()
         val merged = OwnerContinuityMerger.merge(current, incoming)
         val coreChanged = merged.copy(revision = current.revision) != current
-        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size, digest = digest)
+        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size, digest = digest, reviewedMemoryRevision = memory.snapshot().revision)
     }
 
     @Synchronized
