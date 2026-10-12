@@ -350,6 +350,7 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     private fun encode(core: SageCoreSnapshot) = JSONObject().apply {
         put("revision", core.revision)
         put("twinIdentity", core.twinIdentity)
+        put("provenance", core.provenance)
         put("ownerModel", JSONObject().apply {
             put("preferredNames", JSONArray(core.ownerModel.preferredNames))
             put("vocabulary", JSONObject(core.ownerModel.vocabulary))
@@ -386,6 +387,7 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         return SageCoreSnapshot(
             revision = obj.optLong("revision", 0L),
             twinIdentity = obj.optString("twinIdentity", EmptySageCoreProvider.current().twinIdentity),
+            provenance = obj.optString("provenance", "unknown"),
             ownerModel = OwnerModel(
                 preferredNames = owner.optJSONArray("preferredNames").strings(),
                 vocabulary = owner.optJSONObject("vocabulary").stringMap(),
