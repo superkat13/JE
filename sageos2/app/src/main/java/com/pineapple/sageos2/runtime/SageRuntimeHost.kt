@@ -457,6 +457,17 @@ class SageRuntimeHost private constructor(context: Context) {
         return result
     }
 
+    fun importOwnerContinuityBound(raw: String, expectedDigest: String?): OwnerContinuityImportResult {
+        val result = ownerContinuityImporter.importBound(raw, expectedDigest)
+        traces.record(
+            "owner_continuity",
+            "import source=${result.source.take(120)} already=${result.alreadyImported} coreRevision=${result.coreRevision} memories=${result.memoriesApplied}"
+        )
+        runCatching { runSelfCareCheck() }
+            .onFailure { traces.record("self_care", "post-import check failed: ${it.message ?: it::class.java.simpleName}") }
+        return result
+    }
+
     fun forgetLearnedPhrase(phrase: String): Boolean {
         val normalized = SharedPreferencesLearnedPhraseStore.normalize(phrase)
         val removed = learnedPhrases.remove(phrase)

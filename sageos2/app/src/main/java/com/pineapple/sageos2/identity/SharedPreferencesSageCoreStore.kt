@@ -69,8 +69,11 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
         // Ensure no unresolved write journal is left from a previous failed reconciliation;
         // an inconsistent journal must be preserved for diagnosis and the operation must fail closed.
-        val journalExists = runCatching { prefs.contains(KEY_JOURNAL) }.getOrDefault(false)
-        if (journalExists) {
+        val journalExistsCheck = runCatching { prefs.contains(KEY_JOURNAL) }
+        if (journalExistsCheck.isFailure) {
+            error("Unresolved Sage Core write journal detected; reconciliation required")
+        }
+        if (journalExistsCheck.getOrThrow()) {
             val journalRawBefore = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
             if (journalRawBefore == null) {
                 // Wrongly typed or unreadable journal; preserve original value and fail closed
@@ -252,7 +255,9 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
      * Returns true only when `current` was actually advanced from the journal.
      */
     fun recoverPendingWrite(): Boolean = locked {
-        if (runCatching { prefs.contains(KEY_JOURNAL) }.getOrDefault(false)) {
+        val je = runCatching { prefs.contains(KEY_JOURNAL) }
+        if (je.isFailure) return@locked false
+        if (je.getOrThrow()) {
             val journalRaw = runCatching { prefs.getString(KEY_JOURNAL, null) }.getOrNull()
             if (journalRaw == null) {
                 return@locked false

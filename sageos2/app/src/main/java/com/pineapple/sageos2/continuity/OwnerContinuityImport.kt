@@ -39,7 +39,8 @@ data class OwnerContinuityImportPreview(
     val after: SageCoreSnapshot,
     val coreChanged: Boolean,
     val memories: Int,
-    val alreadyImported: Boolean = false
+    val alreadyImported: Boolean = false,
+    val digest: String = ""
 )
 
 data class OwnerContinuityImportResult(
@@ -186,15 +187,65 @@ class OwnerContinuityImporter(
 
     @Synchronized
     fun preview(raw: String): OwnerContinuityImportPreview {
-        val incoming = runCatching { OwnerContinuityCodec.decode(raw) }.getOrNull() ?: throw IllegalArgumentException("invalid continuity package")
-        val digest = sha256(raw.trim())
+        val trimmed = raw.trim()
+        val incoming = runCatching { OwnerContinuityCodec.decode(trimmed) }.getOrNull() ?: throw IllegalArgumentException("invalid continuity package")
+        val digest = sha256(trimmed)
         if (prefs.getBoolean("digest_$digest", false)) {
-            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true)
+            return OwnerContinuityImportPreview(incoming.source, core.current(), core.current(), false, 0, true, digest)
         }
         val current = core.current()
         val merged = OwnerContinuityMerger.merge(current, incoming)
         val coreChanged = merged.copy(revision = current.revision) != current
-        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size)
+        return OwnerContinuityImportPreview(incoming.source, current, merged, coreChanged, incoming.memories.size, digest = digest)
+    }
+
+    @Synchronized
+    fun importBound(raw: String, expectedDigest: String?): OwnerContinuityImportResult {
+        val trimmed = raw.trim()
+        val digest = sha256(trimmed)
+        if (expectedDigest != null && digest != expectedDigest) {
+            throw IllegalStateException("stale continuity package confirmation")
+        }
+        val incoming = OwnerContinuityCodec.decode(trimmed)
+        if (prefs.getBoolean("digest_$digest", false)) {
+            return OwnerContinuityImportResult(incoming.source, true, core.current().revision, 0)
+        }
+
+        check(prefs.edit().putBoolean("pending_$digest", true).commit()) {
+            "could not record pending owner continuity import"
+        }
+
+        val current = core.current()
+        val merged = OwnerContinuityMerger.merge(current, incoming)
+        val coreChanged = merged.copy(revision = current.revision) != current
+        val savedCore = if (coreChanged) core.replace(merged) else current
+
+        incoming.memories.forEach { item ->
+            memory.remember(
+                subject = item.subject,
+                key = item.key,
+                value = item.value,
+                source = TwinMemorySource.EXPLICIT_OWNER,
+                confidence = item.confidence,
+                nowEpochMs = System.currentTimeMillis()
+            )
+        }
+
+        check(
+            prefs.edit()
+                .putBoolean("digest_$digest", true)
+                .putString("source_$digest", incoming.source)
+                .putLong("imported_at_$digest", System.currentTimeMillis())
+                .remove("pending_$digest")
+                .commit()
+        ) { "could not finalize owner continuity import; it will retry safely on the next attempt" }
+
+        return OwnerContinuityImportResult(
+            source = incoming.source,
+            alreadyImported = false,
+            coreRevision = savedCore.revision,
+            memoriesApplied = incoming.memories.size
+        )
     }
 
     @Synchronized
