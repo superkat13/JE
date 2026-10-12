@@ -56,7 +56,7 @@ class OwnerContinuityApprovalGateTest {
         ))
 
         assertThrows(IllegalStateException::class.java) {
-            importer.importBound(raw, preview.digest)
+            importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
         }
         assertEquals("stale confirmation must not change Core", ownerUpdate, core.current())
         assertEquals("stale confirmation must not change memory", 0L, memory.snapshot().revision)
@@ -81,7 +81,7 @@ class OwnerContinuityApprovalGateTest {
         val beforeMemory = memory.snapshot()
 
         assertThrows(IllegalStateException::class.java) {
-            importer.importBound(raw, preview.digest)
+            importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
         }
         assertEquals(beforeCore, core.current())
         assertEquals(beforeMemory, memory.snapshot())
