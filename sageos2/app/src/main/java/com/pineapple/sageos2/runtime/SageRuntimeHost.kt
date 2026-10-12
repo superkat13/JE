@@ -457,7 +457,7 @@ class SageRuntimeHost private constructor(context: Context) {
         return result
     }
 
-    fun importOwnerContinuityBound(raw: String, expectedDigest: String?, expectedCore: com.pineapple.sageos2.identity.SageCoreSnapshot? = null, expectedMemoryRev: Long? = null): OwnerContinuityImportResult {
+    fun importOwnerContinuityBound(raw: String, expectedDigest: String, expectedCore: com.pineapple.sageos2.identity.SageCoreSnapshot, expectedMemoryRev: Long): OwnerContinuityImportResult {
         val result = ownerContinuityImporter.importBound(raw, expectedDigest, expectedCore, expectedMemoryRev)
         traces.record(
             "owner_continuity",
