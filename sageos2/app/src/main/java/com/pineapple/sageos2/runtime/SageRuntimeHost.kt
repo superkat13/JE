@@ -349,8 +349,12 @@ class SageRuntimeHost private constructor(context: Context) {
     fun cancelVoiceRepair(): String = voiceRepairWorkflow.cancel()
     fun interruptVoiceRepair() = voiceRepairWorkflow.interrupt()
     fun voiceRepairHistory(): List<VoiceRepairSession> = voiceRepairManager.history()
-    fun voiceRepairExport(): String? = voiceRepairOrchestrator.createExport()?.let {
-        VoiceRepairExportRenderer.render(it) + "\n" + voiceRepairMessage()
+    fun voiceRepairExport(): String? {
+        if (voiceRepairWorkflow.awaitingPhrase || voiceRepairWorkflow.waitingForIdle) return null
+        val session = voiceRepairManager.current() ?: return null
+        return voiceRepairOrchestrator.createExport()?.let {
+            VoiceRepairExportRenderer.render(it) + "\n" + VoiceRepairPresentation.render(session)
+        }
     }
 
     fun pushToTalk() { start(); runtime.submit(SageEvent.PushToTalkRequested) }

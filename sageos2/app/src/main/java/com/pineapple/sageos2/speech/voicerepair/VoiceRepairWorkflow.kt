@@ -69,7 +69,7 @@ class VoiceRepairWorkflow(
                 releaseReservation()
             }
         } catch (_: Exception) {
-            controller.interrupt()
+            runCatching { controller.interrupt() }
             running = false
             message = "The hearing test could not start. No repair was verified."
             releaseReservation()

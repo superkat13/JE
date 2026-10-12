@@ -81,6 +81,7 @@ open class MainActivity : Activity() {
     private var hearingPhrase: EditText? = null
     private var hearingStart: Button? = null
     private var hearingCancel: Button? = null
+    private var hearingExport: Button? = null
     private var pendingHearingExport: String? = null
     private var activeBrainProgress: BrainProgress? = null
     private var lastSubmittedText = ""
@@ -381,7 +382,7 @@ open class MainActivity : Activity() {
             isAllCaps = false
             setOnClickListener { host.cancelVoiceRepair(); renderHearingTest() }
         }.also { buttons.addView(it) }
-        buttons.addView(Button(this).apply {
+        hearingExport = Button(this).apply {
             text = "Save test export"
             isAllCaps = false
             setOnClickListener {
@@ -399,7 +400,7 @@ open class MainActivity : Activity() {
                         }, HEARING_EXPORT_REQUEST)
                     }.show()
             }
-        })
+        }.also { buttons.addView(it) }
         panel.addView(buttons)
         body.addView(panel)
         renderHearingTest()
@@ -413,6 +414,7 @@ open class MainActivity : Activity() {
         hearingPhrase?.visibility = if (awaiting) View.VISIBLE else View.GONE
         hearingStart?.visibility = if (awaiting) View.VISIBLE else View.GONE
         hearingCancel?.visibility = if (host.voiceRepairActive()) View.VISIBLE else View.GONE
+        hearingExport?.isEnabled = host.voiceRepairExport() != null
     }
 
     private fun showSettings() {

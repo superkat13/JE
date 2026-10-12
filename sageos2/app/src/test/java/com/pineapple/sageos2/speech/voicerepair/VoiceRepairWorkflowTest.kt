@@ -14,6 +14,7 @@ class VoiceRepairWorkflowTest {
             return object : ScheduledHandle { override fun cancel() { item.cancelled = true } }
         }
         fun next() { val i = tasks.indexOfFirst { !it.cancelled && it.delay < 60_000 }; check(i >= 0); tasks.removeAt(i).run() }
+        fun deadline() { val i = tasks.indexOfFirst { !it.cancelled && it.delay == 60_000L }; check(i >= 0); tasks.removeAt(i).run() }
     }
     private class Port : VoiceDiagnosticPort {
         var owner: String? = null
@@ -95,6 +96,19 @@ class VoiceRepairWorkflowTest {
         assertTrue(f.workflow.message.contains("No repair was verified"))
         assertTrue(f.workflow.message.contains("recreated")); assertFalse(f.held)
         assertEquals(VoiceRepairState.INTERRUPTED, f.manager.current()!!.state)
+    }
+
+    @Test fun deadlineReleasesMicrophoneThenRuntimeAndRejectsLateRecognition() {
+        val f = Fixture(); f.idle = true
+        f.workflow.request(); f.workflow.submitPhrase("hello"); f.scheduler.next()
+        val stale = f.port.callback!!
+        f.scheduler.deadline()
+        assertNull(f.port.owner); assertTrue(f.held)
+        f.scheduler.next()
+        assertFalse(f.held); assertEquals(1, f.releases)
+        assertEquals(VoiceRepairCause.DEADLINE_EXCEEDED, f.manager.current()!!.cause)
+        stale(VoiceRepairTestResult("hello", "hello"))
+        assertEquals(VoiceRepairState.FAILED, f.manager.current()!!.state)
     }
 
     @Test fun invalidPhrasesRemainInDedicatedInput() {
