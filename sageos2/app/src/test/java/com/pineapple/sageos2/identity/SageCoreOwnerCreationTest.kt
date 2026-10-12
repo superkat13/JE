@@ -32,8 +32,8 @@ class SageCoreOwnerCreationTest {
     }
 
     @Test fun ownerAuthoredCreationHasDurableProvenanceAndCannotRunTwice() {
-        val store = store()
-        val created = store.createNewCore("I am a new, owner-authored Sage Core.")
+        val core = store()
+        val created = core.createNewCore("I am a new, owner-authored Sage Core.")
         assertEquals(1L, created.revision)
         assertEquals("owner_created", created.provenance)
         assertEquals("I am a new, owner-authored Sage Core.", created.twinIdentity)
@@ -42,7 +42,7 @@ class SageCoreOwnerCreationTest {
         assertThrows(IllegalStateException::class.java) {
             reopened.createNewCore("Attempted replacement for saved Core.")
         }
-        assertEquals(created, store.current())
+        assertEquals(created, core.current())
     }
 
     @Test fun damagedCurrentPreventsNewCreationAndPreservesRawRecord() {
