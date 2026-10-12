@@ -56,7 +56,7 @@ class OwnerContinuityApprovalGateTest {
         ))
 
         assertThrows(IllegalStateException::class.java) {
-            importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
+            importer.importBound(raw, preview.digest, preview.before, preview.reviewedMemoryRevision)
         }
         assertEquals("stale confirmation must not change Core", ownerUpdate, core.current())
         assertEquals("stale confirmation must not change memory", 0L, memory.snapshot().revision)
@@ -73,16 +73,16 @@ class OwnerContinuityApprovalGateTest {
         val importer = importer(core, memory)
         val raw = memoryPackage()
         val preview = importer.preview(raw)
-        val reviewedMemoryRevision = memory.snapshot().revision
         val ownerUpdate = memory.remember(
             TwinMemorySubject.PROJECT, "current work", "newer owner value",
             TwinMemorySource.EXPLICIT_OWNER, 1.0, 200L
         )
         val beforeCore = core.current()
         val beforeMemory = memory.snapshot()
+        assertTrue("preview must retain earlier memory revision", preview.reviewedMemoryRevision < beforeMemory.revision)
 
         assertThrows(IllegalStateException::class.java) {
-            importer.importBound(raw, preview.digest, preview.before, reviewedMemoryRevision)
+            importer.importBound(raw, preview.digest, preview.before, preview.reviewedMemoryRevision)
         }
         assertEquals(beforeCore, core.current())
         assertEquals(beforeMemory, memory.snapshot())
@@ -108,7 +108,7 @@ class OwnerContinuityApprovalGateTest {
         val importer = importer(core, memory)
         val raw = identityPackage()
         val preview = importer.preview(raw)
-        val imported = importer.importBound(raw, preview.digest, preview.before, memory.snapshot().revision)
+        val imported = importer.importBound(raw, preview.digest, preview.before, preview.reviewedMemoryRevision)
         assertFalse(imported.alreadyImported)
         assertEquals("imported identity", core.current().twinIdentity)
         val once = core.current()
