@@ -595,6 +595,6 @@ class SageRuntimeHost private constructor(context: Context) {
     }
 
     private fun queueOwnerTask(task: TaskCheckpoint): String? = runtime.queueOwnerResume(task)
-}
 
     fun hasPendingImport(digest: String): Boolean = ownerContinuityImporter.hasPending(digest)
+}
