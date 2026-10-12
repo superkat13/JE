@@ -507,15 +507,22 @@ open class MainActivity : Activity() {
                 text = "Create new Core"
                 isAllCaps = false
                 setOnClickListener {
+                    val ownerIdentity = editor("Write Sage's NEW Core identity in your own words", "", 7)
                     AlertDialog.Builder(this@MainActivity)
-                        .setTitle("Create new Core")
-                        .setMessage("Create an explicit new Core identity? This will establish a fresh owner-twin Core.")
+                        .setTitle("Create an owner-authored Core")
+                        .setMessage("This creates NEW continuity, not a recovery of a previous Sage identity. Review any available legacy Core first. No default identity will be saved.")
+                        .setView(ownerIdentity)
                         .setNegativeButton("Cancel", null)
-                        .setPositiveButton("Create") { _, _ ->
+                        .setPositiveButton("Create new Core") { _, _ ->
                             runCatching {
-                                host.core.replace(host.core.current().copy(notes = "Created new Core"))
-                            }.onSuccess {
+                                host.core.createNewCore(ownerIdentity.text.toString())
+                            }.onSuccess { saved ->
+                                Toast.makeText(this@MainActivity, "Owner-created Core saved as version ${saved.revision}", Toast.LENGTH_LONG).show()
                                 showPanel(Panel.CORE)
+                            }.onFailure { error ->
+                                Toast.makeText(this@MainActivity,
+                                    "No Core created: ${error.message ?: error::class.java.simpleName}",
+                                    Toast.LENGTH_LONG).show()
                             }
                         }
                         .show()
