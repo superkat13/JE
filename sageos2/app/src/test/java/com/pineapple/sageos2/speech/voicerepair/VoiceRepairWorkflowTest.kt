@@ -77,6 +77,8 @@ class VoiceRepairWorkflowTest {
         val late = f.scheduler.tasks.first().run
         f.workflow.cancel(); f.idle = true; late()
         assertTrue(f.port.captures.isEmpty()); assertFalse(f.held)
+        assertEquals("cancel before physical admission still refreshes the wake generation once", 1, f.releases)
+        assertEquals("no physical microphone lease to release", 0, f.port.releases)
     }
 
     @Test fun mismatchShowsActualWordsAndNeverClaimsRepair() {
