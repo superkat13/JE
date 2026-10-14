@@ -37,6 +37,44 @@ class SageRuntimeTest {
         assertEquals(1, f.fast.requests.size)
     }
 
+    @Test fun voiceInitiatedHearingRequestCompletesSpokenReplyBeforeDiagnosticLease() {
+        var pending = false
+        val responder = com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder(
+            EmptySagePersonalResponder,
+            com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager(),
+            requestPanel = {
+                pending = true
+                "Type an expected phrase in the dedicated hearing panel."
+            }
+        )
+        val f = Fixture(
+            coordinator = SageTurnCoordinator(SageCommandRouter(personal = responder)),
+            diagnosticAdmissionPending = { pending }
+        )
+        f.runtime.start()
+        f.speech.listener!!.onWakeDetected(
+            WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
+        f.speech.completeLastSpeech() // wake acknowledgement finishes before request capture
+        val command = f.runtime.snapshot()
+        f.speech.listener!!.onTranscriptFinal(command.activeTurnId,
+            command.recognizerGeneration, "fix your hearing")
+        assertTrue(pending)
+        assertEquals(SageRuntimeState.SPEAKING, f.runtime.snapshot().state)
+
+        f.speech.completeLastSpeech() // must NOT be dropped by the pending input gate
+        assertEquals(SageRuntimeState.ECHO_GUARD, f.runtime.snapshot().state)
+        f.runtime.submit(SageEvent.EchoGuardElapsed(command.activeTurnId))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertEquals("no normal follow-up microphone while hearing test is pending",
+            SageListeningMode.WAKE_ONLY, f.speech.lastCapture!!.first)
+        assertTrue(f.runtime.reserveDiagnosticWindow())
+        assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
+        pending = false
+        f.runtime.releaseDiagnosticWindow()
+        assertEquals(SageListeningMode.WAKE_ONLY, f.speech.lastCapture!!.first)
+        assertTrue(f.fast.requests.isEmpty())
+    }
+
     @Test fun pendingHearingWorkflowBlocksTalkWakeAndTranscriptsBeforeLease() {
         var pending = false
         val f = Fixture(diagnosticAdmissionPending = { pending })
