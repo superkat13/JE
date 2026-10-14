@@ -292,6 +292,12 @@ class SageTurnCoordinator(
 
     private fun onEchoGuardElapsed(event: SageEvent.EchoGuardElapsed): List<SageEffect> {
         if (event.turnId != activeTurnId || state != SageRuntimeState.ECHO_GUARD) return stale("echo guard")
+        if (event.suppressFollowUpForDiagnostic) {
+            // Let Sage finish her spoken repair instructions without reopening normal command ASR.
+            // Pending typed input stays queued rather than executing while the diagnostic UI owns input.
+            followUpAfterSpeech = false
+            return closeToWake()
+        }
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
             activeTurnId = next.turnId
