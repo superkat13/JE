@@ -113,7 +113,10 @@ class SageTurnCoordinator(
         pendingWakeCommand = null
         if (savedCommand != null) return dispatch(activeTurnId, savedCommand)
         state = SageRuntimeState.COMMAND_LISTENING
-        return listOf(changeListening(SageListeningMode.COMMAND, activeTurnId))
+        // The wake microphone was stopped before Sage spoke her acknowledgement.
+        // The next capture starts AFTER TTS, so its first 400ms is fresh owner speech,
+        // not leftover wake-word audio. Do not discard the beginning of the command.
+        return listOf(changeListening(SageListeningMode.COMMAND, activeTurnId, wakeTailPresent = false))
     }
 
     /** Ignore readiness from a cancelled or superseded recognizer, including duplicate callbacks. */
@@ -330,12 +333,17 @@ class SageTurnCoordinator(
 
     private fun validRecognition(turnId: Long, generation: Long) = turnId == activeTurnId && generation == recognizerGeneration
 
-    private fun changeListening(mode: SageListeningMode, turnId: Long = 0L): SageEffect.SetListeningMode {
+    private fun changeListening(
+        mode: SageListeningMode,
+        turnId: Long = 0L,
+        wakeTailPresent: Boolean? = null
+    ): SageEffect.SetListeningMode {
         recognizerGeneration += 1
         listeningMode = mode
         commandRecognizerReady = false
-        // Follow-ups have no immediate wake-word tail even if their original turn began via wake.
-        val tail = mode == SageListeningMode.COMMAND && activeTurnOrigin == TurnOrigin.VOICE_WAKE
+        // Origin is provenance, not proof of a wake tail. A spoken wake acknowledgement
+        // inserts TTS and a microphone handoff, so the caller explicitly passes false.
+        val tail = wakeTailPresent ?: (mode == SageListeningMode.COMMAND && activeTurnOrigin == TurnOrigin.VOICE_WAKE)
         return SageEffect.SetListeningMode(mode, recognizerGeneration, turnId, wakeTailPresent = tail)
     }
 
