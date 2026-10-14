@@ -97,6 +97,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val traces = SharedPreferencesTraceStore(appContext)
     val tasks = SharedPreferencesTaskContinuityStore(appContext)
     val recovery = TaskRecoveryManager(tasks)
+    @Volatile private var voiceWorkflowOpen = false
     private val voiceRepairManager = VoiceRepairSessionManager()
     private val voiceRepairHistory = SharedPreferencesVoiceRepairHistoryStore(appContext)
     private val voiceRepairWorkflow: VoiceRepairWorkflow by lazy {
@@ -105,7 +106,11 @@ class SageRuntimeHost private constructor(context: Context) {
             scheduler = AndroidRuntimeScheduler(),
             reserve = { runtime.reserveDiagnosticWindow() },
             release = { runtime.releaseDiagnosticWindow() },
-            changed = { listeners.forEach { it.onVoiceRepairChanged() } }
+            changed = {
+                voiceWorkflowOpen = voiceRepairWorkflow.awaitingPhrase ||
+                    voiceRepairWorkflow.waitingForIdle || voiceRepairWorkflow.running
+                listeners.forEach { it.onVoiceRepairChanged() }
+            }
         )
     }
     private val voiceRepairOrchestrator: VoiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
@@ -252,7 +257,8 @@ class SageRuntimeHost private constructor(context: Context) {
         ownerApps = ownerApps,
         modes = modes,
         capabilities = capabilities,
-        taskContinuity = tasks
+        taskContinuity = tasks,
+        diagnosticAdmissionPending = { voiceWorkflowOpen }
     )
 
     fun start() {
@@ -444,8 +450,7 @@ class SageRuntimeHost private constructor(context: Context) {
     }
 
     fun voiceRepairAwaitingPhrase(): Boolean = voiceRepairWorkflow.awaitingPhrase
-    fun voiceRepairActive(): Boolean = voiceRepairWorkflow.awaitingPhrase ||
-        voiceRepairWorkflow.waitingForIdle || voiceRepairWorkflow.running
+    fun voiceRepairActive(): Boolean = voiceWorkflowOpen
     fun voiceRepairMessage(): String = voiceRepairWorkflow.message.ifBlank {
         voiceRepairManager.current()?.let(VoiceRepairPresentation::render).orEmpty()
     }
@@ -479,7 +484,14 @@ class SageRuntimeHost private constructor(context: Context) {
         }
     }
 
-    fun pushToTalk() { start(); runtime.submit(SageEvent.PushToTalkRequested) }
+    fun pushToTalk() {
+        start()
+        if (voiceRepairActive()) {
+            listeners.forEach { it.onTypedInputRejected("Finish or cancel the hearing test first.") }
+            return
+        }
+        runtime.submit(SageEvent.PushToTalkRequested)
+    }
     fun snapshot(): SageRuntimeSnapshot = runtime.snapshot()
     fun brainStatus() = brain.health()
     fun wakeStatus() = wakeEngine.health()
