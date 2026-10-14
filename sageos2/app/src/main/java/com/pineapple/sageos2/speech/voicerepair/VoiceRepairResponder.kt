@@ -121,6 +121,9 @@ class VoiceRepairResponder(
 
     private fun liveActive(): Boolean = manager.current()?.state?.let { it in ACTIVE_STATES } == true
 
+
+
+    companion object {
     private fun normalize(value: String): String {
         var text = value.lowercase(Locale.ROOT).trim()
             .replace(Regex("[.!?,;]+"), " ")
@@ -132,8 +135,8 @@ class VoiceRepairResponder(
         }
         return text.removeSuffix(" please").trim()
     }
+        fun isCancellation(rawText: String): Boolean = normalize(rawText) in CANCEL_COMMANDS
 
-    companion object {
         const val MAX_PHRASE = 200
         val DIAGNOSE_COMMANDS = setOf("diagnose my voice", "diagnose voice", "check my voice", "check your hearing", "diagnose your hearing")
         val FIX_COMMANDS = setOf("fix my hearing", "fix your hearing", "repair your hearing", "fix my voice", "repair my voice", "fix your voice", "repair your voice")
