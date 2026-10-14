@@ -458,11 +458,22 @@ class SageRuntimeHost private constructor(context: Context) {
     fun cancelVoiceRepair(): String = voiceRepairWorkflow.cancel()
     fun interruptVoiceRepair() = voiceRepairWorkflow.interrupt()
     fun voiceRepairSessions(): List<VoiceRepairSession> = voiceRepairHistory.history()
-    /** Explicit owner export only: never auto-upload diagnostic phrase text. */
-    fun voiceRepairExport(): String? {
+    /** Preserve only a non-sensitive session ID across Android activity recreation. */
+    fun voiceRepairExportSessionId(): String? =
+        if (voiceRepairActive()) null else voiceRepairHistory.latestTerminal()?.id
+
+    /** Reconstruct the report from Sage's existing private diagnostic history, not Activity state. */
+    fun voiceRepairExportForSession(sessionId: String): String? {
         if (voiceRepairActive()) return null
-        return voiceRepairExportText().takeIf { it.isNotBlank() }
+        val session = voiceRepairHistory.history().firstOrNull { it.id == sessionId } ?: return null
+        if (session.state !in setOf(VoiceRepairState.SUCCESS, VoiceRepairState.HEALTHY,
+                VoiceRepairState.FAILED, VoiceRepairState.CANCELLED, VoiceRepairState.INTERRUPTED)) return null
+        return VoiceRepairExportRenderer.render(VoiceRepairExport.from(session))
     }
+
+    /** Explicit owner export only: never auto-upload diagnostic phrase text. */
+    fun voiceRepairExport(): String? =
+        voiceRepairExportSessionId()?.let(::voiceRepairExportForSession)
 
     /**
      * Submit a local-API text turn only when it can begin immediately.
