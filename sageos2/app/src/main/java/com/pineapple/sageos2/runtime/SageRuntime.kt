@@ -114,6 +114,30 @@ class SageRuntime(
         speech.shutdown()
     }
 
+    private var diagnosticReserved = false
+
+    /** Reserve the idle runtime before the adapter claims the physical microphone. */
+    @Synchronized fun reserveDiagnosticWindow(): Boolean {
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE ||
+            pendingOwnerResumeId != null) return false
+        diagnosticReserved = true
+        val state = coordinator.snapshot()
+        speech.setListening(com.pineapple.sageos2.core.SageListeningMode.OFF,
+            state.recognizerGeneration, state.activeTurnId, wakeTailPresent = false)
+        return true
+    }
+
+    @Synchronized fun releaseDiagnosticWindow() {
+        if (!diagnosticReserved) return
+        diagnosticReserved = false
+        val state = coordinator.snapshot()
+        if (state.state != SageRuntimeState.STOPPED) {
+            speech.setListening(state.listeningMode, state.recognizerGeneration,
+                state.activeTurnId, wakeTailPresent = false)
+            drainOwnerResume()
+        }
+    }
+
     private var pendingOwnerResumeId: String? = null
 
     /** Called by local routing: queue only, never re-enter the coordinator during route(). */
@@ -130,7 +154,7 @@ class SageRuntime(
     }
 
     private fun drainOwnerResume() {
-        if (coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
         val id = pendingOwnerResumeId ?: return
         pendingOwnerResumeId = null
         val current = taskContinuity?.get(id) ?: return
@@ -161,6 +185,11 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
+        if (diagnosticReserved && event != SageEvent.Stop) {
+            if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
+                "Finish or cancel the hearing test first.")
+            return
+        }
         process(coordinator.handle(event))
         observer.onStateChanged(coordinator.snapshot())
         drainOwnerResume()
