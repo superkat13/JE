@@ -79,6 +79,13 @@ open class MainActivity : Activity() {
     private var chatScroll: ScrollView? = null
     private var chatActivity: TextView? = null
     private var input: EditText? = null
+    private var hearingPanel: LinearLayout? = null
+    private var hearingStatus: TextView? = null
+    private var hearingPhrase: EditText? = null
+    private var hearingStart: Button? = null
+    private var hearingCancel: Button? = null
+    private var hearingExport: Button? = null
+    private var pendingHearingExport: String? = null
     private var activeBrainProgress: BrainProgress? = null
     private var lastSubmittedText = ""
     private var currentPanel = Panel.CHAT
@@ -116,6 +123,7 @@ open class MainActivity : Activity() {
     }
 
     private val listener = object : SageRuntimeListener {
+        override fun onVoiceRepairChanged() = runOnUiThread { renderHearingTest() }
         override fun onStateChanged(snapshot: SageRuntimeSnapshot) = runOnUiThread {
             if (snapshot.state != com.pineapple.sageos2.core.SageRuntimeState.THINKING_DEEP) activeBrainProgress = null
             renderLiveState()
@@ -166,6 +174,7 @@ open class MainActivity : Activity() {
         pendingTalkStart = false
         uiHandler.removeCallbacks(talkWarmupPoll)
         uiHandler.removeCallbacks(pulse)
+        host.interruptVoiceRepair()
         host.removeListener(listener)
         super.onStop()
     }
@@ -291,6 +300,8 @@ open class MainActivity : Activity() {
             LinearLayout.LayoutParams.WRAP_CONTENT
         ).apply { setMargins(0, dp(4), 0, dp(8)) })
 
+        addHearingTestPanel()
+
         input = EditText(this).apply {
             hint = "Tell Sage what you need…"
             setHintTextColor(COLOR_MUTED)
@@ -340,6 +351,73 @@ open class MainActivity : Activity() {
         body.addView(controls)
         renderConversation()
         renderChatActivity()
+    }
+
+    private fun addHearingTestPanel() {
+        val panel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        hearingPanel = panel
+        hearingStatus = TextView(this).apply {
+            setTextColor(COLOR_TEXT)
+            textSize = 15f
+            maxLines = 12
+            isVerticalScrollBarEnabled = true
+            movementMethod = android.text.method.ScrollingMovementMethod()
+        }.also { panel.addView(it) }
+        hearingPhrase = EditText(this).apply {
+            hint = "Expected hearing test phrase"
+            contentDescription = "Expected phrase for diagnostic capture only"
+            setTextColor(COLOR_TEXT)
+            filters = arrayOf(android.text.InputFilter.LengthFilter(200))
+            maxLines = 2
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
+        }.also { panel.addView(it) }
+        val buttons = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL }
+        hearingStart = Button(this).apply {
+            text = "Start test"
+            isAllCaps = false
+            setOnClickListener {
+                if (host.submitVoiceRepairPhrase(hearingPhrase?.text.toString())) hearingPhrase?.text?.clear()
+                renderHearingTest()
+            }
+        }.also { buttons.addView(it) }
+        hearingCancel = Button(this).apply {
+            text = "Cancel test"
+            isAllCaps = false
+            setOnClickListener { host.cancelVoiceRepair(); renderHearingTest() }
+        }.also { buttons.addView(it) }
+        hearingExport = Button(this).apply {
+            text = "Save test export"
+            isAllCaps = false
+            setOnClickListener {
+                val report = host.voiceRepairExport() ?: return@setOnClickListener
+                AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Save hearing test locally?")
+                    .setMessage("This file includes the expected and recognized test words. Choose where to save it. Nothing is uploaded automatically.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("Save") { _, _ ->
+                        pendingHearingExport = report
+                        startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
+                            addCategory(Intent.CATEGORY_OPENABLE)
+                            type = "text/plain"
+                            putExtra(Intent.EXTRA_TITLE, "sage-hearing-test.txt")
+                        }, HEARING_EXPORT_REQUEST)
+                    }.show()
+            }
+        }.also { buttons.addView(it) }
+        panel.addView(buttons)
+        body.addView(panel)
+        renderHearingTest()
+    }
+
+    private fun renderHearingTest() {
+        if (currentPanel != Panel.CHAT) return
+        hearingPanel?.visibility = if (host.voiceRepairMessage().isBlank()) View.GONE else View.VISIBLE
+        hearingStatus?.text = host.voiceRepairMessage()
+        val awaiting = host.voiceRepairAwaitingPhrase()
+        hearingPhrase?.visibility = if (awaiting) View.VISIBLE else View.GONE
+        hearingStart?.visibility = if (awaiting) View.VISIBLE else View.GONE
+        hearingCancel?.visibility = if (host.voiceRepairActive()) View.VISIBLE else View.GONE
+        hearingExport?.isEnabled = host.voiceRepairExport() != null
     }
 
     private fun showSettings() {
@@ -877,6 +955,11 @@ open class MainActivity : Activity() {
             isAllCaps = false
             setOnClickListener { shareDiagnosticReport() }
         })
+        content.addView(sectionTitle("Recent hearing tests"))
+        host.voiceRepairSessions().asReversed().forEach { session ->
+            content.addView(info("Hearing test",
+                com.pineapple.sageos2.speech.voicerepair.VoiceRepairPresentation.render(session)))
+        }
         content.addView(sectionTitle("Recent diagnostics"))
         val events = host.traces.recent(100).asReversed()
         if (events.isEmpty()) {
@@ -1772,6 +1855,18 @@ open class MainActivity : Activity() {
     @Deprecated("Activity result compatibility is intentional for the inherited Android app surface")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == HEARING_EXPORT_REQUEST) {
+            val report = pendingHearingExport
+            pendingHearingExport = null
+            if (resultCode == RESULT_OK && report != null) {
+                runCatching {
+                    val uri = requireNotNull(data?.data)
+                    requireNotNull(contentResolver.openOutputStream(uri)).bufferedWriter().use { it.write(report) }
+                }.onSuccess { Toast.makeText(this, "Hearing test saved locally.", Toast.LENGTH_LONG).show() }
+                 .onFailure { Toast.makeText(this, "The hearing test file could not be saved.", Toast.LENGTH_LONG).show() }
+            }
+            return
+        }
         if (requestCode != REQUEST_BACKGROUND || resultCode != RESULT_OK) return
         val uri = data?.data ?: return
         runCatching {
@@ -1843,6 +1938,7 @@ open class MainActivity : Activity() {
     }
 
     companion object {
+        private const val HEARING_EXPORT_REQUEST = 7401
         private const val REQUEST_RUNTIME = 220
         private const val REQUEST_BACKGROUND = 221
         private const val TALK_WARMUP_POLL_MS = 250L
