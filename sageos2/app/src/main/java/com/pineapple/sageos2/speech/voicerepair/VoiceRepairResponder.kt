@@ -16,7 +16,10 @@ class VoiceRepairResponder(
     private val latestReport: () -> String = { "" },
     private val interruptedNotice: () -> String = { "" },
     private val exportText: () -> String = { "" },
-    private val onDiagnostic: (String) -> Unit = {}
+    private val onDiagnostic: (String) -> Unit = {},
+    /** Production UI may take the phrase in a dedicated diagnostic-only field. */
+    private val requestPanel: (() -> String)? = null,
+    private val cancelPanel: (() -> String)? = null
 ) : SagePersonalResponder {
     private var awaitingPhrase = false
 
@@ -34,6 +37,7 @@ class VoiceRepairResponder(
     }
 
     private fun requestPhraseReply(): String {
+        requestPanel?.let { return it() }
         if (liveActive()) return "A voice test is already running. Say “cancel voice repair” to stop it first."
         awaitingPhrase = true
         return "I'm going to test my microphone before changing anything. Type one short phrase " +
@@ -66,6 +70,7 @@ class VoiceRepairResponder(
     }
 
     private fun cancelReply(): String {
+        cancelPanel?.let { return it() }
         if (awaitingPhrase) {
             awaitingPhrase = false
             return "Cancelled. No voice test was started and nothing changed."
