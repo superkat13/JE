@@ -22,10 +22,13 @@ class VoiceRepairWorkflow(
     private var poll: ScheduledHandle? = null
     private var generation = 0L
     private var reserved = false
+    /** Reconcile wake even when the owner cancels before acquiring a physical lease. */
+    private var needsRuntimeRestore = false
 
     fun request(): String {
         if (awaitingPhrase || waitingForIdle || running) return "A hearing test is already open. Finish or cancel it first."
         awaitingPhrase = true
+        needsRuntimeRestore = true
         message = "Type a short expected phrase in the hearing test box. Then tap Start test and wait for Speak now. Test words never run as commands."
         changed()
         return message
@@ -119,7 +122,8 @@ class VoiceRepairWorkflow(
     }
 
     private fun releaseReservation() {
-        if (!reserved) return
+        if (!needsRuntimeRestore) return
+        needsRuntimeRestore = false
         reserved = false
         release()
     }
