@@ -85,7 +85,7 @@ open class MainActivity : Activity() {
     private var hearingStart: Button? = null
     private var hearingCancel: Button? = null
     private var hearingExport: Button? = null
-    private var pendingHearingExport: String? = null
+    private var pendingHearingExportSessionId: String? = null
     private var activeBrainProgress: BrainProgress? = null
     private var lastSubmittedText = ""
     private var currentPanel = Panel.CHAT
@@ -153,6 +153,7 @@ open class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        pendingHearingExportSessionId = savedInstanceState?.getString(HEARING_EXPORT_SESSION_KEY)
         window.statusBarColor = COLOR_BACKGROUND
         window.navigationBarColor = COLOR_BACKGROUND
         host = SageRuntimeHost.get(this)
@@ -162,6 +163,11 @@ open class MainActivity : Activity() {
         showPanel(Panel.CHAT)
         requestRuntimePermissionsIfNeeded()
         host.start()
+    }
+
+    override fun onSaveInstanceState(outState: Bundle) {
+        pendingHearingExportSessionId?.let { outState.putString(HEARING_EXPORT_SESSION_KEY, it) }
+        super.onSaveInstanceState(outState)
     }
 
     override fun onStart() {
@@ -389,13 +395,13 @@ open class MainActivity : Activity() {
             text = "Save test export"
             isAllCaps = false
             setOnClickListener {
-                val report = host.voiceRepairExport() ?: return@setOnClickListener
+                val sessionId = host.voiceRepairExportSessionId() ?: return@setOnClickListener
                 AlertDialog.Builder(this@MainActivity)
                     .setTitle("Save hearing test locally?")
                     .setMessage("This file includes the expected and recognized test words. Choose where to save it. Nothing is uploaded automatically.")
                     .setNegativeButton("Cancel", null)
                     .setPositiveButton("Save") { _, _ ->
-                        pendingHearingExport = report
+                        pendingHearingExportSessionId = sessionId
                         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
                             addCategory(Intent.CATEGORY_OPENABLE)
                             type = "text/plain"
@@ -1856,9 +1862,16 @@ open class MainActivity : Activity() {
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == HEARING_EXPORT_REQUEST) {
-            val report = pendingHearingExport
-            pendingHearingExport = null
-            if (resultCode == RESULT_OK && report != null) {
+            val sessionId = pendingHearingExportSessionId
+            pendingHearingExportSessionId = null
+            if (resultCode == RESULT_OK) {
+                // Android may recreate the Activity while the document picker is open.
+                // Reconstruct private evidence by session ID; never persist the test words in UI state.
+                val report = sessionId?.let(host::voiceRepairExportForSession)
+                if (report == null) {
+                    Toast.makeText(this, "The hearing report was unavailable. Nothing was saved.", Toast.LENGTH_LONG).show()
+                    return
+                }
                 runCatching {
                     val uri = requireNotNull(data?.data)
                     requireNotNull(contentResolver.openOutputStream(uri)).bufferedWriter().use { it.write(report) }
@@ -1939,6 +1952,7 @@ open class MainActivity : Activity() {
 
     companion object {
         private const val HEARING_EXPORT_REQUEST = 7401
+        private const val HEARING_EXPORT_SESSION_KEY = "hearing_export_pending_session_id"
         private const val REQUEST_RUNTIME = 220
         private const val REQUEST_BACKGROUND = 221
         private const val TALK_WARMUP_POLL_MS = 250L
