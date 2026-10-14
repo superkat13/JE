@@ -36,6 +36,21 @@ class SageTurnCoordinatorTest {
         assertFalse("a follow-up is not a wake-phrase handoff", follow.wakeTailPresent)
     }
 
+    @Test fun diagnosticLeaseIssuesFreshWakeGenerationAndRejectsLateWakeHit() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        val before = c.snapshot().recognizerGeneration
+        val off = c.handle(SageEvent.BeginDiagnosticWindow).filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.OFF, off.mode)
+        assertTrue(off.generation > before)
+        val resumed = c.handle(SageEvent.EndDiagnosticWindow).filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.WAKE_ONLY, resumed.mode)
+        assertTrue(resumed.generation > off.generation)
+        c.handle(SageEvent.WakeDetected(before, "sage", null, "Yes"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+        assertEquals(resumed.generation, c.snapshot().recognizerGeneration)
+    }
+
     @Test fun recognizerReadyIsScopedToCurrentTurnAndGeneration() {
         val c = SageTurnCoordinator()
         c.handle(SageEvent.Start)
