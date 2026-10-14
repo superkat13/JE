@@ -34,6 +34,8 @@ import com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSession
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager
 import com.pineapple.sageos2.speech.voicerepair.VoiceRepairState
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairWorkflow
+import com.pineapple.sageos2.speech.voicerepair.VoiceRepairPresentation
 import com.pineapple.sageos2.continuity.SageTaskFollowThroughResponder
 import com.pineapple.sageos2.core.SageEvent
 import com.pineapple.sageos2.core.SageRuntimeSnapshot
@@ -84,6 +86,7 @@ interface SageRuntimeListener {
     fun onBrainProgress(progress: BrainProgress) = Unit
     fun onTextResponse(turnId: Long, text: String) = Unit
     fun onTypedInputRejected(reason: String) = Unit
+    fun onVoiceRepairChanged() = Unit
 }
 
 class SageRuntimeHost private constructor(context: Context) {
@@ -96,6 +99,15 @@ class SageRuntimeHost private constructor(context: Context) {
     val recovery = TaskRecoveryManager(tasks)
     private val voiceRepairManager = VoiceRepairSessionManager()
     private val voiceRepairHistory = SharedPreferencesVoiceRepairHistoryStore(appContext)
+    private val voiceRepairWorkflow by lazy {
+        VoiceRepairWorkflow(
+            controller = voiceRepairOrchestrator,
+            scheduler = AndroidRuntimeScheduler(),
+            reserve = { runtime.reserveDiagnosticWindow() },
+            release = { runtime.releaseDiagnosticWindow() },
+            changed = { listeners.forEach { it.onVoiceRepairChanged() } }
+        )
+    }
     private val voiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
         port = VoiceDiagnosticAdapter(speech),
         manager = voiceRepairManager,
@@ -104,6 +116,7 @@ class SageRuntimeHost private constructor(context: Context) {
             traces.record("voice_repair", VoiceRepairReporter.traceStep(session))
             voiceRepairHistory.observe(session)
             presentVoiceRepairOutcome(session)
+            voiceRepairWorkflow.sessionChanged(session)
         },
         onReady = { session -> voiceRepairReadinessNotifier.onReady(session) }
     ) }
@@ -220,7 +233,9 @@ class SageRuntimeHost private constructor(context: Context) {
                     latestReport = { voiceRepairLatestReport() },
                     interruptedNotice = { voiceRepairInterruptedNotice() },
                     exportText = { voiceRepairExportText() },
-                    onDiagnostic = { detail -> traces.record("voice_repair", detail.take(800)) }
+                    onDiagnostic = { detail -> traces.record("voice_repair", detail.take(800)) },
+                    requestPanel = { voiceRepairWorkflow.request() },
+                    cancelPanel = { voiceRepairWorkflow.cancel() }
                 ),
                 ownerApps = ownerApps
             )
@@ -415,7 +430,34 @@ class SageRuntimeHost private constructor(context: Context) {
         return restored
     }
 
-    fun submitText(text: String) { start(); runtime.submit(SageEvent.TextSubmitted(text)) }
+    fun submitText(text: String) {
+        start()
+        if (VoiceRepairResponder.isCancellation(text) && voiceRepairActive()) {
+            cancelVoiceRepair()
+            return
+        }
+        if (voiceRepairActive()) {
+            listeners.forEach { it.onTypedInputRejected("Finish or cancel the hearing test first.") }
+            return
+        }
+        runtime.submit(SageEvent.TextSubmitted(text))
+    }
+
+    fun voiceRepairAwaitingPhrase(): Boolean = voiceRepairWorkflow.awaitingPhrase
+    fun voiceRepairActive(): Boolean = voiceRepairWorkflow.awaitingPhrase ||
+        voiceRepairWorkflow.waitingForIdle || voiceRepairWorkflow.running
+    fun voiceRepairMessage(): String = voiceRepairWorkflow.message.ifBlank {
+        voiceRepairManager.current()?.let(VoiceRepairPresentation::render).orEmpty()
+    }
+    fun submitVoiceRepairPhrase(phrase: String): Boolean = voiceRepairWorkflow.submitPhrase(phrase)
+    fun cancelVoiceRepair(): String = voiceRepairWorkflow.cancel()
+    fun interruptVoiceRepair() = voiceRepairWorkflow.interrupt()
+    fun voiceRepairSessions(): List<VoiceRepairSession> = voiceRepairHistory.history()
+    /** Explicit owner export only: never auto-upload diagnostic phrase text. */
+    fun voiceRepairExport(): String? {
+        if (voiceRepairActive()) return null
+        return voiceRepairExportText().takeIf { it.isNotBlank() }
+    }
 
     /**
      * Submit a local-API text turn only when it can begin immediately.
@@ -425,6 +467,7 @@ class SageRuntimeHost private constructor(context: Context) {
      */
     fun submitTextIfReady(text: String): Boolean {
         start()
+        if (voiceRepairActive()) return false
         synchronized(runtime) {
             return when (runtime.snapshot().state) {
                 SageRuntimeState.IDLE_WAKE, SageRuntimeState.FOLLOW_UP_LISTENING -> {
