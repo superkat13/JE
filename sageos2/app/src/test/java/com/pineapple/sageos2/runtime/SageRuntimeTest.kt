@@ -37,6 +37,30 @@ class SageRuntimeTest {
         assertEquals(1, f.fast.requests.size)
     }
 
+    @Test fun pendingHearingWorkflowBlocksTalkWakeAndTranscriptsBeforeLease() {
+        var pending = false
+        val f = Fixture(diagnosticAdmissionPending = { pending })
+        f.runtime.start()
+        val oldGeneration = f.runtime.snapshot().recognizerGeneration
+        pending = true
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        f.speech.listener!!.onWakeDetected(WakeHit(oldGeneration, "sage", null, "Yes", "open youtube"))
+        f.speech.listener!!.onTranscriptFinal(0L, oldGeneration, "delete everything")
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.fast.requests.isEmpty())
+        assertTrue(f.brain.requests.isEmpty())
+
+        // Cancellation before a microphone lease still retires old wake callbacks.
+        pending = false
+        f.runtime.releaseDiagnosticWindow()
+        assertTrue(f.runtime.snapshot().recognizerGeneration > oldGeneration)
+        f.speech.listener!!.onWakeDetected(WakeHit(oldGeneration, "sage", null, "Yes"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        assertEquals(SageRuntimeState.COMMAND_LISTENING, f.runtime.snapshot().state)
+    }
+
     @Test fun diagnosticAdmissionDoesNotInterruptAnActiveBrainTurn() {
         val f = Fixture(); f.runtime.start()
         f.runtime.submit(SageEvent.TextSubmitted("tell me a story"))
@@ -920,7 +944,8 @@ class SageRuntimeTest {
         twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
         conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
         ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
-        taskContinuity: TaskContinuityStore? = null
+        taskContinuity: TaskContinuityStore? = null,
+        diagnosticAdmissionPending: () -> Boolean = { false }
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
@@ -938,7 +963,8 @@ class SageRuntimeTest {
             capabilities = capability,
             taskContinuity = taskContinuity,
             maxToolCallsPerTurn = maxToolCallsPerTurn,
-            brainResponseTimeoutMs = brainResponseTimeoutMs
+            brainResponseTimeoutMs = brainResponseTimeoutMs,
+            diagnosticAdmissionPending = diagnosticAdmissionPending
         )
     }
 
