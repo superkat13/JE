@@ -139,6 +139,11 @@ class SageRuntime(
         }
     }
 
+    /** Resume an explicitly queued task only after the diagnostic input gate is fully closed. */
+    @Synchronized fun onDiagnosticWorkflowClosed() {
+        if (!diagnosticReserved) drainOwnerResume()
+    }
+
     private var pendingOwnerResumeId: String? = null
 
     /** Called by local routing: queue only, never re-enter the coordinator during route(). */
