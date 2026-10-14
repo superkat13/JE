@@ -99,7 +99,7 @@ class SageRuntimeHost private constructor(context: Context) {
     val recovery = TaskRecoveryManager(tasks)
     private val voiceRepairManager = VoiceRepairSessionManager()
     private val voiceRepairHistory = SharedPreferencesVoiceRepairHistoryStore(appContext)
-    private val voiceRepairWorkflow by lazy {
+    private val voiceRepairWorkflow: VoiceRepairWorkflow by lazy {
         VoiceRepairWorkflow(
             controller = voiceRepairOrchestrator,
             scheduler = AndroidRuntimeScheduler(),
@@ -108,7 +108,7 @@ class SageRuntimeHost private constructor(context: Context) {
             changed = { listeners.forEach { it.onVoiceRepairChanged() } }
         )
     }
-    private val voiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
+    private val voiceRepairOrchestrator: VoiceRepairOrchestrator by lazy { VoiceRepairOrchestrator(
         port = VoiceDiagnosticAdapter(speech),
         manager = voiceRepairManager,
         scheduler = AndroidRuntimeScheduler(),
