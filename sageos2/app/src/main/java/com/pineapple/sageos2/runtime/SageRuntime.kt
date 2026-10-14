@@ -56,7 +56,9 @@ class SageRuntime(
     private val brainResponseTimeoutMs: Long = 120_000L,
     private val brainLoadTimeoutMs: Long = 30_000L,
     private val brainFirstTokenTimeoutMs: Long = 60_000L,
-    private val brainStallTimeoutMs: Long = 30_000L
+    private val brainStallTimeoutMs: Long = 30_000L,
+    /** Also gates wake/transcript callbacks before a physical diagnostic lease is acquired. */
+    private val diagnosticAdmissionPending: () -> Boolean = { false }
 ) {
     init {
         require(echoGuardMs >= 0L)
@@ -121,19 +123,18 @@ class SageRuntime(
         if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE ||
             pendingOwnerResumeId != null) return false
         diagnosticReserved = true
-        val state = coordinator.snapshot()
-        speech.setListening(com.pineapple.sageos2.core.SageListeningMode.OFF,
-            state.recognizerGeneration, state.activeTurnId, wakeTailPresent = false)
+        process(coordinator.handle(SageEvent.BeginDiagnosticWindow))
+        observer.onStateChanged(coordinator.snapshot())
         return true
     }
 
     @Synchronized fun releaseDiagnosticWindow() {
-        if (!diagnosticReserved) return
         diagnosticReserved = false
-        val state = coordinator.snapshot()
-        if (state.state != SageRuntimeState.STOPPED) {
-            speech.setListening(state.listeningMode, state.recognizerGeneration,
-                state.activeTurnId, wakeTailPresent = false)
+        // Also refreshes wake if a pending test was cancelled before acquiring its
+        // physical microphone lease. Never reuse callbacks from an old generation.
+        if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+            process(coordinator.handle(SageEvent.EndDiagnosticWindow))
+            observer.onStateChanged(coordinator.snapshot())
             drainOwnerResume()
         }
     }
@@ -154,7 +155,8 @@ class SageRuntime(
     }
 
     private fun drainOwnerResume() {
-        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        if (diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
         val id = pendingOwnerResumeId ?: return
         pendingOwnerResumeId = null
         val current = taskContinuity?.get(id) ?: return
@@ -185,7 +187,7 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
-        if (diagnosticReserved && event != SageEvent.Stop) {
+        if ((diagnosticReserved || diagnosticAdmissionPending()) && event != SageEvent.Stop) {
             if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
                 "Finish or cancel the hearing test first.")
             return
