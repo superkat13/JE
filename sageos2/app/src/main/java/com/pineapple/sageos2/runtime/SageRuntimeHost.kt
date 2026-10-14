@@ -109,6 +109,7 @@ class SageRuntimeHost private constructor(context: Context) {
             changed = {
                 voiceWorkflowOpen = voiceRepairWorkflow.awaitingPhrase ||
                     voiceRepairWorkflow.waitingForIdle || voiceRepairWorkflow.running
+                if (!voiceWorkflowOpen) runtime.onDiagnosticWorkflowClosed()
                 listeners.forEach { it.onVoiceRepairChanged() }
             }
         )
