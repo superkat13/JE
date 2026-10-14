@@ -35,6 +35,10 @@ sealed interface SageEvent {
     data class ResponseReady(val turnId: Long, val text: String, val allowFollowUp: Boolean = true) : SageEvent
     data class BrainFailed(val turnId: Long, val reason: String) : SageEvent
     data class SpeechFinished(val turnId: Long) : SageEvent
-    data class EchoGuardElapsed(val turnId: Long) : SageEvent
+    /** Internal flag allows a diagnostic request's spoken reply to finish without opening follow-up ASR. */
+    data class EchoGuardElapsed(
+        val turnId: Long,
+        val suppressFollowUpForDiagnostic: Boolean = false
+    ) : SageEvent
     data class FollowUpExpired(val turnId: Long) : SageEvent
 }
