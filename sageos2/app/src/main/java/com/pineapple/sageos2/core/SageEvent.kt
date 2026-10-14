@@ -3,6 +3,10 @@ package com.pineapple.sageos2.core
 sealed interface SageEvent {
     data object Start : SageEvent
     data object Stop : SageEvent
+    /** Internal handoff: retire the old wake generation before taking the diagnostic mic. */
+    data object BeginDiagnosticWindow : SageEvent
+    /** Internal handoff: issue a fresh wake generation after releasing diagnostic ownership. */
+    data object EndDiagnosticWindow : SageEvent
     data object PushToTalkRequested : SageEvent
     data class WakeDetected(
         val recognizerGeneration: Long,
