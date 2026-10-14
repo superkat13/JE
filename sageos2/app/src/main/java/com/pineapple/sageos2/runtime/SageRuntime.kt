@@ -192,12 +192,23 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
-        if ((diagnosticReserved || diagnosticAdmissionPending()) && event != SageEvent.Stop) {
+        val pending = diagnosticAdmissionPending()
+        val currentState = coordinator.snapshot().state
+        // A voice-initiated hearing request still needs to finish Sage's spoken reply.
+        // Only the matching lifecycle steps are admitted; normal wake, Talk and transcript
+        // callbacks remain blocked throughout the diagnostic workflow.
+        val finishingReply = pending && !diagnosticReserved && (
+            (event is SageEvent.SpeechFinished && currentState == SageRuntimeState.SPEAKING) ||
+            (event is SageEvent.EchoGuardElapsed && currentState == SageRuntimeState.ECHO_GUARD)
+        )
+        if ((diagnosticReserved || pending) && event != SageEvent.Stop && !finishingReply) {
             if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
                 "Finish or cancel the hearing test first.")
             return
         }
-        process(coordinator.handle(event))
+        val routed = if (finishingReply && event is SageEvent.EchoGuardElapsed)
+            event.copy(suppressFollowUpForDiagnostic = true) else event
+        process(coordinator.handle(routed))
         observer.onStateChanged(coordinator.snapshot())
         drainOwnerResume()
     }
