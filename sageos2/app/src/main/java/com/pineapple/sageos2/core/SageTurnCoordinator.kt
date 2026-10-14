@@ -46,6 +46,10 @@ class SageTurnCoordinator(
     @Synchronized fun handle(event: SageEvent): List<SageEffect> = when (event) {
         SageEvent.Start -> start()
         SageEvent.Stop -> stop()
+        SageEvent.BeginDiagnosticWindow ->
+            if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.OFF)) else emptyList()
+        SageEvent.EndDiagnosticWindow ->
+            if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.WAKE_ONLY)) else emptyList()
         SageEvent.PushToTalkRequested -> onPushToTalk()
         is SageEvent.WakeDetected -> onWake(event)
         is SageEvent.WakeAcknowledgementSpoken -> onWakeAckSpoken(event)
