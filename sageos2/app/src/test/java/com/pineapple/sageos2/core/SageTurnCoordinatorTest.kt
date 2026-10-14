@@ -1,5 +1,6 @@
 package com.pineapple.sageos2.core
 
+import com.pineapple.sageos2.speech.CommandSpeechTurnState
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,7 +22,9 @@ class SageTurnCoordinatorTest {
         val cmd = wake.handle(SageEvent.WakeAcknowledgementSpoken(id))
             .filterIsInstance<SageEffect.SetListeningMode>().single()
         assertEquals(SageListeningMode.COMMAND, cmd.mode)
-        assertTrue("a wake-triggered command keeps existing tail policy", cmd.wakeTailPresent)
+        assertFalse("an acknowledgement separates the wake word from the next command", cmd.wakeTailPresent)
+        assertEquals("keep the first 400 ms of the owner command", 0,
+            CommandSpeechTurnState(Any(), wakeTailPresent = cmd.wakeTailPresent).tailDiscardChunks(4))
 
         val generation = wake.snapshot().recognizerGeneration
         wake.handle(SageEvent.TranscriptFinal(id, generation, "hello"))
