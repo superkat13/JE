@@ -96,6 +96,11 @@ open class MainActivity : Activity() {
     private val talkWarmupPoll = object : Runnable {
         override fun run() {
             if (!pendingTalkStart) return
+            if (host.voiceRepairActive()) {
+                pendingTalkStart = false
+                renderHearingTest()
+                return
+            }
             val localReady = SageSpeechBackendState.sherpaReady(this@MainActivity)
             val warm = SageSherpaRecognitionService.recognizerWarm()
             val expired = System.currentTimeMillis() - talkWarmupStartedAtMs >= TALK_WARMUP_MAX_MS
@@ -1513,6 +1518,11 @@ open class MainActivity : Activity() {
     }
 
     private fun beginTalk() {
+        if (host.voiceRepairActive()) {
+            Toast.makeText(this, "Finish or cancel the hearing test first.", Toast.LENGTH_SHORT).show()
+            renderHearingTest()
+            return
+        }
         if (pendingTalkStart) return
         val localReady = SageSpeechBackendState.sherpaReady(this)
         if (localReady && !SageSherpaRecognitionService.recognizerWarm()) {
