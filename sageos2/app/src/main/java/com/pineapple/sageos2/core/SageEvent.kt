@@ -7,6 +7,8 @@ sealed interface SageEvent {
     data object BeginDiagnosticWindow : SageEvent
     /** Internal handoff: issue a fresh wake generation after releasing diagnostic ownership. */
     data object EndDiagnosticWindow : SageEvent
+    /** Resume previously accepted typed requests only after the diagnostic gate closes. */
+    data object ResumeQueuedText : SageEvent
     data object PushToTalkRequested : SageEvent
     data class WakeDetected(
         val recognizerGeneration: Long,
