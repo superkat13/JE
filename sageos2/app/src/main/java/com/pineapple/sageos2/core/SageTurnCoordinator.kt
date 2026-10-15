@@ -19,7 +19,9 @@ private const val RECOGNIZER_AUDIO_ERROR = 3
 class SageTurnCoordinator(
     private val router: SageCommandRouter = SageCommandRouter(),
     private val typedQueueCapacity: Int = 16,
-    private val followUpWindowMs: Long = 12_000L
+    private val followUpWindowMs: Long = 12_000L,
+    /** The local repair responder can open this gate during route(), before its effects run. */
+    private val diagnosticAdmissionPending: () -> Boolean = { false }
 ) {
     init {
         require(typedQueueCapacity > 0)
@@ -50,6 +52,8 @@ class SageTurnCoordinator(
             if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.OFF)) else emptyList()
         SageEvent.EndDiagnosticWindow ->
             if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.WAKE_ONLY)) else emptyList()
+        SageEvent.ResumeQueuedText ->
+            if (state == SageRuntimeState.IDLE_WAKE && !diagnosticAdmissionPending()) finishTextTurn() else emptyList()
         SageEvent.PushToTalkRequested -> onPushToTalk()
         is SageEvent.WakeDetected -> onWake(event)
         is SageEvent.WakeAcknowledgementSpoken -> onWakeAckSpoken(event)
@@ -321,6 +325,11 @@ class SageTurnCoordinator(
     }
 
     private fun finishTextTurn(): List<SageEffect> {
+        // Personal routing can open the hearing-test gate while recursively draining
+        // several previously queued messages in a single coordinator.handle() call.
+        // Stop here; leave the remaining inputs queued and the normal mic disabled.
+        // ResumeQueuedText explicitly drains them after the workflow fully closes.
+        if (diagnosticAdmissionPending()) return closeToWake()
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
             activeTurnId = next.turnId
@@ -338,7 +347,9 @@ class SageTurnCoordinator(
         activeTurnOrigin = TurnOrigin.NONE
         followUpAfterSpeech = false
         state = SageRuntimeState.IDLE_WAKE
-        return listOf(changeListening(SageListeningMode.WAKE_ONLY))
+        return listOf(changeListening(
+            if (diagnosticAdmissionPending()) SageListeningMode.OFF else SageListeningMode.WAKE_ONLY
+        ))
     }
 
     private fun validRecognition(turnId: Long, generation: Long) = turnId == activeTurnId && generation == recognizerGeneration
