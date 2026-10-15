@@ -141,7 +141,12 @@ class SageRuntime(
 
     /** Resume an explicitly queued task only after the diagnostic input gate is fully closed. */
     @Synchronized fun onDiagnosticWorkflowClosed() {
-        if (!diagnosticReserved) drainOwnerResume()
+        if (diagnosticReserved || diagnosticAdmissionPending()) return
+        // A repair request may have opened the gate inside route() while several
+        // typed inputs were queued. Only now may the remaining requests run.
+        process(coordinator.handle(SageEvent.ResumeQueuedText))
+        observer.onStateChanged(coordinator.snapshot())
+        drainOwnerResume()
     }
 
     private var pendingOwnerResumeId: String? = null
