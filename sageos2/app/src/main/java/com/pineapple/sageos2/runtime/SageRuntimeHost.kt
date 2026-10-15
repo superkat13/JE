@@ -244,7 +244,8 @@ class SageRuntimeHost private constructor(context: Context) {
                     cancelPanel = { voiceRepairWorkflow.cancel() }
                 ),
                 ownerApps = ownerApps
-            )
+            ),
+            diagnosticAdmissionPending = { voiceWorkflowOpen }
         ),
         speech = speech,
         brain = brain,
