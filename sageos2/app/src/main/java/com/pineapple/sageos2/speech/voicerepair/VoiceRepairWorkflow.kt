@@ -58,6 +58,9 @@ class VoiceRepairWorkflow(
             if (checks >= 300) {
                 waitingForIdle = false
                 message = "I could not get an idle microphone window. Nothing was changed. Try again after the current task finishes."
+                // Even without a physical lease the pending diagnostic gate may have
+                // blocked wake callbacks. Retire that generation and restore listening.
+                releaseReservation()
                 changed()
             } else poll = scheduler.schedule(100) { admit(token, phrase, checks + 1) }
             return
@@ -160,6 +163,7 @@ object VoiceRepairPresentation {
             VoiceRepairCause.RECOGNIZER_LIFECYCLE_FAILURE -> "The recognizer reported a lifecycle or start failure."
             VoiceRepairCause.BUSY_RUNTIME -> "The microphone is busy with another task."
             VoiceRepairCause.DEADLINE_EXCEEDED -> "The test deadline expired."
+            VoiceRepairCause.READY_TIMEOUT -> "The command recognizer did not become ready to listen before the readiness timeout. No repair was verified."
             VoiceRepairCause.CANCELLED_BY_OWNER -> "You cancelled the test."
             VoiceRepairCause.SLOW_DOWNSTREAM_INFERENCE -> "The delay is in reasoning after recognition."
             else -> "No supported repair completed."
