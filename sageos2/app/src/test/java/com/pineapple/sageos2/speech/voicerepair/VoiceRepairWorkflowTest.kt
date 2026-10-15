@@ -125,7 +125,20 @@ class VoiceRepairWorkflowTest {
         val f = Fixture(); f.workflow.request(); f.workflow.submitPhrase("hello")
         repeat(301) { f.scheduler.next() }
         assertFalse(f.workflow.waitingForIdle); assertFalse(f.held)
+        assertEquals("admission timeout must also restore a suspended wake generation", 1, f.releases)
         assertTrue(f.port.captures.isEmpty()); assertTrue(f.workflow.message.contains("idle microphone"))
+    }
+
+    @Test fun recognizerReadinessTimeoutExplainsActualFailure() {
+        val message = VoiceRepairPresentation.render(VoiceRepairSession(
+            id = "test",
+            state = VoiceRepairState.FAILED,
+            cause = VoiceRepairCause.READY_TIMEOUT,
+            testPhrase = "hello"
+        ))
+        assertTrue(message.contains("did not become ready"))
+        assertTrue(message.contains("No repair was verified"))
+        assertFalse(message.contains("No supported repair completed"))
     }
 
     @Test fun successReportsBeforeAfterAndActualChange() {
