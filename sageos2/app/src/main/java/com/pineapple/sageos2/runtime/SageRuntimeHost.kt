@@ -301,7 +301,9 @@ class SageRuntimeHost private constructor(context: Context) {
         RecoveredResumeScheduler(
             scheduler = AndroidRuntimeScheduler(selfCareHandler),
             isStarted = { started.get() && runtime.snapshot().state != SageRuntimeState.STOPPED },
-            isIdle = { runtime.snapshot().state == SageRuntimeState.IDLE_WAKE },
+            // An open diagnostic UI owns command admission even before its mic lease.
+            // Never mark a recovered task as auto-resumed while its event would be blocked.
+            isIdle = { !voiceWorkflowOpen && runtime.snapshot().state == SageRuntimeState.IDLE_WAKE },
             onExhausted = {
                 traces.record("recovery", "auto-resume polling stopped after bounded busy checks; no recovery attempt made")
             },
