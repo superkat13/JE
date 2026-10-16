@@ -56,7 +56,9 @@ class SageRuntime(
     private val brainResponseTimeoutMs: Long = 120_000L,
     private val brainLoadTimeoutMs: Long = 30_000L,
     private val brainFirstTokenTimeoutMs: Long = 60_000L,
-    private val brainStallTimeoutMs: Long = 30_000L
+    private val brainStallTimeoutMs: Long = 30_000L,
+    /** Also gates wake/transcript callbacks before a physical diagnostic lease is acquired. */
+    private val diagnosticAdmissionPending: () -> Boolean = { false }
 ) {
     init {
         require(echoGuardMs >= 0L)
@@ -114,6 +116,67 @@ class SageRuntime(
         speech.shutdown()
     }
 
+    private var diagnosticReserved = false
+
+    /** Reserve the idle runtime before the adapter claims the physical microphone.
+     * A previously queued Core resume stays pending during owner diagnostics and runs
+     * when the diagnostic closes. Blocking the lease on that pending task would
+     * deadlock: the gate cannot open the mic and the task cannot pass the gate.
+     */
+    @Synchronized fun reserveDiagnosticWindow(): Boolean {
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return false
+        diagnosticReserved = true
+        process(coordinator.handle(SageEvent.BeginDiagnosticWindow))
+        observer.onStateChanged(coordinator.snapshot())
+        return true
+    }
+
+    @Synchronized fun releaseDiagnosticWindow() {
+        diagnosticReserved = false
+        // Also refreshes wake if a pending test was cancelled before acquiring its
+        // physical microphone lease. Never reuse callbacks from an old generation.
+        if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+            process(coordinator.handle(SageEvent.EndDiagnosticWindow))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        }
+    }
+
+    // The hearing workflow can close synchronously inside personal.resolve(), which runs
+    // *inside* coordinator.handle(). Never re-enter the coordinator before that dispatch
+    // and its effects have completed, or the active turn and queued order can be corrupted.
+    private var coordinatorDispatchDepth = 0
+    private var diagnosticClosurePending = false
+
+    /** A closure notification is an edge; queue processing waits until routing unwinds. */
+    @Synchronized fun onDiagnosticWorkflowClosed() {
+        if (diagnosticReserved || diagnosticAdmissionPending()) return
+        diagnosticClosurePending = true
+        flushDiagnosticClosure()
+    }
+
+    /** Also wait for a spoken cancellation reply to finish and return to idle. */
+    private fun flushDiagnosticClosure() {
+        if (!diagnosticClosurePending || coordinatorDispatchDepth != 0 ||
+            diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        diagnosticClosurePending = false
+        coordinatorDispatchDepth++
+        try {
+            // A saved Core continuation selected before hearing was requested must
+            // resume before later queued text, after the diagnostic mic is released.
+            drainOwnerResume()
+            if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+                process(coordinator.handle(SageEvent.ResumeQueuedText))
+                observer.onStateChanged(coordinator.snapshot())
+                drainOwnerResume()
+            }
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0 && diagnosticClosurePending) flushDiagnosticClosure()
+        }
+    }
+
     private var pendingOwnerResumeId: String? = null
 
     /** Called by local routing: queue only, never re-enter the coordinator during route(). */
@@ -130,7 +193,8 @@ class SageRuntime(
     }
 
     private fun drainOwnerResume() {
-        if (coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        if (diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
         val id = pendingOwnerResumeId ?: return
         pendingOwnerResumeId = null
         val current = taskContinuity?.get(id) ?: return
@@ -161,9 +225,31 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
-        process(coordinator.handle(event))
-        observer.onStateChanged(coordinator.snapshot())
-        drainOwnerResume()
+        coordinatorDispatchDepth++
+        try {
+            val pending = diagnosticAdmissionPending()
+            val currentState = coordinator.snapshot().state
+            // A voice-initiated hearing request still needs to finish Sage's spoken reply.
+            // Only the matching lifecycle steps are admitted; normal wake, Talk and transcript
+            // callbacks remain blocked throughout the diagnostic workflow.
+            val finishingReply = pending && !diagnosticReserved && (
+                (event is SageEvent.SpeechFinished && currentState == SageRuntimeState.SPEAKING) ||
+                (event is SageEvent.EchoGuardElapsed && currentState == SageRuntimeState.ECHO_GUARD)
+            )
+            if ((diagnosticReserved || pending) && event != SageEvent.Stop && !finishingReply) {
+                if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
+                    "Finish or cancel the hearing test first.")
+                return
+            }
+            val routed = if (finishingReply && event is SageEvent.EchoGuardElapsed)
+                event.copy(suppressFollowUpForDiagnostic = true) else event
+            process(coordinator.handle(routed))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0) flushDiagnosticClosure()
+        }
     }
     fun snapshot() = coordinator.snapshot()
 

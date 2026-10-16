@@ -19,7 +19,9 @@ private const val RECOGNIZER_AUDIO_ERROR = 3
 class SageTurnCoordinator(
     private val router: SageCommandRouter = SageCommandRouter(),
     private val typedQueueCapacity: Int = 16,
-    private val followUpWindowMs: Long = 12_000L
+    private val followUpWindowMs: Long = 12_000L,
+    /** The local repair responder can open this gate during route(), before its effects run. */
+    private val diagnosticAdmissionPending: () -> Boolean = { false }
 ) {
     init {
         require(typedQueueCapacity > 0)
@@ -46,6 +48,13 @@ class SageTurnCoordinator(
     @Synchronized fun handle(event: SageEvent): List<SageEffect> = when (event) {
         SageEvent.Start -> start()
         SageEvent.Stop -> stop()
+        SageEvent.BeginDiagnosticWindow ->
+            if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.OFF)) else emptyList()
+        SageEvent.EndDiagnosticWindow ->
+            if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.WAKE_ONLY)) else emptyList()
+        SageEvent.ResumeQueuedText ->
+            if (state == SageRuntimeState.IDLE_WAKE && pendingTypedInputs.isNotEmpty() &&
+                !diagnosticAdmissionPending()) finishTextTurn() else emptyList()
         SageEvent.PushToTalkRequested -> onPushToTalk()
         is SageEvent.WakeDetected -> onWake(event)
         is SageEvent.WakeAcknowledgementSpoken -> onWakeAckSpoken(event)
@@ -288,6 +297,12 @@ class SageTurnCoordinator(
 
     private fun onEchoGuardElapsed(event: SageEvent.EchoGuardElapsed): List<SageEffect> {
         if (event.turnId != activeTurnId || state != SageRuntimeState.ECHO_GUARD) return stale("echo guard")
+        if (event.suppressFollowUpForDiagnostic) {
+            // Let Sage finish her spoken repair instructions without reopening normal command ASR.
+            // Pending typed input stays queued rather than executing while the diagnostic UI owns input.
+            followUpAfterSpeech = false
+            return closeToWake()
+        }
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
             activeTurnId = next.turnId
@@ -311,6 +326,11 @@ class SageTurnCoordinator(
     }
 
     private fun finishTextTurn(): List<SageEffect> {
+        // Personal routing can open the hearing-test gate while recursively draining
+        // several previously queued messages in a single coordinator.handle() call.
+        // Stop here; leave the remaining inputs queued and the normal mic disabled.
+        // ResumeQueuedText explicitly drains them after the workflow fully closes.
+        if (diagnosticAdmissionPending()) return closeToWake()
         if (pendingTypedInputs.isNotEmpty()) {
             val next = pendingTypedInputs.removeFirst()
             activeTurnId = next.turnId
@@ -328,7 +348,9 @@ class SageTurnCoordinator(
         activeTurnOrigin = TurnOrigin.NONE
         followUpAfterSpeech = false
         state = SageRuntimeState.IDLE_WAKE
-        return listOf(changeListening(SageListeningMode.WAKE_ONLY))
+        return listOf(changeListening(
+            if (diagnosticAdmissionPending()) SageListeningMode.OFF else SageListeningMode.WAKE_ONLY
+        ))
     }
 
     private fun validRecognition(turnId: Long, generation: Long) = turnId == activeTurnId && generation == recognizerGeneration

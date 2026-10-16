@@ -2,7 +2,7 @@ name: Verify SageOS 2
 
 on:
   push:
-    branches: [sageos-2]
+    branches: [sageos-2, review/sage-voice-core-integration-20261014]
     paths: ['sageos2/**','SAGEOS2_MASTER_PLAN.md','SAGEOS2_CONTINUITY.md','SAGEOS2_ROOT_BROKER.md','.github/workflows/verify-sageos2.yml', '.github/workflows/test-sageos2-native-brain.yml']
   pull_request:
     branches: [sageos-2]
