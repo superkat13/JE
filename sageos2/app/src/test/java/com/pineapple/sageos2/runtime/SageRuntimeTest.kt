@@ -41,6 +41,35 @@ class SageRuntimeTest {
         assertTrue(f.observer.textResponses.any { it.second.contains("no hearing test") })
     }
 
+    @Test fun pendingCoreResumeDoesNotDeadlockHearingTestAndRunsAfterItCloses() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("pending-core", "Continue saved goal", TaskState.WAITING,
+            "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "finish the saved owner task"))
+        store.upsert(task)
+        var hearingOpen = false
+        val f = Fixture(taskContinuity = store, diagnosticAdmissionPending = { hearingOpen })
+        f.runtime.start()
+        assertEquals(null, f.runtime.queueOwnerResume(task))
+        hearingOpen = true
+
+        assertTrue("idle microphone lease must not wait on an older queued Core resume",
+            f.runtime.reserveDiagnosticWindow())
+        assertTrue("a queued task must never execute while the diagnostic owns the mic",
+            f.brain.requests.isEmpty())
+
+        f.runtime.releaseDiagnosticWindow()
+        assertTrue(f.brain.requests.isEmpty())
+        hearingOpen = false
+        f.runtime.onDiagnosticWorkflowClosed()
+
+        assertEquals("Core continuation resumes after the hearing workflow closes", 1,
+            f.brain.requests.size)
+        assertTrue(f.brain.requests.single().prompt.contains("finish the saved owner task"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        assertNotNull(store.get("pending-core"))
+    }
+
     @Test fun diagnosticReservationBlocksNormalWordsWakeAndPushToTalkUntilReleased() {
         val f = Fixture(); f.runtime.start()
         assertTrue(f.runtime.reserveDiagnosticWindow())
