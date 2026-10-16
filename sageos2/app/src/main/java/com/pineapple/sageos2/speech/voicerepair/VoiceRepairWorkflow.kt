@@ -27,6 +27,11 @@ class VoiceRepairWorkflow(
 
     fun request(): String {
         if (awaitingPhrase || waitingForIdle || running) return "A hearing test is already open. Finish or cancel it first."
+        // A previous session's deferred terminal callback must never release this
+        // session's mic lease or restoration flag.
+        ++generation
+        poll?.cancel()
+        poll = null
         awaitingPhrase = true
         needsRuntimeRestore = true
         message = "Type a short expected phrase in the hearing test box. Then tap Start test and wait for Speak now. Test words never run as commands."
