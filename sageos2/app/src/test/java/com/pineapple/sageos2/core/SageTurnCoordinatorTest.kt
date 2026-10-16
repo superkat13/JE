@@ -9,6 +9,15 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageTurnCoordinatorTest {
+    @Test fun emptyQueueDoesNotRestartWakeWhenDiagnosticCloses() {
+        val coordinator = SageTurnCoordinator()
+        coordinator.handle(SageEvent.Start)
+        val wakeGeneration = coordinator.snapshot().recognizerGeneration
+        assertTrue(coordinator.handle(SageEvent.ResumeQueuedText).isEmpty())
+        assertEquals(wakeGeneration, coordinator.snapshot().recognizerGeneration)
+        assertEquals(SageListeningMode.WAKE_ONLY, coordinator.snapshot().listeningMode)
+    }
+
     @Test fun queuedHearingRequestPausesRemainingCommandsUntilDiagnosticCloses() {
         var diagnosticOpen = false
         val personal = object : SagePersonalResponder {
