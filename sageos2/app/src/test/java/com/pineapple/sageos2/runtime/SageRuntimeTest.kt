@@ -96,25 +96,27 @@ class SageRuntimeTest {
         )
         runtime = f.runtime
         runtime.start()
-        runtime.submit(SageEvent.TextSubmitted("first slow request"))
+        // Occupy the runtime with a FAST turn that does not itself create a
+        // recoverable Brain checkpoint (otherwise "continue" asks which task).
+        runtime.submit(SageEvent.TextSubmitted("open youtube"))
         val activeTurn = runtime.snapshot().activeTurnId
         runtime.submit(SageEvent.TextSubmitted("continue that task"))
         runtime.submit(SageEvent.TextSubmitted("fix my hearing"))
 
-        f.brain.respond(0, "first request complete")
+        runtime.submit(SageEvent.ResponseReady(activeTurn, "opened"))
         assertTrue("queued local routing opened the hearing test", hearingOpen)
-        assertEquals("saved task must not run during hearing input ownership", 1, f.brain.requests.size)
+        assertEquals("saved task must not run during hearing input ownership", 0, f.brain.requests.size)
         assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
 
         assertTrue("the pending Core task must not block the mic lease", runtime.reserveDiagnosticWindow())
         assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
         runtime.releaseDiagnosticWindow()
-        assertEquals("Core task still waits until the hearing gate closes", 1, f.brain.requests.size)
+        assertEquals("Core task still waits until the hearing gate closes", 0, f.brain.requests.size)
 
         hearingOpen = false
         runtime.onDiagnosticWorkflowClosed()
-        assertEquals("the earlier queued Core request resumes exactly once", 2, f.brain.requests.size)
-        assertTrue(f.brain.requests[1].prompt.contains("finish the saved original goal"))
+        assertEquals("the earlier queued Core request resumes exactly once", 1, f.brain.requests.size)
+        assertTrue(f.brain.requests.single().prompt.contains("finish the saved original goal"))
         assertEquals(SageRuntimeState.THINKING_DEEP, runtime.snapshot().state)
         assertNotNull(store.get("queued-task"))
     }
