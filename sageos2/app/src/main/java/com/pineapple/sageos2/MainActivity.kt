@@ -179,6 +179,9 @@ open class MainActivity : Activity() {
         super.onStart()
         host.addListener(listener)
         renderLiveState()
+        // A voice-initiated diagnostic can open while this Activity has no listener.
+        // Refresh from the current workflow instead of relying on a missed callback.
+        renderHearingTest()
     }
 
     override fun onStop() {
