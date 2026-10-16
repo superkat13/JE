@@ -34,6 +34,36 @@ class RecoveredResumeSchedulerTest {
         assertEquals(0, f.exhausted)
     }
 
+    @Test fun pausedDiagnosticPreservesEntireRemainingResumeBudget() {
+        val f = Fixture()
+        f.idle = true
+        f.recovery.schedule { f.resumes++ }
+        val stale = f.clock.entries.single()
+        f.recovery.pause()
+        assertTrue("pause cancels the next finite-budget poll", stale.cancelled)
+        assertEquals(0, f.clock.activeCount())
+        // A callback already in flight may arrive despite cancellation.
+        stale.task()
+        assertEquals(0, f.resumes)
+        assertEquals(0, f.exhausted)
+        f.recovery.resume()
+        assertEquals(1, f.clock.activeCount())
+        f.clock.fireNext()
+        assertEquals(1, f.resumes)
+        assertEquals(0, f.exhausted)
+    }
+
+    @Test fun schedulingWhilePausedArmsAfterDiagnosticCloses() {
+        val f = Fixture()
+        f.recovery.pause()
+        f.recovery.schedule { f.resumes++ }
+        assertEquals(0, f.clock.activeCount())
+        f.idle = true
+        f.recovery.resume()
+        f.clock.fireNext()
+        assertEquals(1, f.resumes)
+    }
+
     @Test fun alwaysBusyExhaustsAtBoundWithoutAttemptingResume() {
         val f = Fixture()
         f.recovery.schedule { f.resumes++ }
