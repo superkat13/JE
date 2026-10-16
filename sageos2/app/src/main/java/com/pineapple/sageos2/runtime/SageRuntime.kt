@@ -118,10 +118,13 @@ class SageRuntime(
 
     private var diagnosticReserved = false
 
-    /** Reserve the idle runtime before the adapter claims the physical microphone. */
+    /** Reserve the idle runtime before the adapter claims the physical microphone.
+     * A previously queued Core resume stays pending during owner diagnostics and runs
+     * when the diagnostic closes. Blocking the lease on that pending task would
+     * deadlock: the gate cannot open the mic and the task cannot pass the gate.
+     */
     @Synchronized fun reserveDiagnosticWindow(): Boolean {
-        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE ||
-            pendingOwnerResumeId != null) return false
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return false
         diagnosticReserved = true
         process(coordinator.handle(SageEvent.BeginDiagnosticWindow))
         observer.onStateChanged(coordinator.snapshot())
@@ -160,9 +163,14 @@ class SageRuntime(
         diagnosticClosurePending = false
         coordinatorDispatchDepth++
         try {
-            process(coordinator.handle(SageEvent.ResumeQueuedText))
-            observer.onStateChanged(coordinator.snapshot())
+            // A saved Core continuation selected before hearing was requested must
+            // resume before later queued text, after the diagnostic mic is released.
             drainOwnerResume()
+            if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+                process(coordinator.handle(SageEvent.ResumeQueuedText))
+                observer.onStateChanged(coordinator.snapshot())
+                drainOwnerResume()
+            }
         } finally {
             coordinatorDispatchDepth--
             if (coordinatorDispatchDepth == 0 && diagnosticClosurePending) flushDiagnosticClosure()
