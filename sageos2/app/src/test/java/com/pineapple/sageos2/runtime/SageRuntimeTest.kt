@@ -68,7 +68,10 @@ class SageRuntimeTest {
             }
         )
         val f = Fixture(
-            coordinator = SageTurnCoordinator(SageCommandRouter(personal = responder)),
+            coordinator = SageTurnCoordinator(
+                SageCommandRouter(personal = responder),
+                diagnosticAdmissionPending = { pending }
+            ),
             diagnosticAdmissionPending = { pending }
         )
         f.runtime.start()
@@ -85,8 +88,8 @@ class SageRuntimeTest {
         assertEquals(SageRuntimeState.ECHO_GUARD, f.runtime.snapshot().state)
         f.runtime.submit(SageEvent.EchoGuardElapsed(command.activeTurnId))
         assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
-        assertEquals("no normal follow-up microphone while hearing test is pending",
-            SageListeningMode.WAKE_ONLY, f.speech.lastCapture!!.first)
+        assertEquals("no normal wake or follow-up microphone while hearing test is pending",
+            SageListeningMode.OFF, f.speech.lastCapture!!.first)
         assertTrue(f.runtime.reserveDiagnosticWindow())
         assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
         pending = false
