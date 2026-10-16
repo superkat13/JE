@@ -107,9 +107,21 @@ class SageRuntimeHost private constructor(context: Context) {
             reserve = { runtime.reserveDiagnosticWindow() },
             release = { runtime.releaseDiagnosticWindow() },
             changed = {
+                val wasOpen = voiceWorkflowOpen
                 voiceWorkflowOpen = voiceRepairWorkflow.awaitingPhrase ||
                     voiceRepairWorkflow.waitingForIdle || voiceRepairWorkflow.running
-                if (!voiceWorkflowOpen) runtime.onDiagnosticWorkflowClosed()
+                if (voiceWorkflowOpen != wasOpen) {
+                    if (voiceWorkflowOpen) {
+                        // Polling must pause for the entire owner diagnostic, even while
+                        // waiting for a typed phrase or the microphone lease.
+                        recoveredResumeScheduler.pause()
+                    } else {
+                        // A queued repair request may synchronously reopen the workflow.
+                        // Re-arm first so that its new admission can pause us again.
+                        recoveredResumeScheduler.resume()
+                        runtime.onDiagnosticWorkflowClosed()
+                    }
+                }
                 listeners.forEach { it.onVoiceRepairChanged() }
             }
         )
