@@ -22,7 +22,11 @@ class VoiceRepairWorkflowTest {
         var callback: ((VoiceRepairTestResult) -> Unit)? = null
         var releases = 0
         var resets = 0
-        override fun acquire(owner: String): Boolean { check(this.owner == null); this.owner = owner; return true }
+        var acquisitionAllowed = true
+        override fun acquire(owner: String): Boolean {
+            if (!acquisitionAllowed) return false
+            check(this.owner == null); this.owner = owner; return true
+        }
         override fun capture(owner: String, expected: String,
             ready: () -> Unit, speechBegan: () -> Unit, result: (VoiceRepairTestResult) -> Unit) {
             check(this.owner == owner); captures.add(expected); callback = result
@@ -113,6 +117,32 @@ class VoiceRepairWorkflowTest {
         assertEquals(VoiceRepairCause.DEADLINE_EXCEEDED, f.manager.current()!!.cause)
         stale(VoiceRepairTestResult("hello", "hello"))
         assertEquals(VoiceRepairState.FAILED, f.manager.current()!!.state)
+    }
+
+    @Test fun oldFailureCallbackCannotReleaseNextHearingSession() {
+        val f = Fixture()
+        f.idle = true
+        f.port.acquisitionAllowed = false
+        f.workflow.request()
+        assertTrue(f.workflow.submitPhrase("old phrase"))
+        f.scheduler.next() // failed to acquire: schedules deferred terminal completion
+        assertEquals(1, f.releases)
+        assertFalse(f.workflow.running)
+
+        f.workflow.request() // a different session opens before the old callback executes
+        f.scheduler.next() // deliver old zero-delay completion
+        assertTrue("old session cannot close new expected-phrase panel", f.workflow.awaitingPhrase)
+        assertEquals("old callback must not release the new lease", 1, f.releases)
+
+        f.port.acquisitionAllowed = true
+        assertTrue(f.workflow.submitPhrase("new phrase"))
+        f.scheduler.next()
+        assertTrue(f.workflow.running)
+        assertTrue(f.held)
+        f.port.callback!!(VoiceRepairTestResult("new phrase", "new phrase"))
+        f.scheduler.next()
+        assertFalse(f.held)
+        assertEquals("new session must restore its own microphone window", 2, f.releases)
     }
 
     @Test fun invalidPhrasesRemainInDedicatedInput() {
