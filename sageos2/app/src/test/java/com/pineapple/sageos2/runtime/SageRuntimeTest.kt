@@ -21,6 +21,26 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageRuntimeTest {
+    @Test fun diagnosticClosureDuringCancellationRoutingDoesNotReenterCoordinator() {
+        lateinit var runtime: SageRuntime
+        val responder = object : SagePersonalResponder {
+            override fun resolve(rawText: String): SagePersonalResolution? {
+                if (rawText != "cancel voice repair") return null
+                // Synchronous callback from the hearing UI while personal.route() is active.
+                runtime.onDiagnosticWorkflowClosed()
+                return SagePersonalResolution.Reply("There is no hearing test to cancel.")
+            }
+        }
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(personal = responder)))
+        runtime = f.runtime
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("cancel voice repair"))
+        assertEquals("cancel reply must finish as text, not an orphaned speech turn",
+            SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+        assertTrue(f.speech.spoken.isEmpty())
+        assertTrue(f.observer.textResponses.any { it.second.contains("no hearing test") })
+    }
+
     @Test fun diagnosticReservationBlocksNormalWordsWakeAndPushToTalkUntilReleased() {
         val f = Fixture(); f.runtime.start()
         assertTrue(f.runtime.reserveDiagnosticWindow())
