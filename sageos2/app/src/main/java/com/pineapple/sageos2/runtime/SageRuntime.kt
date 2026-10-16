@@ -139,14 +139,34 @@ class SageRuntime(
         }
     }
 
-    /** Resume an explicitly queued task only after the diagnostic input gate is fully closed. */
+    // The hearing workflow can close synchronously inside personal.resolve(), which runs
+    // *inside* coordinator.handle(). Never re-enter the coordinator before that dispatch
+    // and its effects have completed, or the active turn and queued order can be corrupted.
+    private var coordinatorDispatchDepth = 0
+    private var diagnosticClosurePending = false
+
+    /** A closure notification is an edge; queue processing waits until routing unwinds. */
     @Synchronized fun onDiagnosticWorkflowClosed() {
         if (diagnosticReserved || diagnosticAdmissionPending()) return
-        // A repair request may have opened the gate inside route() while several
-        // typed inputs were queued. Only now may the remaining requests run.
-        process(coordinator.handle(SageEvent.ResumeQueuedText))
-        observer.onStateChanged(coordinator.snapshot())
-        drainOwnerResume()
+        diagnosticClosurePending = true
+        flushDiagnosticClosure()
+    }
+
+    /** Also wait for a spoken cancellation reply to finish and return to idle. */
+    private fun flushDiagnosticClosure() {
+        if (!diagnosticClosurePending || coordinatorDispatchDepth != 0 ||
+            diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        diagnosticClosurePending = false
+        coordinatorDispatchDepth++
+        try {
+            process(coordinator.handle(SageEvent.ResumeQueuedText))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0 && diagnosticClosurePending) flushDiagnosticClosure()
+        }
     }
 
     private var pendingOwnerResumeId: String? = null
@@ -197,25 +217,31 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
-        val pending = diagnosticAdmissionPending()
-        val currentState = coordinator.snapshot().state
-        // A voice-initiated hearing request still needs to finish Sage's spoken reply.
-        // Only the matching lifecycle steps are admitted; normal wake, Talk and transcript
-        // callbacks remain blocked throughout the diagnostic workflow.
-        val finishingReply = pending && !diagnosticReserved && (
-            (event is SageEvent.SpeechFinished && currentState == SageRuntimeState.SPEAKING) ||
-            (event is SageEvent.EchoGuardElapsed && currentState == SageRuntimeState.ECHO_GUARD)
-        )
-        if ((diagnosticReserved || pending) && event != SageEvent.Stop && !finishingReply) {
-            if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
-                "Finish or cancel the hearing test first.")
-            return
+        coordinatorDispatchDepth++
+        try {
+            val pending = diagnosticAdmissionPending()
+            val currentState = coordinator.snapshot().state
+            // A voice-initiated hearing request still needs to finish Sage's spoken reply.
+            // Only the matching lifecycle steps are admitted; normal wake, Talk and transcript
+            // callbacks remain blocked throughout the diagnostic workflow.
+            val finishingReply = pending && !diagnosticReserved && (
+                (event is SageEvent.SpeechFinished && currentState == SageRuntimeState.SPEAKING) ||
+                (event is SageEvent.EchoGuardElapsed && currentState == SageRuntimeState.ECHO_GUARD)
+            )
+            if ((diagnosticReserved || pending) && event != SageEvent.Stop && !finishingReply) {
+                if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
+                    "Finish or cancel the hearing test first.")
+                return
+            }
+            val routed = if (finishingReply && event is SageEvent.EchoGuardElapsed)
+                event.copy(suppressFollowUpForDiagnostic = true) else event
+            process(coordinator.handle(routed))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0) flushDiagnosticClosure()
         }
-        val routed = if (finishingReply && event is SageEvent.EchoGuardElapsed)
-            event.copy(suppressFollowUpForDiagnostic = true) else event
-        process(coordinator.handle(routed))
-        observer.onStateChanged(coordinator.snapshot())
-        drainOwnerResume()
     }
     fun snapshot() = coordinator.snapshot()
 
