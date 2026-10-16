@@ -70,6 +70,55 @@ class SageRuntimeTest {
         assertNotNull(store.get("pending-core"))
     }
 
+    @Test fun queuedContinueThenHearingRequestPreservesOwnerOrderAndAvoidsMicDeadlock() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("queued-task", "Saved task", TaskState.WAITING,
+            "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "finish the saved original goal"))
+        store.upsert(task)
+        var hearingOpen = false
+        lateinit var runtime: SageRuntime
+        val followThrough = SageTaskFollowThroughResponder(
+            EmptySagePersonalResponder, store, resume = { runtime.queueOwnerResume(it) })
+        val hearing = com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder(
+            followThrough,
+            com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager(),
+            requestPanel = { hearingOpen = true; "Type the expected phrase into the hearing panel." }
+        )
+        val gate = { hearingOpen }
+        val f = Fixture(
+            taskContinuity = store,
+            coordinator = SageTurnCoordinator(
+                SageCommandRouter(personal = hearing),
+                diagnosticAdmissionPending = gate
+            ),
+            diagnosticAdmissionPending = gate
+        )
+        runtime = f.runtime
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("first slow request"))
+        val activeTurn = runtime.snapshot().activeTurnId
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        runtime.submit(SageEvent.TextSubmitted("fix my hearing"))
+
+        f.brain.respond(0, "first request complete")
+        assertTrue("queued local routing opened the hearing test", hearingOpen)
+        assertEquals("saved task must not run during hearing input ownership", 1, f.brain.requests.size)
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+
+        assertTrue("the pending Core task must not block the mic lease", runtime.reserveDiagnosticWindow())
+        assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
+        runtime.releaseDiagnosticWindow()
+        assertEquals("Core task still waits until the hearing gate closes", 1, f.brain.requests.size)
+
+        hearingOpen = false
+        runtime.onDiagnosticWorkflowClosed()
+        assertEquals("the earlier queued Core request resumes exactly once", 2, f.brain.requests.size)
+        assertTrue(f.brain.requests[1].prompt.contains("finish the saved original goal"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, runtime.snapshot().state)
+        assertNotNull(store.get("queued-task"))
+    }
+
     @Test fun diagnosticReservationBlocksNormalWordsWakeAndPushToTalkUntilReleased() {
         val f = Fixture(); f.runtime.start()
         assertTrue(f.runtime.reserveDiagnosticWindow())
