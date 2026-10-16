@@ -53,7 +53,8 @@ class SageTurnCoordinator(
         SageEvent.EndDiagnosticWindow ->
             if (state == SageRuntimeState.IDLE_WAKE) listOf(changeListening(SageListeningMode.WAKE_ONLY)) else emptyList()
         SageEvent.ResumeQueuedText ->
-            if (state == SageRuntimeState.IDLE_WAKE && !diagnosticAdmissionPending()) finishTextTurn() else emptyList()
+            if (state == SageRuntimeState.IDLE_WAKE && pendingTypedInputs.isNotEmpty() &&
+                !diagnosticAdmissionPending()) finishTextTurn() else emptyList()
         SageEvent.PushToTalkRequested -> onPushToTalk()
         is SageEvent.WakeDetected -> onWake(event)
         is SageEvent.WakeAcknowledgementSpoken -> onWakeAckSpoken(event)
