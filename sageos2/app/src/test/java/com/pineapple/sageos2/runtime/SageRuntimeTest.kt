@@ -21,6 +21,195 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageRuntimeTest {
+    @Test fun diagnosticClosureDuringCancellationRoutingDoesNotReenterCoordinator() {
+        lateinit var runtime: SageRuntime
+        val responder = object : SagePersonalResponder {
+            override fun resolve(rawText: String): SagePersonalResolution? {
+                if (rawText != "cancel voice repair") return null
+                // Synchronous callback from the hearing UI while personal.route() is active.
+                runtime.onDiagnosticWorkflowClosed()
+                return SagePersonalResolution.Reply("There is no hearing test to cancel.")
+            }
+        }
+        val f = Fixture(coordinator = SageTurnCoordinator(SageCommandRouter(personal = responder)))
+        runtime = f.runtime
+        runtime.start()
+        runtime.submit(SageEvent.TextSubmitted("cancel voice repair"))
+        assertEquals("cancel reply must finish as text, not an orphaned speech turn",
+            SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+        assertTrue(f.speech.spoken.isEmpty())
+        assertTrue(f.observer.textResponses.any { it.second.contains("no hearing test") })
+    }
+
+    @Test fun pendingCoreResumeDoesNotDeadlockHearingTestAndRunsAfterItCloses() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("pending-core", "Continue saved goal", TaskState.WAITING,
+            "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "finish the saved owner task"))
+        store.upsert(task)
+        var hearingOpen = false
+        val f = Fixture(taskContinuity = store, diagnosticAdmissionPending = { hearingOpen })
+        f.runtime.start()
+        assertEquals(null, f.runtime.queueOwnerResume(task))
+        hearingOpen = true
+
+        assertTrue("idle microphone lease must not wait on an older queued Core resume",
+            f.runtime.reserveDiagnosticWindow())
+        assertTrue("a queued task must never execute while the diagnostic owns the mic",
+            f.brain.requests.isEmpty())
+
+        f.runtime.releaseDiagnosticWindow()
+        assertTrue(f.brain.requests.isEmpty())
+        hearingOpen = false
+        f.runtime.onDiagnosticWorkflowClosed()
+
+        assertEquals("Core continuation resumes after the hearing workflow closes", 1,
+            f.brain.requests.size)
+        assertTrue(f.brain.requests.single().prompt.contains("finish the saved owner task"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        assertNotNull(store.get("pending-core"))
+    }
+
+    @Test fun queuedContinueThenHearingRequestPreservesOwnerOrderAndAvoidsMicDeadlock() {
+        val store = MemoryTaskStore()
+        val task = TaskCheckpoint("queued-task", "Saved task", TaskState.WAITING,
+            "saved", "continue", 100L,
+            mapOf("kind" to "runtime_turn", "ownerPrompt" to "finish the saved original goal"))
+        store.upsert(task)
+        var hearingOpen = false
+        lateinit var runtime: SageRuntime
+        val followThrough = SageTaskFollowThroughResponder(
+            EmptySagePersonalResponder, store, resume = { runtime.queueOwnerResume(it) })
+        val hearing = com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder(
+            followThrough,
+            com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager(),
+            requestPanel = { hearingOpen = true; "Type the expected phrase into the hearing panel." }
+        )
+        val gate = { hearingOpen }
+        val f = Fixture(
+            taskContinuity = store,
+            coordinator = SageTurnCoordinator(
+                SageCommandRouter(personal = hearing),
+                diagnosticAdmissionPending = gate
+            ),
+            diagnosticAdmissionPending = gate
+        )
+        runtime = f.runtime
+        runtime.start()
+        // Occupy the runtime with a FAST turn that does not itself create a
+        // recoverable Brain checkpoint (otherwise "continue" asks which task).
+        runtime.submit(SageEvent.TextSubmitted("open youtube"))
+        val activeTurn = runtime.snapshot().activeTurnId
+        runtime.submit(SageEvent.TextSubmitted("continue that task"))
+        runtime.submit(SageEvent.TextSubmitted("fix my hearing"))
+
+        runtime.submit(SageEvent.ResponseReady(activeTurn, "opened"))
+        assertTrue("queued local routing opened the hearing test", hearingOpen)
+        assertEquals("saved task must not run during hearing input ownership", 0, f.brain.requests.size)
+        assertEquals(SageRuntimeState.IDLE_WAKE, runtime.snapshot().state)
+
+        assertTrue("the pending Core task must not block the mic lease", runtime.reserveDiagnosticWindow())
+        assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
+        runtime.releaseDiagnosticWindow()
+        assertEquals("Core task still waits until the hearing gate closes", 0, f.brain.requests.size)
+
+        hearingOpen = false
+        runtime.onDiagnosticWorkflowClosed()
+        assertEquals("the earlier queued Core request resumes exactly once", 1, f.brain.requests.size)
+        assertTrue(f.brain.requests.single().prompt.contains("finish the saved original goal"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, runtime.snapshot().state)
+        assertNotNull(store.get("queued-task"))
+    }
+
+    @Test fun diagnosticReservationBlocksNormalWordsWakeAndPushToTalkUntilReleased() {
+        val f = Fixture(); f.runtime.start()
+        assertTrue(f.runtime.reserveDiagnosticWindow())
+        assertFalse(f.runtime.reserveDiagnosticWindow())
+        val snapshot = f.runtime.snapshot()
+        f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
+        f.speech.listener!!.onTranscriptFinal(snapshot.activeTurnId, snapshot.recognizerGeneration, "send a message")
+        f.speech.listener!!.onWakeDetected(WakeHit(snapshot.recognizerGeneration, "sage", null, "Yes", "open youtube"))
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        assertTrue(f.fast.requests.isEmpty()); assertTrue(f.brain.requests.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        f.runtime.releaseDiagnosticWindow()
+        f.runtime.submit(SageEvent.TextSubmitted("open youtube"))
+        assertEquals(1, f.fast.requests.size)
+    }
+
+    @Test fun voiceInitiatedHearingRequestCompletesSpokenReplyBeforeDiagnosticLease() {
+        var pending = false
+        val responder = com.pineapple.sageos2.speech.voicerepair.VoiceRepairResponder(
+            EmptySagePersonalResponder,
+            com.pineapple.sageos2.speech.voicerepair.VoiceRepairSessionManager(),
+            requestPanel = {
+                pending = true
+                "Type an expected phrase in the dedicated hearing panel."
+            }
+        )
+        val f = Fixture(
+            coordinator = SageTurnCoordinator(
+                SageCommandRouter(personal = responder),
+                diagnosticAdmissionPending = { pending }
+            ),
+            diagnosticAdmissionPending = { pending }
+        )
+        f.runtime.start()
+        f.speech.listener!!.onWakeDetected(
+            WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
+        f.speech.completeLastSpeech() // wake acknowledgement finishes before request capture
+        val command = f.runtime.snapshot()
+        f.speech.listener!!.onTranscriptFinal(command.activeTurnId,
+            command.recognizerGeneration, "fix your hearing")
+        assertTrue(pending)
+        assertEquals(SageRuntimeState.SPEAKING, f.runtime.snapshot().state)
+
+        f.speech.completeLastSpeech() // must NOT be dropped by the pending input gate
+        assertEquals(SageRuntimeState.ECHO_GUARD, f.runtime.snapshot().state)
+        f.runtime.submit(SageEvent.EchoGuardElapsed(command.activeTurnId))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertEquals("no normal wake or follow-up microphone while hearing test is pending",
+            SageListeningMode.OFF, f.speech.lastCapture!!.first)
+        assertTrue(f.runtime.reserveDiagnosticWindow())
+        assertEquals(SageListeningMode.OFF, f.speech.lastCapture!!.first)
+        pending = false
+        f.runtime.releaseDiagnosticWindow()
+        assertEquals(SageListeningMode.WAKE_ONLY, f.speech.lastCapture!!.first)
+        assertTrue(f.fast.requests.isEmpty())
+    }
+
+    @Test fun pendingHearingWorkflowBlocksTalkWakeAndTranscriptsBeforeLease() {
+        var pending = false
+        val f = Fixture(diagnosticAdmissionPending = { pending })
+        f.runtime.start()
+        val oldGeneration = f.runtime.snapshot().recognizerGeneration
+        pending = true
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        f.speech.listener!!.onWakeDetected(WakeHit(oldGeneration, "sage", null, "Yes", "open youtube"))
+        f.speech.listener!!.onTranscriptFinal(0L, oldGeneration, "delete everything")
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.fast.requests.isEmpty())
+        assertTrue(f.brain.requests.isEmpty())
+
+        // Cancellation before a microphone lease still retires old wake callbacks.
+        pending = false
+        f.runtime.releaseDiagnosticWindow()
+        assertTrue(f.runtime.snapshot().recognizerGeneration > oldGeneration)
+        f.speech.listener!!.onWakeDetected(WakeHit(oldGeneration, "sage", null, "Yes"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+
+        f.runtime.submit(SageEvent.PushToTalkRequested)
+        assertEquals(SageRuntimeState.COMMAND_LISTENING, f.runtime.snapshot().state)
+    }
+
+    @Test fun diagnosticAdmissionDoesNotInterruptAnActiveBrainTurn() {
+        val f = Fixture(); f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("tell me a story"))
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+        assertFalse(f.runtime.reserveDiagnosticWindow())
+        assertEquals(SageRuntimeState.THINKING_DEEP, f.runtime.snapshot().state)
+    }
+
     @Test fun speechInputIsAttachedDirectlyToSingleRuntimeCoordinator() {
         val f = Fixture(); f.runtime.start(); assertNotNull(f.speech.listener)
         f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
@@ -50,7 +239,7 @@ class SageRuntimeTest {
         f.speech.listener!!.onWakeDetected(WakeHit(f.runtime.snapshot().recognizerGeneration, "sage", null, "Yes"))
         f.speech.completeLastSpeech()
         assertEquals(SageListeningMode.COMMAND, f.speech.lastCapture?.first)
-        assertTrue("wake command preserves existing tail handling", f.speech.lastCapture!!.second)
+        assertFalse("spoken acknowledgement already separated the old wake tail", f.speech.lastCapture!!.second)
     }
 
     @Test fun savedWakeCommandUsesExistingFastActionPath() {
@@ -395,6 +584,94 @@ class SageRuntimeTest {
         f.brain.respond(4, "${GoalCompletionPolicy.VERIFIED_MARKER}\nRoot health is responding.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
         assertEquals("Root health is responding.", f.observer.textResponses.last().second)
+    }
+
+    @Test fun compoundGoalAndOrderedResultsReachContinuationAndVerificationWithoutTaskStore() {
+        val goal = "Inspect the audio state, reduce the volume one step, and confirm the final volume."
+        val actions = java.util.Collections.synchronizedList(mutableListOf<DeviceAction>())
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE))
+            override fun execute(action: DeviceAction): CapabilityResult {
+                actions += action
+                return when (actions.size) {
+                    1 -> CapabilityResult(true, "before_volume=8; route=speaker")
+                    else -> CapabilityResult(false, "after_volume=8; permission denied; no change applied")
+                }
+            }
+        }
+        val noisyHistory = object : ConversationHistoryProvider {
+            override fun recent(limit: Int) = ConversationHistorySnapshot(1, (1..24).map { index ->
+                ConversationEntry("old-$index", -index.toLong(), ConversationSpeaker.OWNER,
+                    ConversationInput.TEXT, "Unrelated old request $index: " + "old context ".repeat(200), index.toLong())
+            })
+        }
+        val f = Fixture(capability = capability, conversationHistory = noisyHistory)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted(goal))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == 2 }
+            assertTrue("continuation must carry the original compound goal directly",
+                f.brain.requests[1].prompt.contains("owner_goal=$goal"))
+            assertTrue(f.brain.requests[1].prompt.contains("before_volume=8; route=speaker"))
+            assertTrue("the same request must retain its complete applicable tool schemas",
+                f.brain.requests[1].twinContextText.orEmpty().endsWith(BrainToolContextRenderer.render(capability.snapshot())))
+
+            f.brain.respond(1, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == 3 }
+            val continuation = f.brain.requests[2].prompt
+            assertTrue(continuation.contains("owner_goal=$goal"))
+            assertTrue(continuation.indexOf("before_volume=8") < continuation.indexOf("after_volume=8"))
+            assertTrue(continuation.contains("success=false"))
+            assertTrue(continuation.contains("permission denied; no change applied"))
+            assertTrue(continuation.contains("direction=DOWN"))
+
+            f.brain.respond(2, "The requested change could not be applied.")
+            waitUntil { f.brain.requests.size == 4 }
+            val verification = f.brain.requests[3].prompt
+            assertTrue(verification.contains(GoalCompletionPolicy.VERIFY_MARKER))
+            assertTrue(verification.contains("owner_goal=$goal"))
+            assertTrue(verification.contains("before_volume=8; route=speaker"))
+            assertTrue(verification.contains("after_volume=8; permission denied; no change applied"))
+            assertTrue(verification.contains("success=false"))
+            assertTrue(f.observer.textResponses.isEmpty())
+            f.brain.respond(3, "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nThe volume is unchanged because permission was denied.")
+            assertEquals(2, actions.size)
+            assertTrue(f.observer.textResponses.single().second.contains("permission was denied"))
+            assertTrue(f.observer.textResponses.single().second.contains("couldn't verify"))
+
+            f.runtime.submit(SageEvent.TextSubmitted("Inspect the new state"))
+            assertFalse("previous tool facts must not leak into a later owner turn",
+                f.brain.requests.last().prompt.contains("before_volume=8"))
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun operationalRequestThatCannotFitStopsHonestlyBeforeAnyAction() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        val originalGoal = "Inspect " + "a very long compound request ".repeat(300)
+        f.runtime.submit(SageEvent.TextSubmitted(originalGoal))
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(capability.actions.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.observer.textResponses.single().second.contains("split the request"))
+        val saved = store.active().single()
+        assertEquals("context_limit", saved.metadata["phase"])
+        assertEquals("false", saved.metadata["verified"])
+        assertTrue("this fixture must exercise a shortened checkpoint, not just a long prompt",
+            saved.metadata["ownerPrompt"]!!.length < originalGoal.length)
+        assertTrue(f.runtime.queueOwnerResume(saved)!!.contains("smaller fresh request"))
+        f.runtime.resumeRecoveredTask(saved)
+        // An already-selected older checkpoint cannot bypass the current stored refusal.
+        f.runtime.resumeRecoveredTask(saved.copy(metadata = saved.metadata - "phase"))
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(capability.actions.isEmpty())
+        assertEquals(saved, store.get(saved.taskId))
+        f.runtime.stop()
     }
 
     @Test fun unverifiedGoalDoesNotPretendSuccess() {
@@ -896,7 +1173,8 @@ class SageRuntimeTest {
         twinMemory: TwinMemoryProvider = EmptyTwinMemoryProvider,
         conversationHistory: ConversationHistoryProvider = EmptyConversationHistoryProvider,
         ownerApps: OwnerAppProvider = EmptyOwnerAppProvider,
-        taskContinuity: TaskContinuityStore? = null
+        taskContinuity: TaskContinuityStore? = null,
+        diagnosticAdmissionPending: () -> Boolean = { false }
     ) {
         val speech = FakeSpeech(); val brain = FakeBrain(); val fast = FakeFastActions(); val workflows = FakeWorkflows(); val observer = FakeObserver()
         val runtime = SageRuntime(
@@ -914,7 +1192,8 @@ class SageRuntimeTest {
             capabilities = capability,
             taskContinuity = taskContinuity,
             maxToolCallsPerTurn = maxToolCallsPerTurn,
-            brainResponseTimeoutMs = brainResponseTimeoutMs
+            brainResponseTimeoutMs = brainResponseTimeoutMs,
+            diagnosticAdmissionPending = diagnosticAdmissionPending
         )
     }
 

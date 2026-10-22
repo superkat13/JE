@@ -68,9 +68,12 @@ class VoiceRepairReporterTest {
 
     @Test fun noSpeechFailureDoesNotJustifyAReset() {
         val text = VoiceRepairReporter.terminalReport(
-            session(VoiceRepairState.FAILED, cause = VoiceRepairCause.NO_SPEECH, first = recognized("good morning", null))
+            session(VoiceRepairState.FAILED, cause = VoiceRepairCause.NO_SPEECH,
+                first = recognized("good morning", null).copy(errorCode = 7))
         )
-        assertTrue(text.contains("did not hear any speech"))
+        assertTrue(text.contains("No words were recognized"))
+        assertFalse("no-match does not establish that the microphone heard only silence",
+            text.contains("did not hear any speech"))
         assertTrue(text.contains("not a signal to reset"))
     }
 
@@ -128,5 +131,25 @@ class VoiceRepairReporterTest {
         val healthy = VoiceRepairExport.from(session(VoiceRepairState.HEALTHY, first = recognized("good morning", "good morning")))
         assertFalse(healthy.verified)
         assertFalse(healthy.repairApplied)
+    }
+
+    @Test fun explicitExportKeepsBackendErrorAndElapsedEvidenceForEachCapture() {
+        val text = VoiceRepairReporter.exportText(session(
+            VoiceRepairState.FAILED,
+            cause = VoiceRepairCause.NO_SPEECH,
+            first = VoiceRepairTestResult("good morning", null, errorCode = 5,
+                backend = CommandRecognizerBackend.LOCAL_SHERPA, elapsedMs = 321),
+            second = VoiceRepairTestResult("good morning", null, errorCode = 7,
+                backend = CommandRecognizerBackend.ANDROID_ON_DEVICE, elapsedMs = 1_234),
+            repairedAtMs = 1_500L
+        ))
+
+        assertTrue(text.contains("First test backend: LOCAL_SHERPA"))
+        assertTrue(text.contains("First test recognizer error: 5"))
+        assertTrue(text.contains("First test elapsed ms: 321"))
+        assertTrue(text.contains("Retest backend: ANDROID_ON_DEVICE"))
+        assertTrue(text.contains("Retest recognizer error: 7"))
+        assertTrue(text.contains("Retest elapsed ms: 1234"))
+        assertTrue(text.contains("Verified: false"))
     }
 }

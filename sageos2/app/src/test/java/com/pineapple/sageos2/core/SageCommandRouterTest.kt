@@ -3,6 +3,8 @@ package com.pineapple.sageos2.core
 import com.pineapple.sageos2.apps.OwnerAppProvider
 import com.pineapple.sageos2.apps.OwnerAppRecord
 import com.pineapple.sageos2.apps.OwnerAppSnapshot
+import com.pineapple.sageos2.action.FastCommand
+import com.pineapple.sageos2.action.FastCommandParser
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
 import org.junit.Assert.assertEquals
@@ -149,5 +151,34 @@ class SageCommandRouterTest {
         ).forEach { request ->
             assertEquals(request, SageRoute.FAST_DEVICE, router.route(request).route)
         }
+    }
+
+    @Test fun coordinatePayloadReachesTheFastExecutorWithoutLosingDecimalPunctuation() {
+        val decision = router.route("tap 100.5, 200.5")
+
+        assertEquals(SageRoute.FAST_DEVICE, decision.route)
+        assertEquals(FastCommand.Tap(100.5f, 200.5f), FastCommandParser().parse(decision.normalizedText))
+    }
+
+    @Test fun compoundAppRequestReachesBrainWithTheEntireOwnerGoal() {
+        val apps = object : OwnerAppProvider {
+            override fun snapshot() = OwnerAppSnapshot(1, listOf(OwnerAppRecord("com.google.youtube", "YouTube")))
+        }
+        val router = SageCommandRouter(ownerApps = apps)
+        listOf("Open YouTube and search for cats", "Open YouTube, then play my saved playlist",
+            "Open YouTube and subscribe to this channel", "Open YouTube and bookmark the video").forEach { request ->
+            val decision = router.route(request)
+            assertEquals("opening the app cannot satisfy the remaining request", SageRoute.DEEP_REASONING, decision.route)
+            assertEquals(request, decision.normalizedText)
+        }
+    }
+
+    @Test fun completeSavedAppNameWithAConjunctionStillOpensDirectly() {
+        val apps = object : OwnerAppProvider {
+            override fun snapshot() = OwnerAppSnapshot(1,
+                listOf(OwnerAppRecord("com.example.game", "Plants and Zombies")))
+        }
+        assertEquals(SageRoute.FAST_DEVICE,
+            SageCommandRouter(ownerApps = apps).route("Open Plants and Zombies").route)
     }
 }

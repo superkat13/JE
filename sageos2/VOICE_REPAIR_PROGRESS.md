@@ -1,5 +1,7 @@
 # Voice repair progress
 
+> Historical progress through PR #71/#72. Current combined source, verification and remaining device gates are in [the October 22 checkpoint](RECOVERY_CHECKPOINT_2026_10_22.md); continue PR #78 rather than restarting this branch.
+
 Status: Voice self-repair loop completed on top of PR #69 (codex/recover-jules-voice-adapter), reviewed on PR #71, and the two confirmed review defects are fixed. Runtime responder drives the orchestrator (start/cancel), owner-facing verified reporting and restart persistence are implemented, capture outcomes are presented to the owner after capture, and regression tests were added.
 
 Base: release/sage-219 at 1498d57a3896be072e0d4ae360be7c76a5935512

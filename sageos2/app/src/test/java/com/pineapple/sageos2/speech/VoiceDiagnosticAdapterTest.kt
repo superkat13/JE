@@ -46,6 +46,7 @@ class VoiceDiagnosticAdapterTest {
     private val readyCommands = mutableListOf<Pair<Long, Long>>()
 
     @Before fun setup() {
+        RecognizerShadow.recognitionAvailable = true
         ShadowSpeechRecognizer.setIsOnDeviceRecognitionAvailable(false)
         context = WakeContext(RuntimeEnvironment.getApplication())
         wake = RemoteWakeWordEngine(context)
@@ -247,6 +248,26 @@ class VoiceDiagnosticAdapterTest {
         }
         assertFalse(VoiceDiagnosticAdapter(plain).acquire("one"))
     }
+    @Test fun diagnosticUnavailableBackendDoesNotAttemptRecognizerRepair() {
+        RecognizerShadow.recognitionAvailable = false
+        val manager = VoiceRepairSessionManager()
+        val controller = VoiceRepairOrchestrator(adapter, manager, TestScheduler())
+
+        assertTrue(controller.startRepair("hello")); idle(); context.acknowledgeStop(); idle()
+
+        val session = manager.current()!!
+        assertEquals(VoiceRepairState.FAILED, session.state)
+        assertEquals("an absent speech service/model is not a recognizer lifecycle fault",
+            VoiceRepairCause.MISSING_PERMISSION_MODEL, session.cause)
+        assertEquals(CommandRecognizerBackend.UNAVAILABLE, session.firstTest!!.backend)
+        assertEquals(13, session.firstTest!!.errorCode)
+        assertEquals("recreating a nonexistent recognizer cannot repair missing speech support", 0, session.attemptCount)
+        assertNull(session.repairAppliedAtMs)
+        assertNull(session.secondTest)
+        assertNull(ShadowSpeechRecognizer.getLatestSpeechRecognizer())
+        assertTrue("the blocked test must release its microphone reservation", adapter.acquire("next"))
+        adapter.release("next"); idle(); assertIsolated()
+    }
     @Test fun legacyResetCannotReportUncorrelatedSuccess() {
         var invoked = false
         val legacy = object : VoiceRepairCapable {
@@ -398,7 +419,8 @@ class VoiceDiagnosticAdapterTest {
         @Implementation fun cancel() { cancels++; check(!failCancel) { "injected cancel failure" } }
         @Implementation public override fun destroy() { destroys++; check(!failDestroy) { "injected destroy failure" } }
         companion object {
-            @JvmStatic @Implementation fun isRecognitionAvailable(context: Context) = true
+            var recognitionAvailable = true
+            @JvmStatic @Implementation fun isRecognitionAvailable(context: Context) = recognitionAvailable
         }
     }
     private class WakeContext(base: Context) : ContextWrapper(base) {

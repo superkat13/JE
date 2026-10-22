@@ -8,6 +8,7 @@ import com.pineapple.sageos2.apps.OwnerAppResolver
 import com.pineapple.sageos2.personal.EmptySagePersonalResponder
 import com.pineapple.sageos2.personal.SagePersonalResolution
 import com.pineapple.sageos2.personal.SagePersonalResponder
+import java.util.Locale
 
 class SageCommandRouter(
     private val personal: SagePersonalResponder = EmptySagePersonalResponder,
@@ -40,19 +41,32 @@ class SageCommandRouter(
     }
 
     private fun routeResolved(rawText: String): RouteDecision {
-        val normalized = normalize(rawText)
+        // The fast parser owns command grammar. Keep punctuation in executable payloads: the
+        // workflow matcher above may discard it, but decimal coordinates and app/control names
+        // must reach the same parser unchanged when the executor runs.
+        val executableText = rawText.lowercase(Locale.ROOT).replace(Regex("\\s+"), " ").trim()
 
         // The parser is the single source of truth for deterministic device commands. A phrase
         // must never bypass Sage's Brain unless the fast executor can actually carry it out.
-        val fastCommand = fastCommands.parse(normalized)
+        val fastCommand = fastCommands.parse(executableText)
         if (fastCommand != null) {
             if (fastCommand is FastCommand.OpenApp) {
                 val remembered = appResolver.resolve(fastCommand.appName, ownerApps.snapshot())
+                val wholeAppName = remembered?.let { app ->
+                    (listOf(app.displayName, app.packageName) + app.aliases)
+                        .any { normalize(it) == normalize(fastCommand.appName) }
+                } == true
+                // The parser's common action verbs are not an exhaustive vocabulary. Preserve
+                // unfamiliar second actions too, while allowing a saved app named "Plants and Zombies".
+                if (!wholeAppName && Regex("\\b(and|then|but)\\b|[,;]")
+                        .containsMatchIn(fastCommand.appName)) {
+                    return RouteDecision(SageRoute.DEEP_REASONING, rawText.trim())
+                }
                 if (!remembered?.startupProcedure.isNullOrBlank()) {
                     return RouteDecision(SageRoute.DEEP_REASONING, rawText.trim())
                 }
             }
-            return RouteDecision(SageRoute.FAST_DEVICE, normalized)
+            return RouteDecision(SageRoute.FAST_DEVICE, executableText)
         }
 
         // Normalization is only for deterministic command matching. Sage's Brain must receive the

@@ -531,7 +531,10 @@ class AndroidSpeechPort(
                     com.pineapple.sageos2.speech.voicerepair.VoiceRepairTestResult(
                         expected = expected,
                         recognized = null,
-                        errorCode = SpeechRecognizer.ERROR_CLIENT,
+                        // Missing speech support is an availability blocker, not a lifecycle
+                        // failure that recreating the recognizer could repair.
+                        errorCode = if (backend == CommandRecognizerBackend.UNAVAILABLE)
+                            ERROR_LANGUAGE_UNAVAILABLE_COMPAT else SpeechRecognizer.ERROR_CLIENT,
                         backend = CommandRecognizerBackend.UNAVAILABLE,
                         elapsedMs = System.currentTimeMillis() - startMs,
                         nonEmpty = false
@@ -738,5 +741,7 @@ class AndroidSpeechPort(
         // API 31's ERROR_SERVER_DISCONNECTED is the inlined value 11. Keeping the compatibility
         // name local avoids resolving the newer framework field on Sage's minSdk 26.
         private const val ERROR_SERVER_DISCONNECTED_COMPAT = 11
+        // API 31's ERROR_LANGUAGE_UNAVAILABLE is inlined for Sage's minSdk 26.
+        private const val ERROR_LANGUAGE_UNAVAILABLE_COMPAT = 13
     }
 }

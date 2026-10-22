@@ -1,5 +1,7 @@
 # Sage Core recovery | active engineering handoff
 
+> Historical assignment. Resume from [the October 22 checkpoint](RECOVERY_CHECKPOINT_2026_10_22.md) and the current combined PR #78; implementation and verification have advanced beyond this starting state.
+
 **Owner-approved scope:** Complete real Sage Core persistence and recoverability while avoiding further voice or tablet changes. Read GitHub issue #74 before editing: https://github.com/superkat13/JE/issues/74
 
 **Branch:** `review/sage-core-continuity-recovery`, based on signed/CI-green voice source `c0654c44aac7cf82d596b6485036adb0b7e9c590` (draft PR #73). Do not diverge from this branch or cherry-pick unrelated work. Open a draft PR against `review/voice-command-wake-tail` and keep it draft until verified. Core repair is the sole task.

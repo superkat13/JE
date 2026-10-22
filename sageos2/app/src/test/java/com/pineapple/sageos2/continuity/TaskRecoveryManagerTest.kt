@@ -120,6 +120,29 @@ class TaskRecoveryManagerTest {
         assertEquals(null, TaskRecoveryManager(store).autoResumeCandidate())
     }
 
+    @Test fun contextLimitedGoalCannotBeSelectedOrRetriedAsAShortenedRecoveryPrompt() {
+        val store = MemoryTaskStore()
+        val valid = TaskCheckpoint("valid", "Ordinary interrupted task", TaskState.WAITING,
+            "interrupted", "resume", 10, mapOf("kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+                "recovered" to "true", "ownerPrompt" to "inspect current printer state"))
+        val limited = valid.copy(taskId = "limited", updatedAtMs = 20,
+            metadata = valid.metadata + mapOf("phase" to "context_limit", "ownerPrompt" to "shortened goal"))
+        store.upsert(valid)
+        store.upsert(limited)
+        val manager = TaskRecoveryManager(store)
+
+        assertEquals(valid, manager.autoResumeCandidate())
+        assertEquals(null, manager.markAutoResumeAttempted(limited.taskId, 30))
+        assertEquals(limited, store.get(limited.taskId))
+
+        // Also recheck the phase when a previously valid selection changes before its timer fires.
+        store.upsert(valid.copy(metadata = valid.metadata + ("phase" to "context_limit")))
+        val before = store.get(valid.taskId)
+        assertEquals(null, manager.markAutoResumeAttempted(valid.taskId, 40))
+        assertEquals(before, store.get(valid.taskId))
+        assertEquals(null, manager.autoResumeCandidate())
+    }
+
     @Test
     fun contextMakesRecoveredWorkVisibleButNotAnExecutionTrigger() {
         val text = TaskContinuityContextRenderer.render(

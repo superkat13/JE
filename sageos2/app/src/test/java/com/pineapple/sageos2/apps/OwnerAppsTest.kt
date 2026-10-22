@@ -21,4 +21,10 @@ class OwnerAppsTest {
     @Test fun displayNameStillResolves() {
         assertEquals("com.example.music", OwnerAppResolver().resolve("music player", snapshot)?.packageName)
     }
+
+    @Test fun appNamePrefixCannotSwallowTheRestOfTheOwnersRequest() {
+        assertNull(OwnerAppResolver().resolve("Firefox and bookmark this page", snapshot))
+        assertNull(OwnerAppResolver().resolve("Music Player then subscribe to the artist", snapshot))
+        assertEquals("com.example.browser", OwnerAppResolver().resolve("fire", snapshot)?.packageName)
+    }
 }
