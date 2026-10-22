@@ -164,7 +164,7 @@ object VoiceRepairPresentation {
         if (session.cause != VoiceRepairCause.NONE) appendLine(when (session.cause) {
             VoiceRepairCause.NO_SPEECH -> "No speech was recognized."
             VoiceRepairCause.WRONG_TRANSCRIPT -> "The recognized words did not match. A reset is not a supported repair for this mismatch."
-            VoiceRepairCause.MISSING_PERMISSION_MODEL -> "Microphone permission or the speech model is unavailable. Check microphone access and speech readiness."
+            VoiceRepairCause.MISSING_PERMISSION_MODEL -> "Microphone access, the speech service, or the speech model is unavailable. Check microphone access and speech readiness."
             VoiceRepairCause.RECOGNIZER_LIFECYCLE_FAILURE -> "The recognizer reported a lifecycle or start failure."
             VoiceRepairCause.BUSY_RUNTIME -> "The microphone is busy with another task."
             VoiceRepairCause.DEADLINE_EXCEEDED -> "The test deadline expired."

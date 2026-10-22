@@ -33,7 +33,8 @@ data class DiagnosticReportSnapshot(
     val recoverableTasks: List<DiagnosticTaskSummary>,
     val chickenTonightScopeStatus: String,
     val traces: List<TraceEvent>,
-    val brainEvidence: Map<String, String> = emptyMap()
+    val brainEvidence: Map<String, String> = emptyMap(),
+    val sourceRevision: String = "unknown"
 )
 
 object DiagnosticReportRenderer {
@@ -41,6 +42,7 @@ object DiagnosticReportRenderer {
         appendLine("SageOS 2 diagnostic report")
         appendLine("Created: ${snapshot.createdAtMs}")
         appendLine("Version: ${oneLine(snapshot.appVersion)}")
+        appendLine("Source revision: ${oneLine(snapshot.sourceRevision)}")
         appendLine("Package: ${oneLine(snapshot.packageName)}")
         appendLine("Device: ${oneLine(snapshot.device)}")
         appendLine("Android: ${oneLine(snapshot.android)}")

@@ -106,7 +106,7 @@ jobs:
           grep -F 'class BrainModelImportActivity' sageos2/app/src/main/java/com/pineapple/sageos2/brain/BrainModelImportActivity.kt
           grep -F 'data object ImportBrainModel' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'FastCommand.ImportBrainModel -> importBrainModel()' sageos2/app/src/main/java/com/pineapple/sageos2/action/AndroidDeviceController.kt
-          grep -F 'val fastCommand = fastCommands.parse(normalized)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
+          grep -F 'val fastCommand = fastCommands.parse(executableText)' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
           grep -F 'fastCommand is FastCommand.OpenApp' sageos2/app/src/main/java/com/pineapple/sageos2/core/SageCommandRouter.kt
           grep -F 'value == "import brain model"' sageos2/app/src/main/java/com/pineapple/sageos2/action/FastCommand.kt
           grep -F 'com.pineapple.sageos2.brain.BrainModelImportActivity' sageos2/app/src/main/AndroidManifest.xml
@@ -234,7 +234,7 @@ jobs:
           grep -F 'text = "Run local Brain self-check"' "$cockpit"
           ! grep -F 'One Sage. One runtime. Owner control.' "$cockpit"
           ! grep -F 'append(" Root:' "$cockpit"
-          grep -F 'host.core.replace' "$cockpit"
+          grep -F 'host.core.editCurrent' "$cockpit"
           grep -F 'host.recoverableTasks()' "$cockpit"
           grep -F 'host.traces.recent(100)' "$cockpit"
           grep -F 'host.ownerApps.upsert' "$cockpit"

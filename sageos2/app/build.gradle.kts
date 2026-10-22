@@ -2,10 +2,26 @@ plugins {
     id("com.android.application")
 }
 
+// Different recovery candidates share version 219. Report the compiled source, not just that label.
+val sourceRevision = runCatching {
+    val revision = providers.exec {
+        workingDir(rootProject.projectDir)
+        commandLine("git", "rev-parse", "HEAD")
+    }.standardOutput.asText.get().trim()
+    check(revision.matches(Regex("[0-9a-f]{40}")))
+    val changed = providers.exec {
+        workingDir(rootProject.projectDir)
+        commandLine("git", "status", "--porcelain", "--untracked-files=normal", "--", ".")
+    }.standardOutput.asText.get().isNotBlank()
+    revision + if (changed) "-dirty" else ""
+}.getOrDefault("unknown")
+
 android {
     namespace = "com.pineapple.sageos2"
     compileSdk = 35
     ndkVersion = "28.2.13676358"
+
+    buildFeatures { buildConfig = true }
 
     defaultConfig {
         applicationId = "com.pineapple.sagecommander.stable"
@@ -13,6 +29,7 @@ android {
         targetSdk = 35
         versionCode = 219
         versionName = "2.0.0"
+        buildConfigField("String", "SOURCE_REVISION", "\"$sourceRevision\"")
 
         testInstrumentationRunner = "android.app.Instrumentation"
 

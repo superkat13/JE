@@ -5,6 +5,7 @@ import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.speech.SpeechRecognizer
+import com.pineapple.sageos2.BuildConfig
 import com.pineapple.sage.SageSherpaRecognitionService
 import com.pineapple.sage.SageSpeechBackendState
 import com.pineapple.sageos2.action.AndroidDeviceController
@@ -381,17 +382,22 @@ class SageRuntimeHost private constructor(context: Context) {
         }
     }
 
+    private var lastSelfCareTraceSummary: String? = null
+
     private fun runSelfCareCheck() {
         legacyMigrationReport = runLegacyMigration()
         legacyPersonalityMigrationReport = runLegacyPersonalityMigration()
         val snapshot = selfCareSnapshot()
         val findings = selfCare.reconcile(snapshot)
-        traces.record(
-            "self_care",
-            if (findings.isEmpty()) "healthy; no unresolved self-care findings"
+        val summary = if (findings.isEmpty()) "healthy; no unresolved self-care findings"
             else "findings=${findings.joinToString(",") { it.code }}" +
                 if (!snapshot.wakeReady) "; wake=${snapshot.wakeDetail.take(500)}" else ""
-        )
+        // Unchanged five-minute health checks must not evict the turn that needs diagnosis.
+        // Reconciliation still runs each time; record the initial state and every transition.
+        if (summary != lastSelfCareTraceSummary) {
+            traces.record("self_care", summary)
+            lastSelfCareTraceSummary = summary
+        }
     }
 
     /** Read existing status; an owner check never restarts services or replays tasks. */
@@ -607,6 +613,7 @@ class SageRuntimeHost private constructor(context: Context) {
             DiagnosticReportSnapshot(
                 createdAtMs = now,
                 appVersion = appVersion,
+                sourceRevision = BuildConfig.SOURCE_REVISION,
                 packageName = appContext.packageName,
                 device = listOf(Build.MANUFACTURER, Build.MODEL).filter { it.isNotBlank() }.joinToString(" "),
                 android = "${Build.VERSION.RELEASE} (API ${Build.VERSION.SDK_INT})",

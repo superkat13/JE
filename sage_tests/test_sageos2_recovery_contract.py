@@ -53,7 +53,8 @@ class SageOs2RecoveryContractTest(unittest.TestCase):
             "sageos2/app/src/main/java/com/pineapple/sageos2/core/"
             "SageCommandRouter.kt"
         )
-        self.assertIn("val fastCommand = fastCommands.parse(normalized)", router)
+        self.assertIn("val fastCommand = fastCommands.parse(executableText)", router)
+        self.assertIn("RouteDecision(SageRoute.FAST_DEVICE, executableText)", router)
         self.assertIn("if (fastCommand != null)", router)
         self.assertIn("fastCommand is FastCommand.OpenApp", router)
         self.assertNotIn("fastPrefixes", router)
