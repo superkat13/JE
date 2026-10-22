@@ -48,8 +48,10 @@ class OwnerAppResolver {
 
         return when {
             names.any { it == needle } -> 0
-            names.any { it.startsWith(needle) || needle.startsWith(it) } -> 1
-            names.any { it.contains(needle) || needle.contains(it) } -> 2
+            // A longer request must not resolve merely because its first words name an app.
+            // Otherwise "YouTube and subscribe..." silently becomes just "YouTube".
+            names.any { it.startsWith(needle) } -> 1
+            names.any { it.contains(needle) } -> 2
             else -> NO_MATCH
         }
     }

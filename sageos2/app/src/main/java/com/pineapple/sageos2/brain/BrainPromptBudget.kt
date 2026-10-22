@@ -17,6 +17,7 @@ object BrainPromptBudget {
     private const val SECTION_OMISSION = "\n[Section shortened for this local turn.]\n"
     private const val TASK_SECTION = "# ACTIVE / RECOVERABLE TASKS"
     private const val TOOL_SECTION = "# SAGE TOOL CONTRACT"
+    private const val MINIMUM_OPERATIONAL_IDENTITY_CHARACTERS = 320
 
     fun fitSystemContext(
         systemContext: String,
@@ -27,33 +28,40 @@ object BrainPromptBudget {
         require(combinedCharacterBudget > MINIMUM_CONTEXT_CHARACTERS + OMISSION.length)
         val profile = BrainRequestPolicy.forPrompt(ownerPrompt)
         val scopedContext = scopeEngineeringContext(systemContext, profile)
+        if (requiredContext.isBlank() && profile.includeToolContext) {
+            val sections = semanticSections(scopedContext)
+            val contracts = sections.filter { it.title == "SAGE TOOL CONTRACT" }
+            if (contracts.isNotEmpty()) {
+                // Tool signatures and the control-output example are a single contract. Cutting
+                // out its middle can leave "never invent a tool" followed by no usable tools.
+                val contract = contracts.joinToString("\n\n") { it.text }
+                val continuity = sections.filter { it.title != "SAGE TOOL CONTRACT" }
+                require(continuity.isNotEmpty()) { "No room for Sage identity in this operational turn" }
+                // Tools need the selected app, relevant memory, recent conversation and requested
+                // task context too. Reserve every applicable section's semantic minimum instead
+                // of fitting only identity and silently dropping the context that grounds actions.
+                val minimumContinuity = maxOf(MINIMUM_OPERATIONAL_IDENTITY_CHARACTERS,
+                    continuity.sumOf { minimumQuota(it) } + (continuity.size - 1) * 2)
+                val minimumBudget = ownerPrompt.length.toLong() + contract.length + 2 +
+                    minimumContinuity
+                require(minimumBudget <= DEFAULT_COMBINED_CHARACTER_BUDGET) {
+                    "Owner request and required tool contract exceed this local turn's budget"
+                }
+                // Grow only when essential operational context cannot fit the latency profile;
+                // retain the existing inherited ceiling and keep ordinary chat profiles intact.
+                val operationalBudget = maxOf(combinedCharacterBudget, minimumBudget.toInt())
+                val fittedContinuity = fitSemanticSections(continuity,
+                    operationalBudget - ownerPrompt.length - contract.length - 2)
+                return fittedContinuity + "\n\n" + contract
+            }
+        }
         if (requiredContext.isNotBlank()) {
             // Never cut a tool signature or a saved procedure. Reserve it first and keep
             // identity in the remaining space, without enlarging the local turn budget.
             val identityAllowance = combinedCharacterBudget - ownerPrompt.length - requiredContext.length - 2
-            require(identityAllowance >= 320) { "Saved startup context exceeds this local turn's budget" }
+            require(identityAllowance >= MINIMUM_OPERATIONAL_IDENTITY_CHARACTERS) { "Saved startup context exceeds this local turn's budget" }
             val sections = semanticSections(scopedContext)
-            val selected = mutableSetOf<Int>()
-            var used = 0
-            val priority = sections.indices.sortedBy { index ->
-                when (sections[index].title) {
-                    "OWNER CORE" -> 0
-                    "WHO I AM" -> 1
-                    "WHAT MATTERS TO US" -> 2
-                    "ME" -> 3
-                    else -> 4
-                }
-            }
-            for (index in priority) {
-                val needed = minimumQuota(sections[index]) + if (selected.isEmpty()) 0 else 2
-                if (used + needed <= identityAllowance) {
-                    selected += index
-                    used += needed
-                }
-            }
-            require(selected.isNotEmpty()) { "No room for Sage identity in this startup turn" }
-            val identity = fitSemanticSections(sections.filterIndexed { index, _ -> index in selected }, identityAllowance)
-            return identity + "\n\n" + requiredContext
+            return fitRequiredContext(sections, identityAllowance, requiredContext)
         }
         val allowance = (combinedCharacterBudget - ownerPrompt.length)
             .coerceAtLeast(MINIMUM_CONTEXT_CHARACTERS)
@@ -71,6 +79,30 @@ object BrainPromptBudget {
         return scopedContext.take(headLength).trimEnd() +
             OMISSION +
             scopedContext.takeLast(tailLength).trimStart()
+    }
+
+    private fun fitRequiredContext(sections: List<PromptSection>, identityAllowance: Int, required: String): String {
+        val selected = mutableSetOf<Int>()
+        var used = 0
+        val priority = sections.indices.sortedBy { index ->
+            when (sections[index].title) {
+                "OWNER CORE" -> 0
+                "WHO I AM" -> 1
+                "WHAT MATTERS TO US" -> 2
+                "ME" -> 3
+                else -> 4
+            }
+        }
+        for (index in priority) {
+            val needed = minimumQuota(sections[index]) + if (selected.isEmpty()) 0 else 2
+            if (used + needed <= identityAllowance) {
+                selected += index
+                used += needed
+            }
+        }
+        require(selected.isNotEmpty()) { "No room for Sage identity in this operational turn" }
+        val identity = fitSemanticSections(sections.filterIndexed { index, _ -> index in selected }, identityAllowance)
+        return identity + "\n\n" + required
     }
 
     /**

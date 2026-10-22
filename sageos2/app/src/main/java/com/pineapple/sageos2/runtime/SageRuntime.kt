@@ -95,6 +95,9 @@ class SageRuntime(
     private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
     private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
     private val ownerGoalByTurn = mutableMapOf<Long, String>()
+    // Brain calls are stateless: current-turn history is deliberately excluded below. Keep
+    // actual ordered outcomes here, independently of optional/budget-clipped task history.
+    private val executionEvidenceByTurn = mutableMapOf<Long, MutableList<BrainToolExecutionEvidence>>()
     private val recoveryReplayGuardByTurn = mutableMapOf<Long, MutableList<RecoveryCompletionPolicy.ReplayGuard>>()
     private val recoveryReplayBlocksByTurn = mutableMapOf<Long, Int>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
@@ -184,6 +187,9 @@ class SageRuntime(
         if (pendingOwnerResumeId != null) return "another saved task is already queued."
         val current = taskContinuity?.get(task.taskId) ?: return "the saved task is missing."
         if (current.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return "that task is already settled."
+        if (current.metadata["phase"] == TaskRecoveryManager.CONTEXT_LIMIT_PHASE) {
+            return "that request exceeded the local context limit. Give me a smaller fresh request; I won't retry a shortened saved goal."
+        }
         if (current.metadata["ownerPrompt"].isNullOrBlank()) return "its original request is missing."
         if (current.metadata["lastActionSuccess"] == "unknown") return "the previous action's outcome is unknown."
         val health = brain.health()
@@ -204,6 +210,13 @@ class SageRuntime(
     }
 
     fun resumeRecoveredTask(task: TaskCheckpoint) {
+        // A context-limited request may exceed the checkpoint's bounded prompt field. Neither a
+        // restart nor a stale resume selection may turn that shortened copy into a new goal.
+        if (task.metadata["phase"] == TaskRecoveryManager.CONTEXT_LIMIT_PHASE ||
+            taskContinuity?.get(task.taskId)?.metadata?.get("phase") == TaskRecoveryManager.CONTEXT_LIMIT_PHASE) {
+            observer.onDiagnostic("recovery skipped: context-limited request needs a smaller fresh request")
+            return
+        }
         val metadata = task.metadata
         val ownerPrompt = metadata["ownerPrompt"]?.trim().orEmpty()
         if (ownerPrompt.isBlank()) {
@@ -408,10 +421,21 @@ class SageRuntime(
         } else {
             fullContext
         } } catch (error: IllegalArgumentException) {
-            if (startup == null) throw error
+            if (startup == null) {
+                checkpointTurn(turnId, TaskState.WAITING,
+                    "The original request, tool contract and results exceed the local context limit.",
+                    "Split the request into smaller steps; verify existing outcomes before further actions.",
+                    mapOf("phase" to TaskRecoveryManager.CONTEXT_LIMIT_PHASE, "verified" to "false"))
+                clearGoalRuntimeState(turnId)
+                observer.onDiagnostic("brain request declined: required context exceeds local limit; turn=$turnId")
+                submit(SageEvent.ResponseReady(turnId,
+                    "This request and its results are too long for the local Brain. I stopped without repeating actions. Please split the request into smaller steps.", false))
+                return
+            }
             failStartup(turnId, "The saved app startup is too long for this local turn. Shorten its steps in Owner Apps before trying again. No further action was run.")
             return
         }
+        observer.onDiagnostic("brain request characters: prompt=${prompt.length} context=${context.length} combined=${prompt.length + context.length}")
         clearBrainTimeouts()
         brainTimeoutHandle = scheduler.schedule(brainResponseTimeoutMs) { onBrainTimeout(turnId, attempt = attempt) }
         val startedJob = brain.start(BrainRequest(
@@ -543,7 +567,8 @@ class SageRuntime(
                     )
                     startBrain(
                         response.turnId,
-                        GoalCompletionPolicy.verificationPrompt(ownerGoal, toolCount, nextRound)
+                        GoalCompletionPolicy.verificationPrompt(ownerGoal, toolCount, nextRound,
+                            executionEvidenceByTurn[response.turnId].orEmpty())
                     )
                     return
                 }
@@ -687,7 +712,7 @@ class SageRuntime(
                 blockedAction = action,
                 completedToolCalls = toolCount,
                 verificationRound = nextRound
-            )
+            ) + "\n" + BrainToolContextRenderer.renderEvidence(executionEvidenceByTurn[turnId].orEmpty())
         )
         return true
     }
@@ -728,6 +753,8 @@ class SageRuntime(
         capabilityTimeoutHandle = null
         capabilityJob = null
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
+        val evidence = executionEvidenceByTurn.getOrPut(turnId) { mutableListOf() }
+        evidence.add(BrainToolContextRenderer.captureResult(toolCallsByTurn[turnId] ?: 1, action, result))
         // Tool success reports only this call's result. It cannot authorize an interrupted mutation.
         startupByTurn[turnId]?.let { startup ->
             if (!result.success) {
@@ -749,7 +776,7 @@ class SageRuntime(
                 "toolCount" to (toolCallsByTurn[turnId] ?: 0).toString()
             )
         )
-        startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
+        startBrain(turnId, BrainToolContextRenderer.renderContinuation(ownerGoalByTurn[turnId].orEmpty(), evidence))
     }
 
     private fun retireCapabilityAttempt() {
@@ -880,6 +907,7 @@ class SageRuntime(
         verificationTargetToolCountByTurn.remove(turnId)
         verificationRoundsByTurn.remove(turnId)
         ownerGoalByTurn.remove(turnId)
+        executionEvidenceByTurn.remove(turnId)
         recoveryReplayGuardByTurn.remove(turnId)
         recoveryReplayBlocksByTurn.remove(turnId)
     }

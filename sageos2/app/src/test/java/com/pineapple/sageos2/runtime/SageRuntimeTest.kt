@@ -586,6 +586,94 @@ class SageRuntimeTest {
         assertEquals("Root health is responding.", f.observer.textResponses.last().second)
     }
 
+    @Test fun compoundGoalAndOrderedResultsReachContinuationAndVerificationWithoutTaskStore() {
+        val goal = "Inspect the audio state, reduce the volume one step, and confirm the final volume."
+        val actions = java.util.Collections.synchronizedList(mutableListOf<DeviceAction>())
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE))
+            override fun execute(action: DeviceAction): CapabilityResult {
+                actions += action
+                return when (actions.size) {
+                    1 -> CapabilityResult(true, "before_volume=8; route=speaker")
+                    else -> CapabilityResult(false, "after_volume=8; permission denied; no change applied")
+                }
+            }
+        }
+        val noisyHistory = object : ConversationHistoryProvider {
+            override fun recent(limit: Int) = ConversationHistorySnapshot(1, (1..24).map { index ->
+                ConversationEntry("old-$index", -index.toLong(), ConversationSpeaker.OWNER,
+                    ConversationInput.TEXT, "Unrelated old request $index: " + "old context ".repeat(200), index.toLong())
+            })
+        }
+        val f = Fixture(capability = capability, conversationHistory = noisyHistory)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted(goal))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == 2 }
+            assertTrue("continuation must carry the original compound goal directly",
+                f.brain.requests[1].prompt.contains("owner_goal=$goal"))
+            assertTrue(f.brain.requests[1].prompt.contains("before_volume=8; route=speaker"))
+            assertTrue("the same request must retain its complete applicable tool schemas",
+                f.brain.requests[1].twinContextText.orEmpty().endsWith(BrainToolContextRenderer.render(capability.snapshot())))
+
+            f.brain.respond(1, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == 3 }
+            val continuation = f.brain.requests[2].prompt
+            assertTrue(continuation.contains("owner_goal=$goal"))
+            assertTrue(continuation.indexOf("before_volume=8") < continuation.indexOf("after_volume=8"))
+            assertTrue(continuation.contains("success=false"))
+            assertTrue(continuation.contains("permission denied; no change applied"))
+            assertTrue(continuation.contains("direction=DOWN"))
+
+            f.brain.respond(2, "The requested change could not be applied.")
+            waitUntil { f.brain.requests.size == 4 }
+            val verification = f.brain.requests[3].prompt
+            assertTrue(verification.contains(GoalCompletionPolicy.VERIFY_MARKER))
+            assertTrue(verification.contains("owner_goal=$goal"))
+            assertTrue(verification.contains("before_volume=8; route=speaker"))
+            assertTrue(verification.contains("after_volume=8; permission denied; no change applied"))
+            assertTrue(verification.contains("success=false"))
+            assertTrue(f.observer.textResponses.isEmpty())
+            f.brain.respond(3, "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nThe volume is unchanged because permission was denied.")
+            assertEquals(2, actions.size)
+            assertTrue(f.observer.textResponses.single().second.contains("permission was denied"))
+            assertTrue(f.observer.textResponses.single().second.contains("couldn't verify"))
+
+            f.runtime.submit(SageEvent.TextSubmitted("Inspect the new state"))
+            assertFalse("previous tool facts must not leak into a later owner turn",
+                f.brain.requests.last().prompt.contains("before_volume=8"))
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun operationalRequestThatCannotFitStopsHonestlyBeforeAnyAction() {
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        val originalGoal = "Inspect " + "a very long compound request ".repeat(300)
+        f.runtime.submit(SageEvent.TextSubmitted(originalGoal))
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(capability.actions.isEmpty())
+        assertEquals(SageRuntimeState.IDLE_WAKE, f.runtime.snapshot().state)
+        assertTrue(f.observer.textResponses.single().second.contains("split the request"))
+        val saved = store.active().single()
+        assertEquals("context_limit", saved.metadata["phase"])
+        assertEquals("false", saved.metadata["verified"])
+        assertTrue("this fixture must exercise a shortened checkpoint, not just a long prompt",
+            saved.metadata["ownerPrompt"]!!.length < originalGoal.length)
+        assertTrue(f.runtime.queueOwnerResume(saved)!!.contains("smaller fresh request"))
+        f.runtime.resumeRecoveredTask(saved)
+        // An already-selected older checkpoint cannot bypass the current stored refusal.
+        f.runtime.resumeRecoveredTask(saved.copy(metadata = saved.metadata - "phase"))
+        assertTrue(f.brain.requests.isEmpty())
+        assertTrue(capability.actions.isEmpty())
+        assertEquals(saved, store.get(saved.taskId))
+        f.runtime.stop()
+    }
+
     @Test fun unverifiedGoalDoesNotPretendSuccess() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)

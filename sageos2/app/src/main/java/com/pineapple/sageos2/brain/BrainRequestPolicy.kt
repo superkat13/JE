@@ -19,9 +19,14 @@ object BrainRequestPolicy {
         "(?i)\\b(continue|resume|pick up|where were we|unfinished|recoverable task|previous task)\\b"
     )
     private val actionCue = Regex(
-        "(?i)^\\s*(?:(?:can|could|would)\\s+you\\s+|please\\s+)?" +
+        "(?i)^\\s*(?:(?:hey|hi|okay|ok)[,\\s]+)?(?:sage[,\\s:]+)?" +
+            "(?:(?:please|kindly)\\s+|(?:can|could|would|will)\\s+you\\s+|" +
+            "i\\s+(?:want|need)(?:\\s+you)?\\s+to\\s+|" +
+            "i['’]d\\s+like(?:\\s+you)?\\s+to\\s+|help(?:\\s+me)?(?:\\s+to)?\\s+){0,4}" +
             "(open|launch|tap|click|choose|select|scroll|search|find|type|play|pause|share|copy|edit|" +
-            "install|uninstall|send|move|delete|rename|turn|set|change|check|inspect|run)\\b"
+            "install|uninstall|send|move|delete|rename|turn|set|change|check|inspect|run|" +
+            "go\\s+(?:back|home)|take\\s+(?:a\\s+)?screenshot|" +
+            "make\\s+(?:(?:me|a|an)\\s+)*(?:timer|alarm))\\b"
     )
     private val toolResultCue = Regex("(?i)^\\s*<?SAGE_TOOL_RESULT\\b")
     private val goalVerificationCue = Regex("(?i)^\\s*<SAGE_GOAL_VERIFY>")
