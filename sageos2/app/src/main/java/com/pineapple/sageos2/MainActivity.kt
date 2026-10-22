@@ -638,24 +638,18 @@ open class MainActivity : Activity() {
 
         form.addView(Button(this).apply {
             text = "Save Sage's changes"
-            isEnabled = health.currentStatus != SageCoreCurrentStatus.INVALID && !(health.currentStatus == SageCoreCurrentStatus.MISSING && health.validRevisions.isEmpty())
+            isEnabled = health.currentStatus == SageCoreCurrentStatus.VALID
             setOnClickListener {
-                // Prevent saving unchanged revision-0 fallback as a recovered/authenticated identity
-                val currentEffective = host.core.current()
-                if (health.currentStatus == SageCoreCurrentStatus.MISSING && health.validRevisions.isEmpty() && currentEffective.revision <= 0L) {
-                    Toast.makeText(this@MainActivity, "Create a new Core explicitly or recover from existing history", Toast.LENGTH_LONG).show()
-                    return@setOnClickListener
-                }
                 runCatching {
-                    host.core.replace(
-                        host.core.current().copy(
+                    host.core.editCurrent { current ->
+                        current.copy(
                             twinIdentity = identity.text.toString().trim(),
                             principles = lines(principles.text.toString()),
                             preferences = lines(preferences.text.toString()),
                             selfRestrictions = lines(restrictions.text.toString()),
                             notes = notes.text.toString().trim()
                         )
-                    )
+                    }
                 }.onSuccess { saved ->
                     host.traces.record("owner_core", "Sage Core saved revision=${saved.revision}")
                     Toast.makeText(this@MainActivity, "Saved as version ${saved.revision}", Toast.LENGTH_SHORT).show()

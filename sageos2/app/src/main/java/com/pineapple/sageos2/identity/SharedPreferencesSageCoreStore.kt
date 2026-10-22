@@ -54,13 +54,49 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
      */
     private fun isAuthenticRecord(raw: String, expectedKeyRevision: Long?): Boolean {
         val obj = runCatching { JSONObject(raw) }.getOrNull() ?: return false
-        if (!obj.has("revision")) return false
-        val revision = obj.optLong("revision", 0L)
+        val storedRevision = obj.opt("revision")
+        if (storedRevision !is Int && storedRevision !is Long) return false
+        val revision = (storedRevision as Number).toLong()
         if (revision <= 0L) return false
         if (expectedKeyRevision != null && revision != expectedKeyRevision) return false
-        if (!obj.has("twinIdentity")) return false
-        return obj.optString("twinIdentity", "").trim().isNotEmpty()
+        val identity = obj.opt("twinIdentity") as? String ?: return false
+        if (identity.isBlank()) return false
+
+        // Optional fields may be absent in historical snapshots, but an explicitly malformed
+        // field must not be silently decoded as empty and then lost during restore or editing.
+        if (!obj.optionalStrings("provenance", "notes")) return false
+        if (!obj.optionalStringArrays("principles", "preferences", "selfRestrictions")) return false
+        if (!obj.optionalObject("ownerModel") { owner ->
+                owner.optionalStringArrays("preferredNames", "workingStyle", "preferences", "habits",
+                    "trustedTools", "recurringChoices") &&
+                    owner.optionalStringMaps("vocabulary", "learnedFacts")
+            }) return false
+        if (!obj.optionalObject("sageSelfModel") { self ->
+                self.optionalStrings("identity") &&
+                    self.optionalStringArrays("capabilities", "limitations", "experiences")
+            }) return false
+        return obj.optionalObject("sharedContinuity") { continuity ->
+            continuity.optionalStringMaps("activeProjects") &&
+                continuity.optionalStringArrays("durableDecisions", "activeTasks", "lessonsLearned")
+        }
     }
+
+    private fun JSONObject.optionalStrings(vararg names: String): Boolean =
+        names.all { name -> !has(name) || opt(name) is String }
+
+    private fun JSONObject.optionalStringArrays(vararg names: String): Boolean = names.all { name ->
+        if (!has(name)) true else {
+            val array = opt(name) as? JSONArray
+            array != null && (0 until array.length()).all { array.opt(it) is String }
+        }
+    }
+
+    private fun JSONObject.optionalStringMaps(vararg names: String): Boolean = names.all { name ->
+        optionalObject(name) { map -> map.keys().asSequence().all { map.opt(it) is String } }
+    }
+
+    private fun JSONObject.optionalObject(name: String, validate: (JSONObject) -> Boolean): Boolean =
+        !has(name) || (opt(name) as? JSONObject)?.let(validate) == true
 
     /**
      * Safe read for ordinary callers. A damaged or missing record returns the canonical Sage
@@ -88,7 +124,15 @@ class SharedPreferencesSageCoreStore(context: Context) : SageCoreProvider {
         ))
     }
 
+    /** Ordinary editor saves require a real current record; recovery must use its reviewed path. */
+    fun editCurrent(update: (SageCoreSnapshot) -> SageCoreSnapshot): SageCoreSnapshot = locked {
+        val current = currentValidOrNull()
+            ?: error("Review and restore an existing Core, or explicitly create a new Core, before editing")
+        replace(update(current))
+    }
+
     fun replace(next: SageCoreSnapshot): SageCoreSnapshot = locked {
+        require(next.twinIdentity.isNotBlank()) { "Sage's Core identity cannot be blank" }
         // Ensure no unresolved write journal is left from a previous failed reconciliation;
         // an inconsistent journal must be preserved for diagnosis and the operation must fail closed.
         val journalExistsCheck = runCatching { prefs.contains(KEY_JOURNAL) }
