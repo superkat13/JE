@@ -85,7 +85,7 @@ class SageRuntime(
     private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
     private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
     private val ownerGoalByTurn = mutableMapOf<Long, String>()
-    private val recoveryReplayGuardByTurn = mutableMapOf<Long, RecoveryCompletionPolicy.ReplayGuard>()
+    private val recoveryReplayGuardByTurn = mutableMapOf<Long, MutableList<RecoveryCompletionPolicy.ReplayGuard>>()
     private val recoveryReplayBlocksByTurn = mutableMapOf<Long, Int>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
     private val capabilityExecutor = Executors.newSingleThreadExecutor { runnable ->
@@ -110,7 +110,10 @@ class SageRuntime(
             lastActionSignature = metadata["lastActionSignature"],
             lastActionSuccess = metadata["lastActionSuccess"],
             completedToolCalls = metadata["toolCount"]?.toIntOrNull() ?: 0,
-            recoveryDepth = metadata["recoveryDepth"]?.toIntOrNull() ?: 1
+            recoveryDepth = metadata["recoveryDepth"]?.toIntOrNull() ?: 1,
+            replayGuardMetadata = RecoveryCompletionPolicy.replayGuardMetadata(
+                RecoveryCompletionPolicy.replayGuards(metadata)
+            )
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
@@ -156,6 +159,8 @@ class SageRuntime(
             }
             is SageEffect.QueryDeepBrain -> {
                 ownerGoalByTurn.putIfAbsent(effect.turnId, effect.prompt)
+                // Record mutations now so a later read-only call cannot hide them from recovery.
+                recoveryReplayGuardByTurn[effect.turnId] = mutableListOf()
                 checkpointTurnStarted(effect.turnId, effect.prompt)
                 val open = FastCommandParser().parse(effect.prompt) as? FastCommand.OpenApp
                 val app = open?.let { OwnerAppResolver().resolve(it.appName, ownerApps.snapshot()) }
@@ -172,9 +177,10 @@ class SageRuntime(
                 }
                 ownerGoalByTurn[effect.turnId] = effect.ownerPrompt
                 if (restoredToolCount > 0) toolCallsByTurn[effect.turnId] = restoredToolCount
-                RecoveryCompletionPolicy.replayGuard(effect.lastAction, effect.lastActionSignature)?.let { guard ->
-                    recoveryReplayGuardByTurn[effect.turnId] = guard
-                }
+                val guards = RecoveryCompletionPolicy.replayGuards(effect.replayGuardMetadata).toMutableList()
+                RecoveryCompletionPolicy.replayGuard(effect.lastAction, effect.lastActionSignature)
+                    ?.takeIf { it !in guards }?.let { guards.add(it) }
+                recoveryReplayGuardByTurn[effect.turnId] = guards
                 checkpointRecoveredTurnStarted(effect.turnId, effect, restoredToolCount)
                 startBrain(
                     effect.turnId,
@@ -461,6 +467,11 @@ class SageRuntime(
             failStartup(response.turnId, "That saved startup needs an unsupported action (${action.name}). I stopped before running it.")
             return
         }
+        // Persist protection before execution: another crash can leave this action's result unknown.
+        recoveryReplayGuardByTurn[response.turnId]?.let { guards ->
+            RecoveryCompletionPolicy.replayGuard(action.name, RecoveryCompletionPolicy.actionSignature(action))
+                ?.takeIf { it !in guards }?.let { guards.add(it) }
+        }
         checkpointTurn(
             response.turnId,
             TaskState.ACTIVE,
@@ -470,6 +481,7 @@ class SageRuntime(
                 "phase" to "capability",
                 "lastAction" to action.name,
                 "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(action),
+                "lastActionSuccess" to "unknown",
                 "toolCount" to nextCount.toString()
             )
         )
@@ -482,8 +494,9 @@ class SageRuntime(
     }
 
     private fun handleBlockedRecoveryReplay(turnId: Long, action: DeviceAction): Boolean {
-        val guard = recoveryReplayGuardByTurn[turnId] ?: return false
-        if (!RecoveryCompletionPolicy.shouldBlockReplay(guard, action)) return false
+        if (coordinator.snapshot().activeTurnOrigin != TurnOrigin.RECOVERY) return false
+        val guards = recoveryReplayGuardByTurn[turnId] ?: return false
+        if (guards.none { RecoveryCompletionPolicy.shouldBlockReplay(it, action) }) return false
 
         val blocks = (recoveryReplayBlocksByTurn[turnId] ?: 0) + 1
         val toolCount = (toolCallsByTurn[turnId] ?: 1).coerceAtLeast(1)
@@ -518,7 +531,7 @@ class SageRuntime(
             turnId,
             TaskState.ACTIVE,
             "Blocked blind replay of interrupted side effect ${action.name}; verification required.",
-            "Verify the current real state with a different read-only tool before repeating the side effect.",
+            "Verify the current real state without repeating the protected side effect.",
             mapOf(
                 "phase" to "recovery_verification",
                 "verified" to "false",
@@ -562,10 +575,7 @@ class SageRuntime(
             return
         }
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
-        if (result.success && !RecoveryCompletionPolicy.isMutating(action.name)) {
-            recoveryReplayGuardByTurn.remove(turnId)
-            recoveryReplayBlocksByTurn.remove(turnId)
-        }
+        // Tool success reports only this call's result. It cannot authorize an interrupted mutation.
         startupByTurn[turnId]?.let { startup ->
             if (!result.success) {
                 failStartup(turnId, "I stopped the saved app startup: ${result.detail}")
@@ -621,6 +631,9 @@ class SageRuntime(
         effect.lastAction?.takeIf { it.isNotBlank() }?.let { metadata["lastAction"] = it }
         effect.lastActionSignature?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSignature"] = it }
         effect.lastActionSuccess?.takeIf { it.isNotBlank() }?.let { metadata["lastActionSuccess"] = it }
+        metadata.putAll(RecoveryCompletionPolicy.replayGuardMetadata(
+            recoveryReplayGuardByTurn[turnId].orEmpty()
+        ))
         store.upsert(
             TaskCheckpoint(
                 taskId = id,
@@ -674,7 +687,9 @@ class SageRuntime(
                 summary = summary,
                 nextStep = nextStep,
                 updatedAtMs = System.currentTimeMillis(),
-                metadata = existing.metadata + metadata
+                metadata = existing.metadata + metadata + recoveryReplayGuardByTurn[turnId]?.let {
+                    RecoveryCompletionPolicy.replayGuardMetadata(it)
+                }.orEmpty()
             )
         )
     }

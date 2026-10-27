@@ -446,7 +446,7 @@ class SageRuntimeTest {
         assertTrue(store.active().any { it.metadata["phase"] == "verification_waiting" })
     }
 
-    @Test fun readOnlyRecoveryEvidenceClearsReplayGuardBeforeCorrectiveAction() {
+    @Test fun successfulHealthCheckDoesNotAuthorizeInterruptedMutationReplay() {
         val store = MemoryTaskStore()
         val interrupted = DeviceAction("root.restart_service", mapOf("service" to "print"))
         val task = TaskCheckpoint(
@@ -481,20 +481,127 @@ class SageRuntimeTest {
             1,
             "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>"
         )
-        waitUntil { capability.actions.size == 2 && f.brain.requests.size == 3 }
-        assertEquals("root.restart_service", capability.actions[1].name)
-
-        f.brain.respond(2, "The corrective restart returned.")
-        waitUntil { f.brain.requests.size == 4 }
-        assertTrue(f.brain.requests[3].prompt.contains(GoalCompletionPolicy.VERIFY_MARKER))
+        waitUntil { f.brain.requests.size == 3 }
+        assertEquals(listOf("root.health"), capability.actions.map { it.name })
+        assertTrue(f.brain.requests[2].prompt.contains("SAGE_RECOVERY_REPLAY_BLOCKED"))
 
         f.brain.respond(
-            3,
-            "${GoalCompletionPolicy.VERIFIED_MARKER}\nPrinting is responding after recovery."
+            2,
+            "${GoalCompletionPolicy.UNVERIFIED_MARKER}\nThe broker is healthy, but I cannot prove whether printing restarted."
         )
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Printing is responding after recovery.", f.observer.textResponses.last().second)
+        assertTrue(f.observer.textResponses.last().second.contains("cannot prove"))
+        assertTrue(store.active().any { it.metadata["phase"] == "verification_waiting" })
     }
+
+    @Test fun readOnlyChecksCannotClearReplayGuardOrResetReplayLimit() {
+        for (readOnly in listOf("root.health", "forge.health", "forge.tools", "forge.job", "device.screenshot", "device.read_notifications")) {
+            val store = MemoryTaskStore()
+            val task = interruptedPrintTask()
+            store.upsert(task)
+            val capability = FakeCapabilityBroker(rootActive = true)
+            val f = Fixture(capability = capability, taskContinuity = store)
+            f.runtime.start()
+            f.runtime.resumeRecoveredTask(task)
+            var request = 0
+            repeat(RecoveryCompletionPolicy.MAX_REPLAY_BLOCKS + 1) { attempt ->
+                f.brain.respond(request++, "<SAGE_TOOL>\nname=$readOnly\n</SAGE_TOOL>")
+                waitUntil { f.brain.requests.size == request + 1 }
+                f.brain.respond(request++, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+                if (attempt < RecoveryCompletionPolicy.MAX_REPLAY_BLOCKS) {
+                    waitUntil { f.brain.requests.size == request + 1 }
+                }
+            }
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+            assertEquals(readOnly, listOf(readOnly, readOnly, readOnly), capability.actions.map { it.name })
+            assertTrue(f.observer.textResponses.last().second.contains("did not repeat"))
+            assertTrue(store.active().any { it.metadata["phase"] == "recovery_waiting" })
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun replayGuardSurvivesSecondRestartAfterHealthCheck() {
+        val store = MemoryTaskStore()
+        val task = interruptedPrintTask()
+        store.upsert(task)
+        val first = Fixture(capability = FakeCapabilityBroker(rootActive = true), taskContinuity = store)
+        first.runtime.start()
+        first.runtime.resumeRecoveredTask(task)
+        first.brain.respond(0, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { first.brain.requests.size == 2 }
+        val checkpoint = store.active().single { it.metadata["phase"] == "brain_after_capability" }
+        assertEquals("root.health", checkpoint.metadata["lastAction"])
+        first.runtime.stop()
+
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val second = Fixture(capability = capability, taskContinuity = store)
+        second.runtime.start()
+        second.runtime.resumeRecoveredTask(checkpoint)
+        second.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+        waitUntil { second.brain.requests.size == 2 }
+        assertTrue(capability.actions.isEmpty())
+        assertTrue(second.brain.requests[1].prompt.contains("SAGE_RECOVERY_REPLAY_BLOCKED"))
+        second.runtime.stop()
+    }
+
+    @Test fun differentRecoveryActionIsAllowedAndBothMutationsStayProtected() {
+        val store = MemoryTaskStore()
+        val task = interruptedPrintTask()
+        store.upsert(task)
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.resumeRecoveredTask(task)
+        f.brain.respond(0, "<SAGE_TOOL>\nname=root.restart_service\nservice=other\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 2 }
+        assertEquals("other", capability.actions.single().arguments["service"])
+        val checkpoint = store.active().single { it.metadata["phase"] == "brain_after_capability" }
+        assertEquals(2, RecoveryCompletionPolicy.replayGuards(checkpoint.metadata).size)
+        f.brain.respond(1, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 3 }
+        assertEquals(1, capability.actions.size)
+        f.runtime.stop()
+    }
+
+    @Test fun normalTurnRecordsMutationHistoryWithoutApplyingRecoveryReplayRules() {
+        val store = MemoryTaskStore()
+        val capability = FakeCapabilityBroker(rootActive = true)
+        val f = Fixture(capability = capability, taskContinuity = store)
+        f.runtime.start()
+        f.runtime.submit(SageEvent.TextSubmitted("restart printing twice then check health"))
+        repeat(2) { index ->
+            f.brain.respond(index, "<SAGE_TOOL>\nname=root.restart_service\nservice=print\n</SAGE_TOOL>")
+            waitUntil { f.brain.requests.size == index + 2 }
+        }
+        f.brain.respond(2, "<SAGE_TOOL>\nname=root.health\n</SAGE_TOOL>")
+        waitUntil { f.brain.requests.size == 4 }
+        assertEquals(listOf("root.restart_service", "root.restart_service", "root.health"), capability.actions.map { it.name })
+        val checkpoint = store.active().single()
+        assertEquals("root.health", checkpoint.metadata["lastAction"])
+        assertEquals("root.restart_service", RecoveryCompletionPolicy.replayGuards(checkpoint.metadata).single().actionName)
+        f.runtime.stop()
+    }
+
+    private fun interruptedPrintTask() = TaskCheckpoint(
+        taskId = "runtime:turn:92",
+        title = "Fix printing",
+        state = TaskState.WAITING,
+        summary = "Interrupted while restarting print service.",
+        nextStep = "Recover safely.",
+        updatedAtMs = 100,
+        metadata = mapOf(
+            "kind" to TaskRecoveryManager.RUNTIME_TURN_KIND,
+            "ownerPrompt" to "restart printing and make sure it works",
+            "phase" to "capability",
+            "lastAction" to "root.restart_service",
+            "lastActionSignature" to RecoveryCompletionPolicy.actionSignature(
+                DeviceAction("root.restart_service", mapOf("service" to "print"))
+            ),
+            "toolCount" to "1",
+            "recovered" to "true",
+            "recoveryDepth" to "1"
+        )
+    )
 
     @Test fun normalBrainProseMentioningToolNameNeverExecutesCapability() {
         val capability = FakeCapabilityBroker(rootActive = true)
