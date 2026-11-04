@@ -1,6 +1,10 @@
 package com.pineapple.sageos2.speech
 
 import android.content.Context
+import com.pineapple.sageos2.persistence.ContinuityDecode
+import com.pineapple.sageos2.persistence.ContinuityRead
+import com.pineapple.sageos2.persistence.ContinuityStoreHealth
+import com.pineapple.sageos2.persistence.ContinuityStoreSafety
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -56,20 +60,25 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
     private val compiler by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { WakePhraseCompiler(appContext) }
 
     /** Returns all configured profiles. The physical wake engine separately filters enabled profiles. */
-    override fun profiles(): List<WakeProfile> {
-        val raw = prefs.getString(KEY, null) ?: return defaults()
-        return runCatching { decode(raw) }.getOrElse { defaults() }.ifEmpty { defaults() }
-    }
+    override fun profiles(): List<WakeProfile> = effective(readState().value)
+
+    /** Whether the stored value is missing, empty, readable, or damaged. Never mutates. */
+    fun health(): ContinuityStoreHealth = readState().health
+
+    /** Raw stored text for private recovery inspection; null when missing or wrongly typed. */
+    fun rawStateTextOrNull(): String? = ContinuityStoreSafety.readRaw(prefs, KEY).text
 
     fun replace(profiles: List<WakeProfile>) {
         require(profiles.isNotEmpty())
-        prefs.edit().putString(KEY, encode(profiles)).apply()
+        val read = readState()
+        save(profiles, read.health)
     }
 
     fun upsert(profile: WakeProfile) {
-        val all = profiles().associateBy { it.id }.toMutableMap()
+        val read = readState()
+        val all = effective(read.value).associateBy { it.id }.toMutableMap()
         all[profile.id] = profile
-        replace(all.values.toList())
+        save(all.values.toList(), read.health)
     }
 
     fun compile(profile: WakeProfile): WakeProfile {
@@ -88,8 +97,19 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
     }
 
     fun remove(id: String) {
-        val remaining = profiles().filterNot { it.id == id }
-        replace(if (remaining.isEmpty()) defaults() else remaining)
+        val read = readState()
+        val remaining = effective(read.value).filterNot { it.id == id }
+        save(if (remaining.isEmpty()) defaults() else remaining, read.health)
+    }
+
+    private fun effective(profiles: List<WakeProfile>): List<WakeProfile> =
+        profiles.ifEmpty { defaults() }
+
+    private fun readState(): ContinuityRead<List<WakeProfile>> =
+        ContinuityStoreSafety.read(prefs, KEY, emptyList(), ::decode)
+
+    private fun save(profiles: List<WakeProfile>, health: ContinuityStoreHealth) {
+        ContinuityStoreSafety.save(prefs, KEY, encode(profiles), health, "Wake profiles")
     }
 
     private fun encode(profiles: List<WakeProfile>): String = JSONArray().apply {
@@ -107,18 +127,26 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
         }
     }.toString()
 
-    private fun decode(raw: String): List<WakeProfile> {
+    private fun decode(raw: String): ContinuityDecode<List<WakeProfile>> {
         val array = JSONArray(raw)
-        return buildList {
+        var unreadable = 0
+        val profiles = buildList {
             for (i in 0 until array.length()) {
-                val item = array.optJSONObject(i) ?: continue
+                val item = array.optJSONObject(i)
+                if (item == null) {
+                    unreadable++
+                    continue
+                }
                 val phraseArray = item.optJSONArray("phrases") ?: JSONArray()
                 val phrases = buildList {
                     for (j in 0 until phraseArray.length()) {
                         phraseArray.optString(j).trim().takeIf { it.isNotEmpty() }?.let(::add)
                     }
                 }
-                if (phrases.isEmpty()) continue
+                if (phrases.isEmpty()) {
+                    unreadable++
+                    continue
+                }
                 val compiled = buildMap {
                     val obj = item.optJSONObject("compiledPhrases") ?: JSONObject()
                     val keys = obj.keys()
@@ -142,6 +170,7 @@ class SharedPreferencesWakeProfileStore(context: Context) : WakeProfileProvider 
                 )
             }
         }
+        return ContinuityDecode(profiles, unreadable, profiles.isEmpty())
     }
 
     companion object {
