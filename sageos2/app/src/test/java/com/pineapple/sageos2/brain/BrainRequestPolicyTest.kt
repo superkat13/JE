@@ -70,6 +70,26 @@ class BrainRequestPolicyTest {
         assertTrue(realToolResult.includeTaskContext)
     }
 
+    @Test fun naturalActionRequestsKeepTheToolContract() {
+        listOf(
+            "Could you please open Firefox for me?",
+            "Hey Sage, open Firefox",
+            "Sage please could you open Firefox?",
+            "I want you to open Firefox",
+            "I need to open Firefox",
+            "I'd like you to open Firefox",
+            "Help me open Firefox",
+            "Go back",
+            "Take a screenshot",
+            "Make me a timer for five minutes"
+        ).forEach { prompt ->
+            assertTrue(prompt, BrainRequestPolicy.forPrompt(prompt).includeToolContext)
+            assertTrue(prompt, BrainRequestPolicy.forPrompt(prompt, coldStart = true).includeToolContext)
+        }
+        listOf("Hey Sage, how are you?", "Could you please tell me a joke?", "I want to talk about Firefox")
+            .forEach { assertFalse(it, BrainRequestPolicy.forPrompt(it).includeToolContext) }
+    }
+
 
     @Test fun goalVerificationAlwaysCarriesTaskAndToolContext() {
         val prompt = """

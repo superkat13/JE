@@ -56,7 +56,7 @@ object VoiceRepairReporter {
         append("Your voice test did not pass. ")
         when (session.cause) {
             VoiceRepairCause.NO_SPEECH -> {
-                append("I did not hear any speech during the test window ")
+                append("No words were recognized during the test window ")
                 append(testTiming(session.firstTest)).append(". That is not a signal to reset the recognizer.")
             }
             VoiceRepairCause.WRONG_TRANSCRIPT -> {
@@ -64,8 +64,8 @@ object VoiceRepairReporter {
                 append(session.testPhrase).append("”. A mismatch does not justify rebuilding the recognizer.")
             }
             VoiceRepairCause.MISSING_PERMISSION_MODEL -> {
-                append("A microphone permission or speech model is missing, so no repair could be applied. ")
-                append("This is a separate blocker I cannot change on my own.")
+                append("Microphone access, the speech service, or the speech model is unavailable, so no repair could be applied. ")
+                append("Check microphone access and speech readiness.")
             }
             VoiceRepairCause.RECOGNIZER_LIFECYCLE_FAILURE -> {
                 append("The recognizer reported a lifecycle failure")

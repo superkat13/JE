@@ -16,7 +16,10 @@ class VoiceRepairResponder(
     private val latestReport: () -> String = { "" },
     private val interruptedNotice: () -> String = { "" },
     private val exportText: () -> String = { "" },
-    private val onDiagnostic: (String) -> Unit = {}
+    private val onDiagnostic: (String) -> Unit = {},
+    /** Production UI may take the phrase in a dedicated diagnostic-only field. */
+    private val requestPanel: (() -> String)? = null,
+    private val cancelPanel: (() -> String)? = null
 ) : SagePersonalResponder {
     private var awaitingPhrase = false
 
@@ -34,6 +37,7 @@ class VoiceRepairResponder(
     }
 
     private fun requestPhraseReply(): String {
+        requestPanel?.let { return it() }
         if (liveActive()) return "A voice test is already running. Say “cancel voice repair” to stop it first."
         awaitingPhrase = true
         return "I'm going to test my microphone before changing anything. Type one short phrase " +
@@ -66,6 +70,7 @@ class VoiceRepairResponder(
     }
 
     private fun cancelReply(): String {
+        cancelPanel?.let { return it() }
         if (awaitingPhrase) {
             awaitingPhrase = false
             return "Cancelled. No voice test was started and nothing changed."
@@ -116,6 +121,9 @@ class VoiceRepairResponder(
 
     private fun liveActive(): Boolean = manager.current()?.state?.let { it in ACTIVE_STATES } == true
 
+
+
+    companion object {
     private fun normalize(value: String): String {
         var text = value.lowercase(Locale.ROOT).trim()
             .replace(Regex("[.!?,;]+"), " ")
@@ -127,8 +135,8 @@ class VoiceRepairResponder(
         }
         return text.removeSuffix(" please").trim()
     }
+        fun isCancellation(rawText: String): Boolean = normalize(rawText) in CANCEL_COMMANDS
 
-    companion object {
         const val MAX_PHRASE = 200
         val DIAGNOSE_COMMANDS = setOf("diagnose my voice", "diagnose voice", "check my voice", "check your hearing", "diagnose your hearing")
         val FIX_COMMANDS = setOf("fix my hearing", "fix your hearing", "repair your hearing", "fix my voice", "repair my voice", "fix your voice", "repair your voice")

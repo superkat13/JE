@@ -3,6 +3,12 @@ package com.pineapple.sageos2.core
 sealed interface SageEvent {
     data object Start : SageEvent
     data object Stop : SageEvent
+    /** Internal handoff: retire the old wake generation before taking the diagnostic mic. */
+    data object BeginDiagnosticWindow : SageEvent
+    /** Internal handoff: issue a fresh wake generation after releasing diagnostic ownership. */
+    data object EndDiagnosticWindow : SageEvent
+    /** Resume previously accepted typed requests only after the diagnostic gate closes. */
+    data object ResumeQueuedText : SageEvent
     data object PushToTalkRequested : SageEvent
     data class WakeDetected(
         val recognizerGeneration: Long,
@@ -31,6 +37,10 @@ sealed interface SageEvent {
     data class ResponseReady(val turnId: Long, val text: String, val allowFollowUp: Boolean = true) : SageEvent
     data class BrainFailed(val turnId: Long, val reason: String) : SageEvent
     data class SpeechFinished(val turnId: Long) : SageEvent
-    data class EchoGuardElapsed(val turnId: Long) : SageEvent
+    /** Internal flag allows a diagnostic request's spoken reply to finish without opening follow-up ASR. */
+    data class EchoGuardElapsed(
+        val turnId: Long,
+        val suppressFollowUpForDiagnostic: Boolean = false
+    ) : SageEvent
     data class FollowUpExpired(val turnId: Long) : SageEvent
 }

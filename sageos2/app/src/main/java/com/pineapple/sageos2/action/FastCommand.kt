@@ -1,5 +1,7 @@
 package com.pineapple.sageos2.action
 
+import java.util.Locale
+
 sealed interface FastCommand {
     data class OpenApp(val appName: String) : FastCommand
     data object Back : FastCommand
@@ -44,11 +46,13 @@ class FastCommandParser {
      * still holds. An unrecognised phrase returns null exactly as before.
      */
     fun parse(raw: String): FastCommand? =
-        parseCanonical(raw) ?: parseCanonical(stripPoliteness(raw))
+        // Greedy app/control payloads must not accept a trailing "please" before the outer
+        // phrase has been cleaned. Fall back to the original for a control/app named "Please".
+        parseCanonical(stripPoliteness(raw)) ?: parseCanonical(raw)
 
-    /** The original matcher, unchanged, so a tolerant outer layer cannot alter what it accepts. */
+    /** Exact command grammar, applied after the outer phrasing is cleaned. */
     private fun parseCanonical(raw: String): FastCommand? {
-        val value = raw.lowercase().replace(Regex("\\s+"), " ").trim()
+        val value = cleanPhrase(raw)
         if (value.startsWith("open ")) return app(value.removePrefix("open "))
         if (value.startsWith("launch ")) return app(value.removePrefix("launch "))
         if (value == "go back" || value == "back" || value == "press back") return FastCommand.Back
@@ -123,6 +127,9 @@ class FastCommandParser {
      */
     private fun app(name: String): FastCommand? {
         var value = name.trim()
+        // Opening one app does not fulfill a second action. Leave the complete goal to the
+        // reasoning route instead of resolving just the app-name prefix and claiming success.
+        if (COMPOUND_APP_ACTION.containsMatchIn(value)) return null
         for (determiner in listOf("the ", "a ", "an ", "my ")) {
             if (value.length > determiner.length && value.startsWith(determiner)) {
                 value = value.removePrefix(determiner).trim()
@@ -151,20 +158,31 @@ class FastCommandParser {
         /** Trailing fillers, matched the same way. */
         val TRAILING_FILLER = listOf("please", "for me", "thanks", "thank you", "now", "okay", "ok")
 
+        val COMPOUND_APP_ACTION = Regex(
+            "(?:\\b(?:and(?:\\s+then)?|then|but)\\s+|[,;]\\s*(?:then\\s+)?)" +
+                "(?:(?:please|can you|could you|do not|don't)\\s+)?" +
+                "(?:open|launch|search|find|play|pause|tap|click|type|send|share|copy|edit|" +
+                "delete|move|rename|install|uninstall|set|turn|change|check|run|read|show|tell|explain)\\b"
+        )
+
+        private fun cleanPhrase(raw: String): String = raw.lowercase(Locale.ROOT)
+            .replace(Regex("\\s+"), " ").trim().trimEnd('.', '!', '?', ',', ';', ':').trimEnd()
+
         private fun stripPoliteness(raw: String): String {
-            var value = raw.lowercase().replace(Regex("[^a-z0-9.\\s]"), " ").replace(Regex("\\s+"), " ").trim()
+            var value = cleanPhrase(raw)
             var changed = true
             while (changed) {
                 changed = false
                 for (filler in LEADING_FILLER) {
-                    if (value.length > filler.length && value.startsWith("$filler ")) {
-                        value = value.removePrefix(filler).trim()
+                    val prefix = Regex("^${Regex.escape(filler)}[,:;]?\\s+").find(value)
+                    if (prefix != null && prefix.value.length < value.length) {
+                        value = value.substring(prefix.value.length).trim()
                         changed = true
                     }
                 }
                 for (filler in TRAILING_FILLER) {
                     if (value.length > filler.length && value.endsWith(" $filler")) {
-                        value = value.removeSuffix(filler).trim()
+                        value = cleanPhrase(value.removeSuffix(filler))
                         changed = true
                     }
                 }

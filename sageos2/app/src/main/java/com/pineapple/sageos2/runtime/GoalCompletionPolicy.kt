@@ -1,5 +1,8 @@
 package com.pineapple.sageos2.runtime
 
+import com.pineapple.sageos2.brain.BrainToolContextRenderer
+import com.pineapple.sageos2.brain.BrainToolExecutionEvidence
+
 /**
  * Policy for the gap between "a tool returned" and "the owner's goal is actually done".
  *
@@ -20,7 +23,8 @@ object GoalCompletionPolicy {
     fun verificationPrompt(
         ownerGoal: String,
         completedToolCalls: Int,
-        verificationRound: Int
+        verificationRound: Int,
+        executionEvidence: List<BrainToolExecutionEvidence> = emptyList()
     ): String {
         require(completedToolCalls > 0)
         require(verificationRound > 0)
@@ -28,17 +32,18 @@ object GoalCompletionPolicy {
             .replace("\u0000", "")
             .replace("</SAGE_GOAL_VERIFY>", "[goal-verify-end]")
             .trim()
-            .take(4_000)
         return buildString {
             appendLine(VERIFY_MARKER)
             appendLine("owner_goal=$goal")
             appendLine("completed_tool_calls=$completedToolCalls")
             appendLine("verification_round=$verificationRound")
+            appendLine(BrainToolContextRenderer.renderEvidence(executionEvidence))
             appendLine("</SAGE_GOAL_VERIFY>")
             appendLine("Continue the same owner goal. Do not declare success merely because an action ran.")
             appendLine("Verify the requested result using direct available evidence when possible.")
             appendLine("If another listed tool is needed to verify or correct the result, emit exactly one SAGE_TOOL block.")
-            appendLine("Do not repeat an action that already succeeded unless verification itself requires it.")
+            appendLine("Compare every part of the original goal with the observed results. A tool's success is not proof of the whole goal.")
+            appendLine("Do not repeat successful mutations to verify them; use read-only evidence. Missing or omitted results are unknown.")
             appendLine("If the goal is verified, reply with $VERIFIED_MARKER on the first line and the owner-facing finished result after it.")
             append("If the goal cannot be verified with available evidence, reply with $UNVERIFIED_MARKER on the first line and exactly what remains unknown after it.")
         }.trim()

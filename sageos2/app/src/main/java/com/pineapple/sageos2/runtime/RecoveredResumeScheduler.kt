@@ -1,6 +1,6 @@
 package com.pineapple.sageos2.runtime
 
-/** Bounded readiness polling only. Task eligibility and replay policy remain with the caller. */
+/** Bounded readiness polling. An owner diagnostic pauses, not consumes, the remaining budget. */
 class RecoveredResumeScheduler(
     private val scheduler: RuntimeScheduler,
     private val isStarted: () -> Boolean,
@@ -18,11 +18,33 @@ class RecoveredResumeScheduler(
 
     private var generation = 0L
     private var pending: ScheduledHandle? = null
+    private var paused = false
+    private var remainingChecks = 0
+    private var pendingAttempt: (() -> Unit)? = null
 
     fun schedule(attempt: () -> Unit) = synchronized(synchronizationLock) {
         cancelLocked()
-        val token = generation
-        if (isStarted()) scheduleCheck(token, maxChecks, attempt)
+        pendingAttempt = attempt
+        remainingChecks = maxChecks
+        if (isStarted() && !paused) scheduleCheck(generation)
+    }
+
+    /** Invalidates a scheduled poll without consuming the owner's recovery opportunity. */
+    fun pause() = synchronized(synchronizationLock) {
+        if (!paused) {
+            paused = true
+            generation++
+            pending?.cancel()
+            pending = null
+        }
+    }
+
+    /** Re-arm the remaining budget after the hearing-test gate is fully closed. */
+    fun resume() = synchronized(synchronizationLock) {
+        if (paused) {
+            paused = false
+            if (isStarted() && pendingAttempt != null) scheduleCheck(generation)
+        }
     }
 
     fun cancel() = synchronized(synchronizationLock) { cancelLocked() }
@@ -31,23 +53,37 @@ class RecoveredResumeScheduler(
         generation++
         pending?.cancel()
         pending = null
+        pendingAttempt = null
+        remainingChecks = 0
     }
 
-    private fun scheduleCheck(token: Long, remainingChecks: Int, attempt: () -> Unit) {
+    private fun scheduleCheck(token: Long) {
         pending = scheduler.schedule(delayMs) {
             synchronized(synchronizationLock) {
                 if (token != generation) return@synchronized
                 pending = null
-                // Consume each callback, including busy polls, before scheduling or invoking code.
                 generation++
-                if (!isStarted()) {
-                    return@synchronized
-                } else if (isIdle()) {
-                    attempt()
-                } else if (remainingChecks > 1) {
-                    scheduleCheck(generation, remainingChecks - 1, attempt)
-                } else {
-                    onExhausted()
+                when {
+                    !isStarted() -> {
+                        pendingAttempt = null
+                        remainingChecks = 0
+                    }
+                    paused -> Unit // Never spend the budget on a diagnostic-gated poll.
+                    isIdle() -> {
+                        val attempt = pendingAttempt
+                        pendingAttempt = null // Exactly once, even with duplicate callback delivery.
+                        remainingChecks = 0
+                        attempt?.invoke()
+                    }
+                    remainingChecks > 1 -> {
+                        remainingChecks--
+                        scheduleCheck(generation)
+                    }
+                    else -> {
+                        pendingAttempt = null
+                        remainingChecks = 0
+                        onExhausted()
+                    }
                 }
             }
         }

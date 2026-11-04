@@ -81,6 +81,7 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
         task.state == TaskState.WAITING &&
             task.metadata["kind"] == RUNTIME_TURN_KIND &&
             task.metadata["recovered"] == "true" &&
+            task.metadata["phase"] != CONTEXT_LIMIT_PHASE &&
             !task.metadata["ownerPrompt"].isNullOrBlank() &&
             task.metadata["autoResumeAttempted"] != "true" &&
             (task.metadata["recoveryDepth"]?.toIntOrNull() ?: 0) < MAX_AUTO_RESUME_DEPTH
@@ -88,6 +89,7 @@ class TaskRecoveryManager(private val store: TaskContinuityStore) {
     companion object {
         const val RUNTIME_TURN_KIND = "runtime_turn"
         const val MAX_AUTO_RESUME_DEPTH = 3
+        const val CONTEXT_LIMIT_PHASE = "context_limit"
     }
 }
 

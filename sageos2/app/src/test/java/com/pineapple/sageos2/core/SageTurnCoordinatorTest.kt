@@ -1,12 +1,59 @@
 package com.pineapple.sageos2.core
 
 import com.pineapple.sageos2.speech.CommandSpeechTurnState
+import com.pineapple.sageos2.personal.SagePersonalResponder
+import com.pineapple.sageos2.personal.SagePersonalResolution
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SageTurnCoordinatorTest {
+    @Test fun emptyQueueDoesNotRestartWakeWhenDiagnosticCloses() {
+        val coordinator = SageTurnCoordinator()
+        coordinator.handle(SageEvent.Start)
+        val wakeGeneration = coordinator.snapshot().recognizerGeneration
+        assertTrue(coordinator.handle(SageEvent.ResumeQueuedText).isEmpty())
+        assertEquals(wakeGeneration, coordinator.snapshot().recognizerGeneration)
+        assertEquals(SageListeningMode.WAKE_ONLY, coordinator.snapshot().listeningMode)
+    }
+
+    @Test fun queuedHearingRequestPausesRemainingCommandsUntilDiagnosticCloses() {
+        var diagnosticOpen = false
+        val personal = object : SagePersonalResponder {
+            override fun resolve(rawText: String): SagePersonalResolution? {
+                if (rawText != "fix my hearing") return null
+                diagnosticOpen = true
+                return SagePersonalResolution.Reply("Type your expected phrase in the hearing panel.")
+            }
+        }
+        val c = SageTurnCoordinator(
+            router = SageCommandRouter(personal = personal),
+            diagnosticAdmissionPending = { diagnosticOpen }
+        )
+        c.handle(SageEvent.Start)
+        c.handle(SageEvent.TextSubmitted("first slow request"))
+        val firstTurn = c.snapshot().activeTurnId
+        c.handle(SageEvent.TextSubmitted("fix my hearing"))
+        c.handle(SageEvent.TextSubmitted("open firefox"))
+        val finished = c.handle(SageEvent.ResponseReady(firstTurn, "first answer"))
+
+        assertTrue(diagnosticOpen)
+        assertFalse("queued fast command must not escape a newly opened repair gate",
+            finished.any { it is SageEffect.ExecuteFast || it is SageEffect.QueryDeepBrain })
+        assertEquals("leave next input queued for later", 1, c.snapshot().queuedTextCount)
+        assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+        assertEquals(SageListeningMode.OFF, c.snapshot().listeningMode)
+        assertTrue("cannot resume while the diagnostic owns input",
+            c.handle(SageEvent.ResumeQueuedText).isEmpty())
+
+        diagnosticOpen = false
+        val resumed = c.handle(SageEvent.ResumeQueuedText)
+        assertEquals(0, c.snapshot().queuedTextCount)
+        assertTrue("queued command executes only after diagnostic gate closes",
+            resumed.any { it is SageEffect.ExecuteFast && it.command == "open firefox" })
+    }
+
     @Test fun captureProvenanceSeparatesManualTalkWakeAndFollowUp() {
         val manual = SageTurnCoordinator()
         manual.handle(SageEvent.Start)
@@ -34,6 +81,21 @@ class SageTurnCoordinatorTest {
             .filterIsInstance<SageEffect.SetListeningMode>().single()
         assertEquals(SageListeningMode.FOLLOW_UP, follow.mode)
         assertFalse("a follow-up is not a wake-phrase handoff", follow.wakeTailPresent)
+    }
+
+    @Test fun diagnosticLeaseIssuesFreshWakeGenerationAndRejectsLateWakeHit() {
+        val c = SageTurnCoordinator()
+        c.handle(SageEvent.Start)
+        val before = c.snapshot().recognizerGeneration
+        val off = c.handle(SageEvent.BeginDiagnosticWindow).filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.OFF, off.mode)
+        assertTrue(off.generation > before)
+        val resumed = c.handle(SageEvent.EndDiagnosticWindow).filterIsInstance<SageEffect.SetListeningMode>().single()
+        assertEquals(SageListeningMode.WAKE_ONLY, resumed.mode)
+        assertTrue(resumed.generation > off.generation)
+        c.handle(SageEvent.WakeDetected(before, "sage", null, "Yes"))
+        assertEquals(SageRuntimeState.IDLE_WAKE, c.snapshot().state)
+        assertEquals(resumed.generation, c.snapshot().recognizerGeneration)
     }
 
     @Test fun recognizerReadyIsScopedToCurrentTurnAndGeneration() {

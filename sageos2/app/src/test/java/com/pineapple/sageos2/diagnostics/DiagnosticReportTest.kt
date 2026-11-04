@@ -11,6 +11,7 @@ class DiagnosticReportTest {
             DiagnosticReportSnapshot(
                 createdAtMs = 1234L,
                 appVersion = "2.0.0 (200)",
+                sourceRevision = "bc428f671fde96293e51e7c99d5801776082489c",
                 packageName = "com.pineapple.sagecommander.stable",
                 device = "VASOUN L10_T05",
                 android = "13 (API 33)",
@@ -45,6 +46,7 @@ class DiagnosticReportTest {
         )
 
         assertTrue(report.contains("SageOS 2 diagnostic report"))
+        assertTrue(report.contains("Source revision: bc428f671fde96293e51e7c99d5801776082489c"))
         assertTrue(report.contains("Brain: ready"))
         assertTrue(report.contains("SAGEOS_ROOT_BROKER: UNAVAILABLE"))
         assertTrue(report.contains("Command speech: ready"))

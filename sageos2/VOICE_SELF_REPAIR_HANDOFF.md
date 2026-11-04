@@ -1,5 +1,7 @@
 # OpenCode implementation handoff: one real voice-repair loop
 
+> Historical assignment. Resume from [the October 22 checkpoint](RECOVERY_CHECKPOINT_2026_10_22.md) and the current combined PR #78; the "NOT STARTED" status below describes this assignment's original starting point.
+
 ## Ownership and starting state
 Owner authorized OpenCode to carry sustained implementation; Codex owns diagnosis, review and release integration. This branch begins at release/sage-219 1498d57a3896be072e0d4ae360be7c76a5935512 (PR #64). Build 219 is installed. Preserve unrelated work. Implement here or on a child branch; draft PR targets release/sage-219. Do not merge sageos-2 or publish another numbered APK; Codex coordinates release after review.
 

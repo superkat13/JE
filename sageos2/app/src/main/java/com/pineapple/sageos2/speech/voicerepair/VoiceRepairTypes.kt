@@ -84,7 +84,10 @@ data class VoiceRepairExport(
     val repairApplied: Boolean,
     val verified: Boolean,
     val steps: List<VoiceRepairStep>,
-    val notes: String
+    val notes: String,
+    /** Exact evidence from the explicit phrase test; never included in ordinary diagnostics. */
+    val firstTest: VoiceRepairTestResult? = null,
+    val secondTest: VoiceRepairTestResult? = null
 ) {
     companion object {
         /** Terminal-session metadata for the explicit developer export. */
@@ -106,7 +109,9 @@ data class VoiceRepairExport(
                 "Initial phrase matched; no repair was needed or performed."
             } else {
                 "Explicit diagnostic test only."
-            }
+            },
+            firstTest = session.firstTest,
+            secondTest = session.secondTest
         )
     }
 }

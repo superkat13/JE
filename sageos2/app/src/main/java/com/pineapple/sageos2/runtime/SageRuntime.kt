@@ -56,7 +56,9 @@ class SageRuntime(
     private val brainResponseTimeoutMs: Long = 120_000L,
     private val brainLoadTimeoutMs: Long = 30_000L,
     private val brainFirstTokenTimeoutMs: Long = 60_000L,
-    private val brainStallTimeoutMs: Long = 30_000L
+    private val brainStallTimeoutMs: Long = 30_000L,
+    /** Also gates wake/transcript callbacks before a physical diagnostic lease is acquired. */
+    private val diagnosticAdmissionPending: () -> Boolean = { false }
 ) {
     init {
         require(echoGuardMs >= 0L)
@@ -93,6 +95,9 @@ class SageRuntime(
     private val verificationTargetToolCountByTurn = mutableMapOf<Long, Int>()
     private val verificationRoundsByTurn = mutableMapOf<Long, Int>()
     private val ownerGoalByTurn = mutableMapOf<Long, String>()
+    // Brain calls are stateless: current-turn history is deliberately excluded below. Keep
+    // actual ordered outcomes here, independently of optional/budget-clipped task history.
+    private val executionEvidenceByTurn = mutableMapOf<Long, MutableList<BrainToolExecutionEvidence>>()
     private val recoveryReplayGuardByTurn = mutableMapOf<Long, MutableList<RecoveryCompletionPolicy.ReplayGuard>>()
     private val recoveryReplayBlocksByTurn = mutableMapOf<Long, Int>()
     private val startupByTurn = mutableMapOf<Long, OwnerAppStartupSession>()
@@ -114,6 +119,67 @@ class SageRuntime(
         speech.shutdown()
     }
 
+    private var diagnosticReserved = false
+
+    /** Reserve the idle runtime before the adapter claims the physical microphone.
+     * A previously queued Core resume stays pending during owner diagnostics and runs
+     * when the diagnostic closes. Blocking the lease on that pending task would
+     * deadlock: the gate cannot open the mic and the task cannot pass the gate.
+     */
+    @Synchronized fun reserveDiagnosticWindow(): Boolean {
+        if (diagnosticReserved || coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return false
+        diagnosticReserved = true
+        process(coordinator.handle(SageEvent.BeginDiagnosticWindow))
+        observer.onStateChanged(coordinator.snapshot())
+        return true
+    }
+
+    @Synchronized fun releaseDiagnosticWindow() {
+        diagnosticReserved = false
+        // Also refreshes wake if a pending test was cancelled before acquiring its
+        // physical microphone lease. Never reuse callbacks from an old generation.
+        if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+            process(coordinator.handle(SageEvent.EndDiagnosticWindow))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        }
+    }
+
+    // The hearing workflow can close synchronously inside personal.resolve(), which runs
+    // *inside* coordinator.handle(). Never re-enter the coordinator before that dispatch
+    // and its effects have completed, or the active turn and queued order can be corrupted.
+    private var coordinatorDispatchDepth = 0
+    private var diagnosticClosurePending = false
+
+    /** A closure notification is an edge; queue processing waits until routing unwinds. */
+    @Synchronized fun onDiagnosticWorkflowClosed() {
+        if (diagnosticReserved || diagnosticAdmissionPending()) return
+        diagnosticClosurePending = true
+        flushDiagnosticClosure()
+    }
+
+    /** Also wait for a spoken cancellation reply to finish and return to idle. */
+    private fun flushDiagnosticClosure() {
+        if (!diagnosticClosurePending || coordinatorDispatchDepth != 0 ||
+            diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        diagnosticClosurePending = false
+        coordinatorDispatchDepth++
+        try {
+            // A saved Core continuation selected before hearing was requested must
+            // resume before later queued text, after the diagnostic mic is released.
+            drainOwnerResume()
+            if (coordinator.snapshot().state == SageRuntimeState.IDLE_WAKE) {
+                process(coordinator.handle(SageEvent.ResumeQueuedText))
+                observer.onStateChanged(coordinator.snapshot())
+                drainOwnerResume()
+            }
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0 && diagnosticClosurePending) flushDiagnosticClosure()
+        }
+    }
+
     private var pendingOwnerResumeId: String? = null
 
     /** Called by local routing: queue only, never re-enter the coordinator during route(). */
@@ -121,6 +187,9 @@ class SageRuntime(
         if (pendingOwnerResumeId != null) return "another saved task is already queued."
         val current = taskContinuity?.get(task.taskId) ?: return "the saved task is missing."
         if (current.state !in setOf(TaskState.ACTIVE, TaskState.WAITING)) return "that task is already settled."
+        if (current.metadata["phase"] == TaskRecoveryManager.CONTEXT_LIMIT_PHASE) {
+            return "that request exceeded the local context limit. Give me a smaller fresh request; I won't retry a shortened saved goal."
+        }
         if (current.metadata["ownerPrompt"].isNullOrBlank()) return "its original request is missing."
         if (current.metadata["lastActionSuccess"] == "unknown") return "the previous action's outcome is unknown."
         val health = brain.health()
@@ -130,7 +199,8 @@ class SageRuntime(
     }
 
     private fun drainOwnerResume() {
-        if (coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
+        if (diagnosticReserved || diagnosticAdmissionPending() ||
+            coordinator.snapshot().state != SageRuntimeState.IDLE_WAKE) return
         val id = pendingOwnerResumeId ?: return
         pendingOwnerResumeId = null
         val current = taskContinuity?.get(id) ?: return
@@ -140,6 +210,13 @@ class SageRuntime(
     }
 
     fun resumeRecoveredTask(task: TaskCheckpoint) {
+        // A context-limited request may exceed the checkpoint's bounded prompt field. Neither a
+        // restart nor a stale resume selection may turn that shortened copy into a new goal.
+        if (task.metadata["phase"] == TaskRecoveryManager.CONTEXT_LIMIT_PHASE ||
+            taskContinuity?.get(task.taskId)?.metadata?.get("phase") == TaskRecoveryManager.CONTEXT_LIMIT_PHASE) {
+            observer.onDiagnostic("recovery skipped: context-limited request needs a smaller fresh request")
+            return
+        }
         val metadata = task.metadata
         val ownerPrompt = metadata["ownerPrompt"]?.trim().orEmpty()
         if (ownerPrompt.isBlank()) {
@@ -161,9 +238,31 @@ class SageRuntime(
         ))
     }
     @Synchronized fun submit(event: SageEvent) {
-        process(coordinator.handle(event))
-        observer.onStateChanged(coordinator.snapshot())
-        drainOwnerResume()
+        coordinatorDispatchDepth++
+        try {
+            val pending = diagnosticAdmissionPending()
+            val currentState = coordinator.snapshot().state
+            // A voice-initiated hearing request still needs to finish Sage's spoken reply.
+            // Only the matching lifecycle steps are admitted; normal wake, Talk and transcript
+            // callbacks remain blocked throughout the diagnostic workflow.
+            val finishingReply = pending && !diagnosticReserved && (
+                (event is SageEvent.SpeechFinished && currentState == SageRuntimeState.SPEAKING) ||
+                (event is SageEvent.EchoGuardElapsed && currentState == SageRuntimeState.ECHO_GUARD)
+            )
+            if ((diagnosticReserved || pending) && event != SageEvent.Stop && !finishingReply) {
+                if (event is SageEvent.TextSubmitted) observer.onTypedInputRejected(
+                    "Finish or cancel the hearing test first.")
+                return
+            }
+            val routed = if (finishingReply && event is SageEvent.EchoGuardElapsed)
+                event.copy(suppressFollowUpForDiagnostic = true) else event
+            process(coordinator.handle(routed))
+            observer.onStateChanged(coordinator.snapshot())
+            drainOwnerResume()
+        } finally {
+            coordinatorDispatchDepth--
+            if (coordinatorDispatchDepth == 0) flushDiagnosticClosure()
+        }
     }
     fun snapshot() = coordinator.snapshot()
 
@@ -322,10 +421,21 @@ class SageRuntime(
         } else {
             fullContext
         } } catch (error: IllegalArgumentException) {
-            if (startup == null) throw error
+            if (startup == null) {
+                checkpointTurn(turnId, TaskState.WAITING,
+                    "The original request, tool contract and results exceed the local context limit.",
+                    "Split the request into smaller steps; verify existing outcomes before further actions.",
+                    mapOf("phase" to TaskRecoveryManager.CONTEXT_LIMIT_PHASE, "verified" to "false"))
+                clearGoalRuntimeState(turnId)
+                observer.onDiagnostic("brain request declined: required context exceeds local limit; turn=$turnId")
+                submit(SageEvent.ResponseReady(turnId,
+                    "This request and its results are too long for the local Brain. I stopped without repeating actions. Please split the request into smaller steps.", false))
+                return
+            }
             failStartup(turnId, "The saved app startup is too long for this local turn. Shorten its steps in Owner Apps before trying again. No further action was run.")
             return
         }
+        observer.onDiagnostic("brain request characters: prompt=${prompt.length} context=${context.length} combined=${prompt.length + context.length}")
         clearBrainTimeouts()
         brainTimeoutHandle = scheduler.schedule(brainResponseTimeoutMs) { onBrainTimeout(turnId, attempt = attempt) }
         val startedJob = brain.start(BrainRequest(
@@ -457,7 +567,8 @@ class SageRuntime(
                     )
                     startBrain(
                         response.turnId,
-                        GoalCompletionPolicy.verificationPrompt(ownerGoal, toolCount, nextRound)
+                        GoalCompletionPolicy.verificationPrompt(ownerGoal, toolCount, nextRound,
+                            executionEvidenceByTurn[response.turnId].orEmpty())
                     )
                     return
                 }
@@ -601,7 +712,7 @@ class SageRuntime(
                 blockedAction = action,
                 completedToolCalls = toolCount,
                 verificationRound = nextRound
-            )
+            ) + "\n" + BrainToolContextRenderer.renderEvidence(executionEvidenceByTurn[turnId].orEmpty())
         )
         return true
     }
@@ -642,6 +753,8 @@ class SageRuntime(
         capabilityTimeoutHandle = null
         capabilityJob = null
         observer.onDiagnostic("capability result: turn=$turnId action=${action.name} success=${result.success}")
+        val evidence = executionEvidenceByTurn.getOrPut(turnId) { mutableListOf() }
+        evidence.add(BrainToolContextRenderer.captureResult(toolCallsByTurn[turnId] ?: 1, action, result))
         // Tool success reports only this call's result. It cannot authorize an interrupted mutation.
         startupByTurn[turnId]?.let { startup ->
             if (!result.success) {
@@ -663,7 +776,7 @@ class SageRuntime(
                 "toolCount" to (toolCallsByTurn[turnId] ?: 0).toString()
             )
         )
-        startBrain(turnId, BrainToolContextRenderer.renderResult(action, result))
+        startBrain(turnId, BrainToolContextRenderer.renderContinuation(ownerGoalByTurn[turnId].orEmpty(), evidence))
     }
 
     private fun retireCapabilityAttempt() {
@@ -794,6 +907,7 @@ class SageRuntime(
         verificationTargetToolCountByTurn.remove(turnId)
         verificationRoundsByTurn.remove(turnId)
         ownerGoalByTurn.remove(turnId)
+        executionEvidenceByTurn.remove(turnId)
         recoveryReplayGuardByTurn.remove(turnId)
         recoveryReplayBlocksByTurn.remove(turnId)
     }

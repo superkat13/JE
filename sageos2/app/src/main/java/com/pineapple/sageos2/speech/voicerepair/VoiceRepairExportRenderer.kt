@@ -12,6 +12,8 @@ object VoiceRepairExportRenderer {
         appendLine("Expected: ${export.expected}")
         appendLine("Recognized before: ${export.recognizedBefore ?: "none"}")
         appendLine("Recognized after: ${export.recognizedAfter ?: "none"}")
+        export.firstTest?.let { appendCaptureEvidence("First test", it) }
+        export.secondTest?.let { appendCaptureEvidence("Retest", it) }
         appendLine("Repair action: ${export.repairAction}")
         appendLine("Repair applied: ${export.repairApplied}")
         appendLine("Verified: ${export.verified}")
@@ -22,5 +24,11 @@ object VoiceRepairExportRenderer {
         if (export.notes.isNotBlank()) {
             appendLine("Notes: ${export.notes}")
         }
+    }
+
+    private fun StringBuilder.appendCaptureEvidence(label: String, result: VoiceRepairTestResult) {
+        appendLine("$label backend: ${result.backend}")
+        appendLine("$label recognizer error: ${result.errorCode ?: "none"}")
+        appendLine("$label elapsed ms: ${result.elapsedMs}")
     }
 }

@@ -97,4 +97,21 @@ class FastCommandParserTest {
         assertEquals(FastCommand.OpenApp("app"), parser.parse("open app"))
         assertEquals(FastCommand.OpenApp("map"), parser.parse("open the map"))
     }
+
+    @Test fun trailingPolitenessIsNotPartOfTheAppOrControlName() {
+        assertEquals(FastCommand.OpenApp("youtube"), parser.parse("open YouTube please"))
+        assertEquals(FastCommand.TapLabel("continue"), parser.parse("tap Continue please"))
+        assertEquals(FastCommand.OpenApp("youtube"), parser.parse("open YouTube, please."))
+    }
+
+    @Test fun politeCoordinateAndAlarmCommandsPreserveTheirPayloadPunctuation() {
+        assertEquals(FastCommand.Tap(100.5f, 200.5f), parser.parse("please tap 100.5, 200.5"))
+        assertEquals(FastCommand.SetAlarm(19, 30), parser.parse("please set alarm for 7:30 pm"))
+    }
+
+    @Test fun compoundAppGoalsCannotPretendToBeASingleOpenAction() {
+        assertNull(parser.parse("open YouTube and search for cats"))
+        assertNull(parser.parse("open YouTube, then play my saved playlist"))
+        assertEquals(FastCommand.OpenApp("plants and zombies"), parser.parse("open Plants and Zombies"))
+    }
 }
