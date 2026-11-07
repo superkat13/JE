@@ -120,6 +120,26 @@ int main(int argc, char** argv) {
     check(cancelled.empty() && g_last_error.find("cancel") != std::string::npos, "cancellation failed");
     check(g_cached_prompt.empty(), "cancelled state reused");
     check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0, "recovery changed reply");
+    // Cancellation between two native segments must not be discarded just
+    // because g_active_request_id has returned to zero.
+    const auto before_handoff_cancel = generate(system, user);
+    check(!before_handoff_cancel.empty() && g_last_finish_reason == FINISH_TOKEN_LIMIT,
+          "fixture did not expose a continuation handoff for cancellation");
+    check(g_active_request_id == 0 && g_continuation_available.load(),
+          "fixture was not between native continuation segments");
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, id);
+    check(g_cancel_requested.load(), "cancellation was lost between segments");
+    std::unique_ptr<std::string> cancelled_continuation(
+        Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+            &env, nullptr, id, 4, JNI_TRUE
+        )
+    );
+    check(cancelled_continuation->empty(), "cancelled continuation emitted text");
+    check(g_last_finish_reason == FINISH_CANCELLED, "cancelled continuation did not report cancellation");
+    check(g_cached_prompt.empty() && !g_continuation_available.load(),
+          "cancelled continuation retained reusable state");
+    check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0,
+          "post-handoff cancellation contaminated the next owner turn");
     Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(&env,nullptr);
     check(g_cached_prompt.empty(), "unload retained prompt cache");
     std::cout << "PASS: real native generation, 48-token budget, exact saved-token KV continuation, cache equivalence, context change, chunking, failure, cancellation, unload\n";
