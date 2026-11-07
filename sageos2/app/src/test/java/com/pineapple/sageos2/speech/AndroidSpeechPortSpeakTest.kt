@@ -152,5 +152,77 @@ class AndroidSpeechPortSpeakTest {
         assertEquals("deferred acknowledgement resumes wake exactly once", 1, wakeStarts)
     }
 
+    @Test fun changedListeningGenerationIsRestoredAfterDeferredAcknowledgement() {
+        val started = mutableListOf<Long>()
+        port = AndroidSpeechPort(
+            RuntimeEnvironment.getApplication(),
+            object : WakeWordEngine {
+                override fun configure(profiles: List<WakeProfile>) = Unit
+                override fun start(generation: Long, onWake: (WakeHit) -> Unit) {
+                    started += generation
+                }
+                override fun stop() = Unit
+                override fun health() = WakeWordHealth(false, "test", "test")
+            },
+            object : WakeProfileProvider {
+                override fun profiles(): List<WakeProfile> = emptyList()
+            }
+        )
+        idle()
+        port!!.onInit(TextToSpeech.SUCCESS)
+        idle()
+
+        val busy = AndroidSpeechPort::class.java.getDeclaredField("speechActive").apply {
+            isAccessible = true
+        }
+        busy.setBoolean(port!!, true)
+        port!!.setListening(SageListeningMode.WAKE_ONLY, 11L, 0L)
+        port!!.speakTransient("Acknowledged.")
+        port!!.setListening(SageListeningMode.WAKE_ONLY, 12L, 0L)
+        idle()
+        assertTrue(started.isEmpty())
+
+        busy.setBoolean(port!!, false)
+        AndroidSpeechPort::class.java.getDeclaredMethod("drainDeferredSpeech").apply {
+            isAccessible = true
+        }.invoke(port!!)
+        idle()
+        assertEquals(listOf(12L), started)
+    }
+
+    @Test fun failedTtsInitializationReleasesEveryPendingNormalTurn() {
+        port = AndroidSpeechPort(
+            RuntimeEnvironment.getApplication(),
+            object : WakeWordEngine {
+                override fun configure(profiles: List<WakeProfile>) = Unit
+                override fun start(generation: Long, onWake: (WakeHit) -> Unit) = Unit
+                override fun stop() = Unit
+                override fun health() = WakeWordHealth(false, "test", "test")
+            },
+            object : WakeProfileProvider {
+                override fun profiles(): List<WakeProfile> = emptyList()
+            }
+        )
+        idle()
+        AndroidSpeechPort::class.java.getDeclaredField("ttsReady").apply {
+            isAccessible = true
+        }.setBoolean(port!!, false)
+        var first = 0
+        var second = 0
+        port!!.speak(10L, "First.") { first++ }
+        port!!.speak(11L, "Second.") { second++ }
+        idle()
+        assertEquals(0, first)
+        assertEquals(0, second)
+        port!!.onInit(TextToSpeech.ERROR)
+        idle()
+        assertEquals(1, first)
+        assertEquals(1, second)
+        val deferred = AndroidSpeechPort::class.java.getDeclaredField("deferredSpeech").apply {
+            isAccessible = true
+        }.get(port!!) as java.util.ArrayDeque<*>
+        assertTrue("failed TTS init cannot strand unplayed turns", deferred.isEmpty())
+    }
+
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 }
