@@ -36,6 +36,9 @@ std::atomic<int> g_last_finish_reason{0};
 std::atomic<long long> g_last_request_id{0};
 std::atomic<bool> g_continuation_available{false};
 std::atomic<int> g_continuation_token{0};
+// Incomplete UTF-8 codepoint bytes from a token-limited segment. Never send
+// these to Java String(byte[], UTF-8) until their continuation bytes arrive.
+std::string g_pending_utf8_bytes;
 bool g_backend_initialized = false;
 
 enum FinishReason {
@@ -93,9 +96,46 @@ void set_error(const std::string & message) {
     LOGE("%s", message.c_str());
 }
 
+// A sampled token can end in the middle of a UTF-8 character, and Java's
+// UTF-8 decoder cannot preserve that byte prefix across separate JNI strings.
+// Return only full codepoints; carry the final 1-3 bytes to the next segment.
+bool split_complete_utf8(const std::string & value, std::string & complete,
+                         std::string & pending) {
+    size_t i = 0U;
+    while (i < value.size()) {
+        const unsigned char first = static_cast<unsigned char>(value[i]);
+        int width = 0;
+        if (first < 0x80) width = 1;
+        else if (first >= 0xC2 && first <= 0xDF) width = 2;
+        else if (first >= 0xE0 && first <= 0xEF) width = 3;
+        else if (first >= 0xF0 && first <= 0xF4) width = 4;
+        else return false;
+        const size_t inspect = std::min<size_t>(static_cast<size_t>(width), value.size() - i);
+        for (size_t j = 1; j < inspect; ++j) {
+            const unsigned char next = static_cast<unsigned char>(value[i + j]);
+            if ((next & 0xC0U) != 0x80U) return false;
+            if (j == 1 && (
+                    (first == 0xE0 && next < 0xA0) ||
+                    (first == 0xED && next >= 0xA0) ||
+                    (first == 0xF0 && next < 0x90) ||
+                    (first == 0xF4 && next >= 0x90))) return false;
+        }
+        if (inspect < static_cast<size_t>(width)) {
+            complete = value.substr(0, i);
+            pending = value.substr(i);
+            return true;
+        }
+        i += static_cast<size_t>(width);
+    }
+    complete = value;
+    pending.clear();
+    return true;
+}
+
 void invalidate_continuation_locked() {
     g_continuation_available.store(false, std::memory_order_release);
     g_continuation_token.store(0, std::memory_order_release);
+    g_pending_utf8_bytes.clear();
 }
 
 void release_model_locked() {
@@ -622,6 +662,14 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         set_error("The local model generated no text");
         return to_java_string(env, "");
     }
+    std::string visible_output;
+    std::string utf8_tail;
+    if (!split_complete_utf8(output, visible_output, utf8_tail) ||
+            (!utf8_tail.empty() && (eog_reached || output_limit_reached))) {
+        g_last_finish_reason.store(FINISH_DECODE_ERROR, std::memory_order_release);
+        set_error("Brain returned invalid or incomplete terminal UTF-8");
+        return to_java_string(env, "");
+    }
     g_cached_prompt = prompt_tokens;
     request_guard.completed = true;
     g_last_error.clear();
@@ -635,10 +683,11 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     } else {
         g_last_finish_reason.store(FINISH_TOKEN_LIMIT, std::memory_order_release);
         g_continuation_token.store(static_cast<int>(token), std::memory_order_release);
+        g_pending_utf8_bytes = utf8_tail;
         g_continuation_available.store(true, std::memory_order_release);
     }
     g_active_request_id.store(0, std::memory_order_release);
-    return to_java_string(env, output);
+    return to_java_string(env, visible_output);
 }
 
 extern "C"
@@ -690,6 +739,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
     const llama_token resume_token = static_cast<llama_token>(
             g_continuation_token.load(std::memory_order_acquire)
     );
+    const std::string prior_utf8_tail = g_pending_utf8_bytes;
     // Keep cancellation associated with the logical request across the gap
     // between native segments. Publish the active id *before* invalidating
     // the continuation lease so nativeCancelGeneration always sees one.
@@ -793,6 +843,14 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
         return to_java_string(env, "");
     }
 
+    std::string visible_output;
+    std::string utf8_tail;
+    if (!split_complete_utf8(prior_utf8_tail + output, visible_output, utf8_tail) ||
+            (!utf8_tail.empty() && (eog_reached || output_limit_reached))) {
+        g_last_finish_reason.store(FINISH_DECODE_ERROR, std::memory_order_release);
+        set_error("Brain continuation returned invalid or incomplete terminal UTF-8");
+        return to_java_string(env, "");
+    }
     request_guard.completed = true;
     g_last_error.clear();
     g_last_stage.store(10, std::memory_order_release);
@@ -805,10 +863,11 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
     } else {
         g_last_finish_reason.store(FINISH_TOKEN_LIMIT, std::memory_order_release);
         g_continuation_token.store(static_cast<int>(token), std::memory_order_release);
+        g_pending_utf8_bytes = utf8_tail;
         g_continuation_available.store(true, std::memory_order_release);
     }
     g_active_request_id.store(0, std::memory_order_release);
-    return to_java_string(env, output);
+    return to_java_string(env, visible_output);
 }
 
 extern "C"
