@@ -690,11 +690,13 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
     const llama_token resume_token = static_cast<llama_token>(
             g_continuation_token.load(std::memory_order_acquire)
     );
+    // Keep cancellation associated with the logical request across the gap
+    // between native segments. Publish the active id *before* invalidating
+    // the continuation lease so nativeCancelGeneration always sees one.
+    g_active_request_id.store(active_request_id, std::memory_order_release);
     g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
     invalidate_continuation_locked();
     g_last_error.clear();
-    g_cancel_requested.store(false, std::memory_order_release);
-    g_active_request_id.store(active_request_id, std::memory_order_release);
     g_last_stage.store(8, std::memory_order_release);
     struct RequestGuard {
         bool completed = false;
@@ -707,6 +709,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
             }
         }
     } request_guard;
+    if (g_cancel_requested.load(std::memory_order_acquire)) {
+        g_last_stage.store(9, std::memory_order_release);
+        g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
+        set_error("Brain request cancelled before response continuation");
+        return to_java_string(env, "");
+    }
 
     llama_token token = resume_token;
     llama_batch batch = llama_batch_get_one(&token, 1);
@@ -864,10 +872,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeLastGeneratedTokenCount(JNIEnv *,
 extern "C"
 JNIEXPORT void JNICALL
 Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(JNIEnv *, jclass, jlong request_id) {
-    if (static_cast<long long>(request_id) <= 0
-            || g_active_request_id.load(std::memory_order_acquire)
-                    != static_cast<long long>(request_id)) return;
-    g_cancel_requested.store(true, std::memory_order_release);
+    const long long requested = static_cast<long long>(request_id);
+    if (requested <= 0) return;
+    const bool active = g_active_request_id.load(std::memory_order_acquire) == requested;
+    const bool pending = g_last_request_id.load(std::memory_order_acquire) == requested
+            && g_continuation_available.load(std::memory_order_acquire);
+    if (active || pending) g_cancel_requested.store(true, std::memory_order_release);
 }
 
 extern "C"
