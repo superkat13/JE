@@ -171,7 +171,9 @@ class AndroidSpeechPort(
         // normal turn callbacks, which must all complete exactly once.
         pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
         while (deferredSpeech.isNotEmpty()) deferredSpeech.removeFirst().onComplete()
-        resumeListening()
+        // Owner turn callbacks already drive the coordinator's next listening
+        // state (and may synchronously call setListening). An unconditional
+        // resumeListening here would start a second microphone capture.
     }
 
     /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
