@@ -129,8 +129,12 @@ class LocalNativeBrainEngineTest {
         }
         assertTrue(latch.await(2, TimeUnit.SECONDS))
         val response = result!!.getOrNull()
-        assertTrue("token-limit output without EOS must fail or be explicitly marked incomplete",
-            result!!.isFailure || response?.provenance?.limitation != null)
+        val limitation = response?.provenance?.limitation.orEmpty()
+        assertTrue("token-limit output without EOS must fail or carry a meaningful incomplete reason",
+            result!!.isFailure || (
+                limitation.isNotBlank() &&
+                    Regex("(?i)(token|budget|limit|truncat|incomplete|unfinished)").containsMatchIn(limitation)
+            ))
     }
 
     @Test fun exactSelfCheckRequiresANativeGeneratedTokenMeasurement() {
