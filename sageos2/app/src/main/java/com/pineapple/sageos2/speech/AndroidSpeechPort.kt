@@ -89,6 +89,9 @@ class AndroidSpeechPort(
             if (diagnosticOwner != null) return@onMain
             stopInput()
             localFallbackAttempted = false
+            // A listening-mode change during speech must not admit a new
+            // microphone while queued TTS still owns playback.
+            if (speechActive || pendingSpeech != null || deferredSpeech.isNotEmpty()) return@onMain
             when (mode) {
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
@@ -675,7 +678,8 @@ class AndroidSpeechPort(
     }
 
     private fun resumeListening() {
-        if (destroyed || diagnosticOwner != null || speechActive || pendingSpeech != null) return
+        if (destroyed || diagnosticOwner != null || speechActive ||
+            pendingSpeech != null || deferredSpeech.isNotEmpty()) return
         when (desiredMode) {
             SageListeningMode.WAKE_ONLY -> startWake(generation)
             SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
