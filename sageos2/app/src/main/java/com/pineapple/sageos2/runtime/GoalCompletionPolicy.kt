@@ -20,6 +20,38 @@ object GoalCompletionPolicy {
     enum class VerificationStatus { VERIFIED, UNVERIFIED }
     data class VerificationResult(val status: VerificationStatus, val ownerFacingText: String)
 
+    data class EvidenceAssessment(val independentlyVerified: Boolean, val reason: String)
+
+    // Only observation-only operations can be evidence for their own read-only result.
+    // Side-effect acknowledgement cannot establish the owner's requested postcondition.
+    // Add new operation types only alongside a typed, independently checked verifier.
+    private val observationalOperations = setOf(
+        "root.health", "forge.health", "forge.tools", "forge.job",
+        "device.screenshot", "device.read_notifications"
+    )
+
+    fun assessEvidence(ownerGoal: String, evidence: List<BrainToolExecutionEvidence>): EvidenceAssessment {
+        if (evidence.isEmpty()) return EvidenceAssessment(false, "No observed capability result is available.")
+        val failure = evidence.firstOrNull { !it.success }
+        if (failure != null) {
+            return EvidenceAssessment(false, "Capability ${failure.name} reported failure; the requested outcome is not confirmed.")
+        }
+        val unknown = evidence.firstOrNull { it.name !in observationalOperations }
+        if (unknown != null) {
+            return EvidenceAssessment(false, "Capability ${unknown.name} executed, but its requested final state was not independently observed.")
+        }
+        // A read-only response cannot prove a separate mutation requested in the
+        // owner's actual goal. The goal must itself be observational.
+        val mutationGoal = Regex(
+            "(?i)\\b(?:change|set|lower|raise|increase|decrease|reduce|install|uninstall|open|launch|" +
+                "tap|click|send|move|delete|restart|reboot|stop|start|mute|unmute|write|edit)\\b"
+        )
+        if (mutationGoal.containsMatchIn(ownerGoal)) {
+            return EvidenceAssessment(false, "The owner's requested state change has no independently observed postcondition.")
+        }
+        return EvidenceAssessment(true, "Read-only capability results were observed without reported failures.")
+    }
+
     fun verificationPrompt(
         ownerGoal: String,
         completedToolCalls: Int,
