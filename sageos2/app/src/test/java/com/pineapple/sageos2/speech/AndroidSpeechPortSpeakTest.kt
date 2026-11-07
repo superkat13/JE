@@ -2,6 +2,7 @@ package com.pineapple.sageos2.speech
 
 import android.os.Looper
 import android.speech.tts.TextToSpeech
+import com.pineapple.sageos2.core.SageListeningMode
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -222,6 +223,34 @@ class AndroidSpeechPortSpeakTest {
             isAccessible = true
         }.get(port!!) as java.util.ArrayDeque<*>
         assertTrue("failed TTS init cannot strand unplayed turns", deferred.isEmpty())
+    }
+
+    @Test fun failedInitializationCallbackThatStartsWakeDoesNotStartItTwice() {
+        var wakeStarts = 0
+        port = AndroidSpeechPort(
+            RuntimeEnvironment.getApplication(),
+            object : WakeWordEngine {
+                override fun configure(profiles: List<WakeProfile>) = Unit
+                override fun start(generation: Long, onWake: (WakeHit) -> Unit) {
+                    wakeStarts++
+                }
+                override fun stop() = Unit
+                override fun health() = WakeWordHealth(false, "test", "test")
+            },
+            object : WakeProfileProvider {
+                override fun profiles(): List<WakeProfile> = emptyList()
+            }
+        )
+        idle()
+        // Simulate the turn coordinator reacting synchronously to a failed
+        // wake acknowledgement by requesting wake listening.
+        port!!.speak(22L, "Acknowledged.") {
+            port!!.setListening(SageListeningMode.WAKE_ONLY, 27L, 22L)
+        }
+        idle()
+        port!!.onInit(TextToSpeech.ERROR)
+        idle()
+        assertEquals("the owner's completion callback already restarted listening", 1, wakeStarts)
     }
 
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
