@@ -20,7 +20,9 @@ namespace {
 llama_model * g_model = nullptr;
 llama_context * g_context = nullptr;
 std::mutex g_mutex;
-std::atomic<bool> g_cancel_requested{false};
+// Cancellation is keyed to the logical request ID, not a global boolean.
+// A delayed cancellation of a previous turn cannot abort the next turn.
+std::atomic<long long> g_cancel_request_id{0};
 std::atomic<long long> g_last_first_token_latency_ms{-1};
 std::atomic<long long> g_last_generation_duration_ms{-1};
 std::atomic<long long> g_last_prompt_prefill_duration_ms{-1};
@@ -89,6 +91,12 @@ const char * finish_reason_name(int reason) {
         case FINISH_INVALID_REQUEST: return "invalid_request";
         default: return "not_started";
     }
+}
+
+bool cancel_requested_for_active_turn() {
+    const long long active = g_active_request_id.load(std::memory_order_acquire);
+    return active > 0 &&
+            g_cancel_request_id.load(std::memory_order_acquire) == active;
 }
 
 void set_error(const std::string & message) {
@@ -373,7 +381,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
     context_params.n_threads_batch = threads;
     context_params.no_perf = true;
     context_params.abort_callback = [](void *) {
-        return g_cancel_requested.load(std::memory_order_acquire);
+        return cancel_requested_for_active_turn();
     };
     context_params.abort_callback_data = nullptr;
 
@@ -416,7 +424,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     g_last_stage.store(4, std::memory_order_release);
     const long long active_request_id = static_cast<long long>(request_id);
     g_last_request_id.store(active_request_id, std::memory_order_release);
-    g_cancel_requested.store(false, std::memory_order_release);
+    g_cancel_request_id.store(0, std::memory_order_release);
     g_active_request_id.store(active_request_id, std::memory_order_release);
     g_last_cached_prompt_tokens.store(0, std::memory_order_release);
     // Every failed/cancelled turn invalidates reusable state and retires its request ID.
@@ -498,7 +506,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     // decode/sample loop so generation semantics stay unchanged.
     while (prompt_tokens.size() - prompt_offset
             > static_cast<size_t>(kPromptPrefillChunkTokens)) {
-        if (g_cancel_requested.load(std::memory_order_acquire)) {
+        if (cancel_requested_for_active_turn()) {
             g_last_stage.store(9, std::memory_order_release);
             g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
             llama_memory_clear(llama_get_memory(g_context), true);
@@ -513,7 +521,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         const int prefill_result = llama_decode(g_context, prefill_batch);
         if (prefill_result != 0) {
             if (prefill_result == 2
-                    && g_cancel_requested.load(std::memory_order_acquire)) {
+                    && cancel_requested_for_active_turn()) {
                 g_last_stage.store(9, std::memory_order_release);
                 g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
                 set_error("Brain request cancelled during prompt prefill");
@@ -564,7 +572,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     int generated_token_count = 0;
     std::string output;
     for (int generated = 0; generated < max_tokens; ++generated) {
-        if (g_cancel_requested.load(std::memory_order_acquire)) {
+        if (cancel_requested_for_active_turn()) {
             cancelled = true;
             break;
         }
@@ -589,7 +597,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         }
         if (decode_result != 0) {
             if (decode_result == 2
-                    && g_cancel_requested.load(std::memory_order_acquire)) {
+                    && cancel_requested_for_active_turn()) {
                 cancelled = true;
                 break;
             }
@@ -598,7 +606,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             break;
         }
 
-        if (g_cancel_requested.load(std::memory_order_acquire)) {
+        if (cancel_requested_for_active_turn()) {
             cancelled = true;
             break;
         }
@@ -759,7 +767,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
             }
         }
     } request_guard;
-    if (g_cancel_requested.load(std::memory_order_acquire)) {
+    if (cancel_requested_for_active_turn()) {
         g_last_stage.store(9, std::memory_order_release);
         g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
         set_error("Brain request cancelled before response continuation");
@@ -778,14 +786,14 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
     int total_generated_tokens = generated_tokens;
     std::string output;
     for (int generated = 0; generated < additional_tokens; ++generated) {
-        if (g_cancel_requested.load(std::memory_order_acquire)) {
+        if (cancel_requested_for_active_turn()) {
             cancelled = true;
             break;
         }
         const int decode_result = llama_decode(g_context, batch);
         if (decode_result != 0) {
             if (decode_result == 2
-                    && g_cancel_requested.load(std::memory_order_acquire)) {
+                    && cancel_requested_for_active_turn()) {
                 cancelled = true;
             } else {
                 decode_failed = true;
@@ -794,7 +802,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
             }
             break;
         }
-        if (g_cancel_requested.load(std::memory_order_acquire)) {
+        if (cancel_requested_for_active_turn()) {
             cancelled = true;
             break;
         }
@@ -933,10 +941,13 @@ JNIEXPORT void JNICALL
 Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(JNIEnv *, jclass, jlong request_id) {
     const long long requested = static_cast<long long>(request_id);
     if (requested <= 0) return;
-    const bool active = g_active_request_id.load(std::memory_order_acquire) == requested;
-    const bool pending = g_last_request_id.load(std::memory_order_acquire) == requested
-            && g_continuation_available.load(std::memory_order_acquire);
-    if (active || pending) g_cancel_requested.store(true, std::memory_order_release);
+    // The request ID remains stable while we invalidate the continuation lease.
+    // Do not require a simultaneous snapshot of active_id and lease availability:
+    // those are independently changing atomics during the handoff.
+    if (g_active_request_id.load(std::memory_order_acquire) == requested ||
+            g_last_request_id.load(std::memory_order_acquire) == requested) {
+        g_cancel_request_id.store(requested, std::memory_order_release);
+    }
 }
 
 extern "C"
