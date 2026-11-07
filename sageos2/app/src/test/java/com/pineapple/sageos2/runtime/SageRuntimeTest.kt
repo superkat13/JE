@@ -779,6 +779,23 @@ class SageRuntimeTest {
         }
     }
 
+    @Test fun unrelatedProviderLimitationDoesNotSuppressCompleteBrainAnswer() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("Explain gravity in one sentence"))
+            f.brain.respond(0, "Gravity attracts massive objects.",
+                limitation = "Live web search is unavailable for this local model.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            assertEquals("Gravity attracts massive objects.", f.observer.textResponses.last().second)
+            assertEquals(TaskState.COMPLETED, store.recent(10).single().state)
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
     @Test fun unverifiedGoalDoesNotPretendSuccess() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)
