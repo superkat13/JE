@@ -26,7 +26,7 @@ object GoalCompletionPolicy {
     // Side-effect acknowledgement cannot establish the owner's requested postcondition.
     // Add new operation types only alongside a typed, independently checked verifier.
     private val observationalOperations = setOf(
-        "root.health", "forge.health", "forge.tools", "forge.job",
+        "root.health", "forge.health", "forge.tools",
         "device.screenshot", "device.read_notifications"
     )
 
@@ -112,7 +112,7 @@ object GoalCompletionPolicy {
 
     fun unverifiedFinal(proposedAnswer: String): String {
         val clean = proposedAnswer.trim()
-        val suffix = "I completed the available steps, but I couldn't verify the final state yet."
+        val suffix = "I couldn't verify the final state yet. The requested result is not confirmed."
         return if (clean.isBlank()) suffix else "$clean\n\n$suffix"
     }
 }
