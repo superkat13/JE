@@ -16,6 +16,8 @@ data class BrainRequest(
     val mode: SageModeSnapshot? = null,
     val twinContextText: String? = null,
     val maxOutputTokens: Int? = null,
+    val maxCompletionTokens: Int? = null,
+    val responseTimeoutMs: Long? = null,
     val deterministic: Boolean = false,
     val expectedLiteral: String? = null,
     val onProgress: (BrainProgress) -> Unit = {}
@@ -72,5 +74,6 @@ data class BrainTelemetry(
     val firstTokenMs: Long? = null,
     val generationMs: Long? = null,
     val promptTokensPerSecond: Float? = null,
-    val cachedPromptTokens: Int? = null
+    val cachedPromptTokens: Int? = null,
+    val finishReason: String? = null
 )

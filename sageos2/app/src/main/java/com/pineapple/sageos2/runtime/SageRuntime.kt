@@ -378,7 +378,8 @@ class SageRuntime(
         val baseProfile = BrainRequestPolicy.forPrompt(prompt, coldStart = coldStart)
         val requestProfile = if (startup == null) baseProfile else baseProfile.copy(outputTokens = 48)
         observer.onDiagnostic(
-            "brain request profile: cold=$coldStart budget=${requestProfile.combinedCharacterBudget} output=${requestProfile.outputTokens}"
+            "brain request profile: cold=$coldStart budget=${requestProfile.combinedCharacterBudget} " +
+                "output=${requestProfile.outputTokens} completion=${requestProfile.completionTokenLimit}"
         )
         val core = sageCore.current()
         val memory = twinMemory.snapshot()
@@ -448,6 +449,8 @@ class SageRuntime(
             mode = mode.takeIf { requestProfile.includeTwinContext },
             twinContextText = context,
             maxOutputTokens = requestProfile.outputTokens,
+            maxCompletionTokens = requestProfile.completionTokenLimit,
+            responseTimeoutMs = brainResponseTimeoutMs,
             deterministic = requestProfile.deterministic,
             expectedLiteral = requestProfile.expectedLiteral,
             onProgress = { onBrainProgress(it, attempt) }
@@ -479,6 +482,28 @@ class SageRuntime(
             }
         })
 
+        // A provider can return syntactically valid prose after exhausting its output budget.
+        // Its own explicit limitation means neither that prose nor a partial SAGE_TOOL block
+        // may be reported/executed as a verified completion. Preserve the original owner goal.
+        if (GoalCompletionPolicy.isIncompleteGeneration(response.provenance.limitation)) {
+            checkpointTurn(
+                response.turnId,
+                TaskState.WAITING,
+                "Brain returned a limited or incomplete result; the owner goal is not verified.",
+                "Continue from the saved owner request; inspect prior side effects before repeating any.",
+                mapOf("phase" to "brain_output_limited", "verified" to "false")
+            )
+            clearGoalRuntimeState(response.turnId)
+            startupByTurn.remove(response.turnId)
+            submit(SageEvent.ResponseReady(
+                response.turnId,
+                "I couldn't finish this response reliably, so I didn't mark the request complete. " +
+                    "The request is saved for safe continuation.",
+                false
+            ))
+            return
+        }
+
         val directive = try {
             BrainToolDirectiveParser.parse(response.text)
         } catch (t: Throwable) {
@@ -501,6 +526,35 @@ class SageRuntime(
                     is GoalCompletionPolicy.VerificationResult -> when (verification.status) {
                         GoalCompletionPolicy.VerificationStatus.VERIFIED -> {
                             val rounds = verificationRoundsByTurn[response.turnId] ?: 0
+                            val ownerGoal = ownerGoalByTurn[response.turnId]
+                                ?: taskContinuity?.get(runtimeTaskId(response.turnId))?.metadata?.get("ownerPrompt").orEmpty()
+                            val evidence = executionEvidenceByTurn[response.turnId].orEmpty()
+                            val assessment = GoalCompletionPolicy.assessEvidence(ownerGoal, evidence)
+                            if (!assessment.independentlyVerified) {
+                                observer.onDiagnostic(
+                                    "goal verification rejected ungrounded model assertion: turn=${response.turnId}; ${assessment.reason}"
+                                )
+                                checkpointTurn(
+                                    response.turnId,
+                                    TaskState.WAITING,
+                                    "The Brain claimed goal completion without sufficient observed evidence.",
+                                    "Confirm the actual result with a supported read-only check before declaring the task done.",
+                                    mapOf(
+                                        "phase" to "verification_waiting",
+                                        "verified" to "false",
+                                        "toolCount" to toolCount.toString(),
+                                        "verificationRounds" to rounds.toString()
+                                    )
+                                )
+                                clearGoalRuntimeState(response.turnId)
+                                startupByTurn.remove(response.turnId)
+                                submit(SageEvent.ResponseReady(
+                                    response.turnId,
+                                    assessment.reason + " I saved the unfinished request instead of claiming success.",
+                                    false
+                                ))
+                                return
+                            }
                             checkpointTurn(
                                 response.turnId,
                                 TaskState.COMPLETED,

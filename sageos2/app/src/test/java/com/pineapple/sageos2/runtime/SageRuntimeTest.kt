@@ -297,6 +297,9 @@ class SageRuntimeTest {
         assertFalse(request.twinContextText?.contains("Self restrictions: (none)") == true)
         assertFalse(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
         assertFalse(request.twinContextText?.contains("ACTIVE / RECOVERABLE TASKS") == true)
+        assertEquals(40, request.maxOutputTokens)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, request.maxCompletionTokens)
+        assertEquals(120_000L, request.responseTimeoutMs)
     }
 
     @Test fun deepBrainReceivesCoreOwnerMemoryHistoryAndExactCurrentWordingTogether() {
@@ -428,7 +431,11 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[3].twinContextText.orEmpty().contains("device.tap_label label=Private browsing"))
         f.brain.respond(3, "${GoalCompletionPolicy.VERIFIED_MARKER}\nFirefox is ready.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Firefox is ready.", f.observer.textResponses.last().second)
+        val startupOutcome = f.observer.textResponses.last().second
+        assertFalse("launch acknowledgement is not observed foreground state",
+            startupOutcome == "Firefox is ready.")
+        assertTrue(startupOutcome.contains("not independently observed"))
+        assertEquals(2, capability.actions.size)
         f.runtime.submit(SageEvent.TextSubmitted("Tell me something"))
         assertFalse(f.brain.requests.last().twinContextText.orEmpty().contains("OWNER APP STARTUP"))
     }
@@ -553,10 +560,11 @@ class SageRuntimeTest {
 
         f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nRoot is alive and answering through the broker.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals(
-            "Root is alive and answering through the broker.",
-            f.observer.textResponses.last().second
-        )
+        val execOutcome = f.observer.textResponses.last().second
+        assertFalse("generic root.exec success is not typed postcondition evidence",
+            execOutcome == "Root is alive and answering through the broker.")
+        assertTrue(execOutcome.contains("not independently observed"))
+        assertEquals(1, capability.actions.size)
         assertTrue(f.speech.spoken.isEmpty())
     }
 
@@ -672,6 +680,128 @@ class SageRuntimeTest {
         assertTrue(capability.actions.isEmpty())
         assertEquals(saved, store.get(saved.taskId))
         f.runtime.stop()
+    }
+
+    /**
+     * Failing-first safety regression: the native model's VERIFIED marker is not
+     * independent proof that a requested device mutation happened.
+     */
+    @Test fun failedToolExecutionCannotBePromotedToVerifiedByModelAssertion() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(
+                mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE)
+            )
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                return CapabilityResult(false, "permission denied; volume unchanged")
+            }
+        }
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("reduce the device volume and verify the result"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { calls.get() == 1 && f.brain.requests.size == 2 }
+            f.brain.respond(1, "I lowered the volume.")
+            waitUntil { f.brain.requests.size == 3 }
+            assertTrue(f.brain.requests[2].prompt.contains("success=false"))
+
+            // Simulate an unreliable model disregarding the failed tool evidence.
+            f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nVolume successfully lowered.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            val checkpoint = store.recent(10).single()
+            assertTrue("failed action must remain recoverable or explicitly failed, not COMPLETED",
+                checkpoint.state == TaskState.WAITING || checkpoint.state == TaskState.FAILED)
+            assertEquals("false", checkpoint.metadata["verified"])
+            assertFalse("owner must not receive an unqualified invented success",
+                f.observer.textResponses.last().second == "Volume successfully lowered.")
+            assertEquals("verification must not silently replay the failed mutation", 1, calls.get())
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    /**
+     * Tool-API acceptance of an asynchronous operation is not the observed
+     * postcondition. A self-reported VERIFIED string must not fill this gap.
+     */
+    @Test fun acknowledgedButUnobservedMutationCannotBePromotedToVerified() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(
+                mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE)
+            )
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                return CapabilityResult(true, "change request accepted; current value unknown")
+            }
+        }
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("lower volume one step and confirm it actually changed"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { calls.get() == 1 && f.brain.requests.size == 2 }
+            f.brain.respond(1, "Request accepted.")
+            waitUntil { f.brain.requests.size == 3 }
+            assertTrue(f.brain.requests[2].prompt.contains("current value unknown"))
+
+            f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nI confirmed the volume changed.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            val checkpoint = store.recent(10).single()
+            assertTrue("accepted is not applied: task must not be silently COMPLETED",
+                checkpoint.state == TaskState.WAITING || checkpoint.state == TaskState.FAILED)
+            assertEquals("false", checkpoint.metadata["verified"])
+            assertFalse("owner must not receive an unqualified fabricated confirmation",
+                f.observer.textResponses.last().second == "I confirmed the volume changed.")
+            assertEquals(1, calls.get())
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun incompleteBrainReplyWithLimitationMustRemainUnfinishedToOwnerAndTaskStore() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("Explain the complete multi-step procedure"))
+            f.brain.respond(0,
+                "First, inspect the current state. Second, the next step is",
+                limitation = "TOKEN_LIMIT: unfinished output; no end-of-generation token")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+            assertTrue("incomplete generation must not be marked completed",
+                store.recent(10).single().state == TaskState.WAITING ||
+                    store.recent(10).single().state == TaskState.FAILED)
+            assertEquals("false", store.recent(10).single().metadata["verified"])
+            assertFalse("owner cannot receive the truncated text as an unqualified success",
+                f.observer.textResponses.last().second ==
+                    "First, inspect the current state. Second, the next step is")
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun unrelatedProviderLimitationDoesNotSuppressCompleteBrainAnswer() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("Explain gravity in one sentence"))
+            f.brain.respond(0, "Gravity attracts massive objects.",
+                limitation = "Live web search is unavailable for this local model.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            assertEquals("Gravity attracts massive objects.", f.observer.textResponses.last().second)
+            assertEquals(TaskState.COMPLETED, store.recent(10).single().state)
+        } finally {
+            f.runtime.stop()
+        }
     }
 
     @Test fun unverifiedGoalDoesNotPretendSuccess() {
@@ -1221,10 +1351,13 @@ class SageRuntimeTest {
             requests += request; callbacks += callback
             return object:BrainJob{override val turnId=request.turnId;override fun cancel()=Unit}
         }
-        fun respond(index:Int,text:String) {
+        fun respond(index:Int,text:String,limitation:String?=null) {
             val request=requests[index]
             successfulLatencyMs=1L
-            callbacks[index](Result.success(BrainResponse(request.turnId,text,name)))
+            callbacks[index](Result.success(BrainResponse(
+                request.turnId, text, name,
+                BrainProvenance(engine = name, limitation = limitation)
+            )))
         }
         fun progress(index:Int,stage:BrainProgressStage,generatedTokens:Int?=null) {
             val request=requests[index]

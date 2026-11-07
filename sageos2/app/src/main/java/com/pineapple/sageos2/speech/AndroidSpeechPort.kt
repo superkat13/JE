@@ -203,7 +203,15 @@ class AndroidSpeechPort(
     }
 
     private fun speakNow(pending: PendingSpeech) {
+        val maxChars = runCatching { TextToSpeech.getMaxSpeechInputLength() }
+            .getOrDefault(SpeechTextChunker.DEFAULT_MAX_CHARS)
+            .coerceAtMost(SpeechTextChunker.DEFAULT_MAX_CHARS)
+            .coerceAtLeast(1)
+        val chunks = SpeechTextChunker.chunk(pending.text, maxChars)
         val id = "sage-${pending.turnId}-${UUID.randomUUID()}"
+        val ids = chunks.indices.map { index -> if (chunks.size == 1) id else "$id-$index" }
+        val lastId = ids.lastOrNull()
+        val activeIds = ids.toSet()
         val completed = AtomicBoolean(false)
         speechActive = true
         val completeOnce = {
@@ -213,20 +221,47 @@ class AndroidSpeechPort(
                 drainDeferredSpeech()
             }
         }
+        if (chunks.isEmpty()) {
+            completeOnce()
+            return
+        }
         val result = runCatching {
             tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
                 override fun onStart(utteranceId: String?) = Unit
-                override fun onError(utteranceId: String?) = onDone(utteranceId)
+                override fun onError(utteranceId: String?) {
+                    if (utteranceId != null && utteranceId in activeIds) {
+                        main.post {
+                            runCatching { tts?.stop() }
+                            completeOnce()
+                        }
+                    }
+                }
                 override fun onDone(utteranceId: String?) {
-                    if (utteranceId == id) main.post { completeOnce() }
+                    if (utteranceId == lastId) main.post { completeOnce() }
                 }
             })
-            tts?.speak(pending.text, TextToSpeech.QUEUE_FLUSH, null, id) ?: TextToSpeech.ERROR
+            var speakResult = TextToSpeech.SUCCESS
+            val engine = tts
+            if (engine == null) {
+                speakResult = TextToSpeech.ERROR
+            } else {
+                for (index in chunks.indices) {
+                    val queueMode = if (index == 0) TextToSpeech.QUEUE_FLUSH else TextToSpeech.QUEUE_ADD
+                    if (engine.speak(chunks[index], queueMode, null, ids[index]) == TextToSpeech.ERROR) {
+                        speakResult = TextToSpeech.ERROR
+                        break
+                    }
+                }
+            }
+            speakResult
         }.getOrElse {
             listener?.onSpeechDiagnostic("TTS speak failed: ${it.message ?: it::class.simpleName}")
             TextToSpeech.ERROR
         }
-        if (result == TextToSpeech.ERROR) completeOnce()
+        if (result == TextToSpeech.ERROR) {
+            runCatching { tts?.stop() }
+            completeOnce()
+        }
     }
 
     private fun startWake(generation: Long) {

@@ -32,7 +32,23 @@ std::atomic<int> g_last_stage{0};
 std::string g_last_error = "Model not loaded";
 std::vector<llama_token> g_cached_prompt;
 std::atomic<int> g_last_cached_prompt_tokens{0};
+std::atomic<int> g_last_finish_reason{0};
+std::atomic<long long> g_last_request_id{0};
+std::atomic<bool> g_continuation_available{false};
+std::atomic<int> g_continuation_token{0};
 bool g_backend_initialized = false;
+
+enum FinishReason {
+    FINISH_NOT_STARTED = 0,
+    FINISH_END_OF_GENERATION = 1,
+    FINISH_TOKEN_LIMIT = 2,
+    FINISH_OUTPUT_LIMIT = 3,
+    FINISH_CONTEXT_LIMIT = 4,
+    FINISH_CANCELLED = 5,
+    FINISH_DECODE_ERROR = 6,
+    FINISH_EMPTY = 7,
+    FINISH_INVALID_REQUEST = 8,
+};
 // These family-neutral ceilings preserve the last physically informed tablet configuration.
 // The inherited GGUF identity must be read from the installed file before model-specific tuning.
 constexpr int kContextTokens = 2048;
@@ -58,14 +74,34 @@ const char * stage_name(int stage) {
     }
 }
 
+const char * finish_reason_name(int reason) {
+    switch (reason) {
+        case FINISH_END_OF_GENERATION: return "eog";
+        case FINISH_TOKEN_LIMIT: return "max_tokens";
+        case FINISH_OUTPUT_LIMIT: return "output_limit";
+        case FINISH_CONTEXT_LIMIT: return "context_limit";
+        case FINISH_CANCELLED: return "cancelled";
+        case FINISH_DECODE_ERROR: return "decode_error";
+        case FINISH_EMPTY: return "empty";
+        case FINISH_INVALID_REQUEST: return "invalid_request";
+        default: return "not_started";
+    }
+}
+
 void set_error(const std::string & message) {
     g_last_error = message;
     LOGE("%s", message.c_str());
 }
 
+void invalidate_continuation_locked() {
+    g_continuation_available.store(false, std::memory_order_release);
+    g_continuation_token.store(0, std::memory_order_release);
+}
+
 void release_model_locked() {
     g_cached_prompt.clear();
     g_last_cached_prompt_tokens.store(0, std::memory_order_release);
+    invalidate_continuation_locked();
     if (g_context != nullptr) {
         llama_free(g_context);
         g_context = nullptr;
@@ -231,6 +267,18 @@ std::string format_chat_prompt(
     return std::string(buffer.data(), static_cast<size_t>(written));
 }
 
+llama_sampler * create_sampler(bool deterministic) {
+    if (deterministic) {
+        return llama_sampler_init_greedy();
+    }
+    llama_sampler * sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
+    llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
+    llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
+    llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
+    return sampler;
+}
+
 }  // namespace
 
 extern "C"
@@ -242,8 +290,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
 ) {
     std::lock_guard<std::mutex> lock(g_mutex);
     g_last_stage.store(1, std::memory_order_release);
+    g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
+    g_last_request_id.store(0, std::memory_order_release);
+    invalidate_continuation_locked();
     std::string model_path = from_java_string(env, path);
     if (model_path.empty()) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("Model path is empty");
         return JNI_FALSE;
     }
@@ -266,6 +318,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
     LOGI("Loading local model: %s", model_path.c_str());
     g_model = llama_model_load_from_file(model_path.c_str(), model_params);
     if (g_model == nullptr) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("llama.cpp could not load that GGUF model");
         return JNI_FALSE;
     }
@@ -288,6 +341,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(
     g_context = llama_init_from_model(g_model, context_params);
     if (g_context == nullptr) {
         release_model_locked();
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("llama.cpp could not create Sage's local context");
         return JNI_FALSE;
     }
@@ -316,9 +370,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     g_last_prompt_token_count.store(0, std::memory_order_release);
     g_last_prompt_tokens_per_second.store(-1.0f, std::memory_order_release);
     g_last_generated_token_count.store(0, std::memory_order_release);
+    g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
+    invalidate_continuation_locked();
     g_last_error.clear();
     g_last_stage.store(4, std::memory_order_release);
     const long long active_request_id = static_cast<long long>(request_id);
+    g_last_request_id.store(active_request_id, std::memory_order_release);
     g_cancel_requested.store(false, std::memory_order_release);
     g_active_request_id.store(active_request_id, std::memory_order_release);
     g_last_cached_prompt_tokens.store(0, std::memory_order_release);
@@ -328,6 +385,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         ~RequestGuard() {
             g_active_request_id.store(0, std::memory_order_release);
             if (!completed) {
+                invalidate_continuation_locked();
                 g_cached_prompt.clear();
                 if (g_context) llama_memory_clear(llama_get_memory(g_context), true);
             }
@@ -335,6 +393,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     } request_guard;
     const auto generation_start = std::chrono::steady_clock::now();
     if (g_model == nullptr || g_context == nullptr) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("Sage Brain was asked before its model loaded");
         return to_java_string(env, "");
     }
@@ -342,6 +401,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     std::string system_prompt = from_java_string(env, system_prompt_value);
     std::string user_prompt = from_java_string(env, user_prompt_value);
     if (system_prompt.empty() || user_prompt.empty()) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("Brain prompt was empty");
         return to_java_string(env, "");
     }
@@ -349,12 +409,14 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     std::string prompt = format_chat_prompt(system_prompt, user_prompt);
     const llama_vocab * vocab = llama_model_get_vocab(g_model);
     if (vocab == nullptr) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         set_error("Model vocabulary is unavailable");
         return to_java_string(env, "");
     }
 
     std::vector<llama_token> prompt_tokens;
     if (!tokenize(vocab, prompt, prompt_tokens)) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
         return to_java_string(env, "");
     }
     g_last_prompt_token_count.store(static_cast<int>(prompt_tokens.size()), std::memory_order_release);
@@ -365,6 +427,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     );
     if (prompt_tokens.size() + static_cast<size_t>(max_tokens) + 8U
             > static_cast<size_t>(llama_n_ctx(g_context))) {
+        g_last_finish_reason.store(FINISH_CONTEXT_LIMIT, std::memory_order_release);
         set_error("Brain prompt exceeded Sage's local context window");
         return to_java_string(env, "");
     }
@@ -397,6 +460,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             > static_cast<size_t>(kPromptPrefillChunkTokens)) {
         if (g_cancel_requested.load(std::memory_order_acquire)) {
             g_last_stage.store(9, std::memory_order_release);
+            g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
             llama_memory_clear(llama_get_memory(g_context), true);
             set_error("Brain request cancelled during prompt prefill");
             return to_java_string(env, "");
@@ -411,8 +475,10 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             if (prefill_result == 2
                     && g_cancel_requested.load(std::memory_order_acquire)) {
                 g_last_stage.store(9, std::memory_order_release);
+                g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
                 set_error("Brain request cancelled during prompt prefill");
             } else {
+                g_last_finish_reason.store(FINISH_DECODE_ERROR, std::memory_order_release);
                 set_error(
                         "llama_decode failed during prompt prefill with code "
                                 + std::to_string(prefill_result)
@@ -446,19 +512,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
             static_cast<int32_t>(final_prompt_tokens)
     );
 
-    llama_sampler * sampler;
-    if (deterministic == JNI_TRUE) {
-        sampler = llama_sampler_init_greedy();
-    } else {
-        sampler = llama_sampler_chain_init(llama_sampler_chain_default_params());
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_k(20));
-        llama_sampler_chain_add(sampler, llama_sampler_init_top_p(0.8f, 1));
-        llama_sampler_chain_add(sampler, llama_sampler_init_temp(0.7f));
-        llama_sampler_chain_add(sampler, llama_sampler_init_dist(LLAMA_DEFAULT_SEED));
-    }
+    llama_sampler * sampler = create_sampler(deterministic == JNI_TRUE);
 
     bool cancelled = false;
     bool decode_failed = false;
+    bool eog_reached = false;
+    bool output_limit_reached = false;
     llama_token token = 0; // Must outlive the batch consumed on the next iteration.
     bool prompt_prefilled = false;
     auto generation_only_start = generation_start;
@@ -506,6 +565,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         g_last_stage.store(6, std::memory_order_release);
         token = llama_sampler_sample(sampler, g_context, -1);
         if (llama_vocab_is_eog(vocab, token)) {
+            eog_reached = true;
             break;
         }
 
@@ -531,6 +591,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
         batch = llama_batch_get_one(&token, 1);
 
         if (output.size() > 2048U) {
+            output_limit_reached = true;
             break;
         }
     }
@@ -547,12 +608,17 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     g_last_generated_token_count.store(generated_token_count, std::memory_order_release);
     if (cancelled) {
         g_last_stage.store(9, std::memory_order_release);
+        g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
         llama_memory_clear(llama_get_memory(g_context), true);
         set_error("Brain request cancelled");
         return to_java_string(env, "");
     }
-    if (decode_failed) return to_java_string(env, "");
+    if (decode_failed) {
+        g_last_finish_reason.store(FINISH_DECODE_ERROR, std::memory_order_release);
+        return to_java_string(env, "");
+    }
     if (output.empty()) {
+        g_last_finish_reason.store(FINISH_EMPTY, std::memory_order_release);
         set_error("The local model generated no text");
         return to_java_string(env, "");
     }
@@ -560,8 +626,185 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     request_guard.completed = true;
     g_last_error.clear();
     g_last_stage.store(10, std::memory_order_release);
+    if (eog_reached) {
+        g_last_finish_reason.store(FINISH_END_OF_GENERATION, std::memory_order_release);
+        invalidate_continuation_locked();
+    } else if (output_limit_reached) {
+        g_last_finish_reason.store(FINISH_OUTPUT_LIMIT, std::memory_order_release);
+        invalidate_continuation_locked();
+    } else {
+        g_last_finish_reason.store(FINISH_TOKEN_LIMIT, std::memory_order_release);
+        g_continuation_token.store(static_cast<int>(token), std::memory_order_release);
+        g_continuation_available.store(true, std::memory_order_release);
+    }
     g_active_request_id.store(0, std::memory_order_release);
     return to_java_string(env, output);
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+        JNIEnv * env,
+        jclass,
+        jlong request_id,
+        jint requested_additional_tokens,
+        jboolean deterministic
+) {
+    std::lock_guard<std::mutex> lock(g_mutex);
+    const long long active_request_id = static_cast<long long>(request_id);
+    if (g_model == nullptr || g_context == nullptr) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
+        invalidate_continuation_locked();
+        set_error("Sage Brain cannot continue before its model loaded");
+        return to_java_string(env, "");
+    }
+    if (active_request_id <= 0
+            || g_last_request_id.load(std::memory_order_acquire) != active_request_id
+            || !g_continuation_available.load(std::memory_order_acquire)) {
+        g_last_finish_reason.store(FINISH_INVALID_REQUEST, std::memory_order_release);
+        invalidate_continuation_locked();
+        set_error("Sage Brain continuation does not match a token-limited response");
+        return to_java_string(env, "");
+    }
+
+    const int prompt_tokens = g_last_prompt_token_count.load(std::memory_order_acquire);
+    const int generated_tokens = g_last_generated_token_count.load(std::memory_order_acquire);
+    const int context_remaining = kContextTokens - prompt_tokens - generated_tokens - 8;
+    if (context_remaining <= 0) {
+        g_last_finish_reason.store(FINISH_CONTEXT_LIMIT, std::memory_order_release);
+        invalidate_continuation_locked();
+        set_error("Sage's local context has no room for another response token");
+        return to_java_string(env, "");
+    }
+    const int additional_tokens = std::max(
+            1,
+            std::min(context_remaining, std::min(
+                    kMaximumResponseTokens,
+                    static_cast<int>(requested_additional_tokens)
+            ))
+    );
+
+    g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
+    invalidate_continuation_locked();
+    g_last_error.clear();
+    g_cancel_requested.store(false, std::memory_order_release);
+    g_active_request_id.store(active_request_id, std::memory_order_release);
+    g_last_stage.store(8, std::memory_order_release);
+    struct RequestGuard {
+        bool completed = false;
+        ~RequestGuard() {
+            g_active_request_id.store(0, std::memory_order_release);
+            if (!completed) {
+                invalidate_continuation_locked();
+                g_cached_prompt.clear();
+                if (g_context) llama_memory_clear(llama_get_memory(g_context), true);
+            }
+        }
+    } request_guard;
+
+    llama_token token = static_cast<llama_token>(
+            g_continuation_token.load(std::memory_order_acquire)
+    );
+    llama_batch batch = llama_batch_get_one(&token, 1);
+    llama_sampler * sampler = create_sampler(deterministic == JNI_TRUE);
+    const auto continuation_start = std::chrono::steady_clock::now();
+
+    bool cancelled = false;
+    bool decode_failed = false;
+    bool eog_reached = false;
+    bool output_limit_reached = false;
+    int total_generated_tokens = generated_tokens;
+    std::string output;
+    for (int generated = 0; generated < additional_tokens; ++generated) {
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
+        const int decode_result = llama_decode(g_context, batch);
+        if (decode_result != 0) {
+            if (decode_result == 2
+                    && g_cancel_requested.load(std::memory_order_acquire)) {
+                cancelled = true;
+            } else {
+                decode_failed = true;
+                set_error("llama_decode failed during response continuation with code "
+                        + std::to_string(decode_result));
+            }
+            break;
+        }
+        if (g_cancel_requested.load(std::memory_order_acquire)) {
+            cancelled = true;
+            break;
+        }
+        g_last_stage.store(6, std::memory_order_release);
+        token = llama_sampler_sample(sampler, g_context, -1);
+        if (llama_vocab_is_eog(llama_model_get_vocab(g_model), token)) {
+            eog_reached = true;
+            break;
+        }
+        ++total_generated_tokens;
+        g_last_generated_token_count.store(total_generated_tokens, std::memory_order_release);
+        std::string piece = token_piece(llama_model_get_vocab(g_model), token);
+        if (!piece.empty()) {
+            output += piece;
+        }
+        g_last_stage.store(8, std::memory_order_release);
+        batch = llama_batch_get_one(&token, 1);
+        if (output.size() > 2048U) {
+            output_limit_reached = true;
+            break;
+        }
+    }
+
+    llama_sampler_free(sampler);
+    const auto continuation_finished = std::chrono::steady_clock::now();
+    const auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
+            continuation_finished - continuation_start
+    ).count();
+    const long long previous_duration = std::max<long long>(
+            0,
+            g_last_generation_duration_ms.load(std::memory_order_acquire)
+    );
+    g_last_generation_duration_ms.store(
+            std::max<long long>(1, previous_duration + duration),
+            std::memory_order_release
+    );
+
+    if (cancelled) {
+        g_last_stage.store(9, std::memory_order_release);
+        g_last_finish_reason.store(FINISH_CANCELLED, std::memory_order_release);
+        set_error("Brain request cancelled during response continuation");
+        return to_java_string(env, "");
+    }
+    if (decode_failed) {
+        g_last_finish_reason.store(FINISH_DECODE_ERROR, std::memory_order_release);
+        return to_java_string(env, "");
+    }
+
+    request_guard.completed = true;
+    g_last_error.clear();
+    g_last_stage.store(10, std::memory_order_release);
+    if (eog_reached) {
+        g_last_finish_reason.store(FINISH_END_OF_GENERATION, std::memory_order_release);
+        invalidate_continuation_locked();
+    } else if (output_limit_reached) {
+        g_last_finish_reason.store(FINISH_OUTPUT_LIMIT, std::memory_order_release);
+        invalidate_continuation_locked();
+    } else {
+        g_last_finish_reason.store(FINISH_TOKEN_LIMIT, std::memory_order_release);
+        g_continuation_token.store(static_cast<int>(token), std::memory_order_release);
+        g_continuation_available.store(true, std::memory_order_release);
+    }
+    g_active_request_id.store(0, std::memory_order_release);
+    return to_java_string(env, output);
+}
+
+extern "C"
+JNIEXPORT jstring JNICALL
+Java_com_pineapple_sage_SageBrainManager_nativeLastFinishReason(JNIEnv * env, jclass) {
+    return env->NewStringUTF(
+            finish_reason_name(g_last_finish_reason.load(std::memory_order_acquire))
+    );
 }
 
 extern "C"
@@ -628,6 +871,8 @@ JNIEXPORT void JNICALL
 Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(JNIEnv *, jclass) {
     std::lock_guard<std::mutex> lock(g_mutex);
     release_model_locked();
+    g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
+    g_last_request_id.store(0, std::memory_order_release);
     g_last_error = "Model unloaded";
 }
 

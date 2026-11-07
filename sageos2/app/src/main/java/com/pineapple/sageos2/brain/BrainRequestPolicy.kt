@@ -10,6 +10,7 @@ package com.pineapple.sageos2.brain
  */
 object BrainRequestPolicy {
     const val SELF_CHECK_PROMPT = "Reply with exactly: Brain online."
+    const val COMPLETION_TOKEN_LIMIT = 96
 
     private val exactRequest = Regex("(?i)^\\s*reply\\s+with\\s+exactly\\s*:\\s*(.+?)\\s*$")
     private val conversationalCue = Regex(
@@ -36,6 +37,7 @@ object BrainRequestPolicy {
         val systemGuide: String,
         val combinedCharacterBudget: Int,
         val outputTokens: Int,
+        val completionTokenLimit: Int,
         val deterministic: Boolean,
         val expectedLiteral: String? = null,
         val includeTwinContext: Boolean = true,
@@ -48,10 +50,12 @@ object BrainRequestPolicy {
         val literal = exactRequest.matchEntire(cleaned)?.groupValues?.get(1)?.let(::unwrapLiteral)
         if (!literal.isNullOrBlank()) {
             val estimatedTokens = ((literal.length + 3) / 4).coerceAtLeast(1)
+            val exactTokens = (estimatedTokens + 3).coerceIn(4, 12)
             return Profile(
                 systemGuide = "Output only the requested literal. No explanation. /no_think",
                 combinedCharacterBudget = 320,
-                outputTokens = (estimatedTokens + 3).coerceIn(4, 12),
+                outputTokens = exactTokens,
+                completionTokenLimit = exactTokens,
                 deterministic = true,
                 expectedLiteral = literal,
                 includeTwinContext = false
@@ -69,6 +73,7 @@ object BrainRequestPolicy {
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = if (coldStart) 1_400 else 2_200,
                 outputTokens = 48,
+                completionTokenLimit = COMPLETION_TOKEN_LIMIT,
                 deterministic = false,
                 includeTaskContext = true,
                 includeToolContext = true
@@ -80,6 +85,7 @@ object BrainRequestPolicy {
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = if (coldStart) 1_200 else 2_000,
                 outputTokens = 48,
+                completionTokenLimit = COMPLETION_TOKEN_LIMIT,
                 deterministic = false,
                 includeTaskContext = wantsTaskContext,
                 includeToolContext = wantsToolContext
@@ -91,6 +97,7 @@ object BrainRequestPolicy {
                 systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
                 combinedCharacterBudget = if (coldStart) 1_200 else 2_000,
                 outputTokens = 32,
+                completionTokenLimit = COMPLETION_TOKEN_LIMIT,
                 deterministic = false,
                 includeToolContext = true
             )
@@ -100,6 +107,7 @@ object BrainRequestPolicy {
             systemGuide = BrainPromptBudget.LOCAL_RESPONSE_GUIDE,
             combinedCharacterBudget = if (coldStart) 900 else 1_600,
             outputTokens = 40,
+            completionTokenLimit = COMPLETION_TOKEN_LIMIT,
             deterministic = true
         )
     }
