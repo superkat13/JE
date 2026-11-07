@@ -423,8 +423,10 @@ Java_com_pineapple_sage_SageBrainManager_nativeGenerate(
     g_last_error.clear();
     g_last_stage.store(4, std::memory_order_release);
     const long long active_request_id = static_cast<long long>(request_id);
-    g_last_request_id.store(active_request_id, std::memory_order_release);
+    // Retire only the preceding request's cancellation BEFORE publishing this
+    // new logical request ID, so an arriving cancel cannot be reset afterward.
     g_cancel_request_id.store(0, std::memory_order_release);
+    g_last_request_id.store(active_request_id, std::memory_order_release);
     g_active_request_id.store(active_request_id, std::memory_order_release);
     g_last_cached_prompt_tokens.store(0, std::memory_order_release);
     // Every failed/cancelled turn invalidates reusable state and retires its request ID.
