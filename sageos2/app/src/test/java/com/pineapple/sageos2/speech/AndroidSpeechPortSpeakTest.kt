@@ -67,5 +67,52 @@ class AndroidSpeechPortSpeakTest {
         assertTrue("completion must follow the final chunk, not the first", completed)
     }
 
+    @Test fun transientAcknowledgementNeverFlushesAnActiveReply() {
+        port = AndroidSpeechPort(
+            RuntimeEnvironment.getApplication(),
+            object : WakeWordEngine {
+                override fun configure(profiles: List<WakeProfile>) = Unit
+                override fun start(generation: Long, onWake: (WakeHit) -> Unit) = Unit
+                override fun stop() = Unit
+                override fun health() = WakeWordHealth(false, "test", "test")
+            },
+            object : WakeProfileProvider {
+                override fun profiles(): List<WakeProfile> = emptyList()
+            }
+        )
+        idle()
+        port!!.onInit(TextToSpeech.SUCCESS)
+        idle()
+
+        // ShadowTextToSpeech completes speech synchronously, so hold the
+        // in-progress flag to simulate a still-speaking native TTS engine.
+        val busy = AndroidSpeechPort::class.java.getDeclaredField("speechActive").apply {
+            isAccessible = true
+        }
+        busy.setBoolean(port!!, true)
+        var normalCompleted = false
+        port!!.speakTransient("Acknowledged.")
+        port!!.speak(93L, "Do not lose this sentence.") { normalCompleted = true }
+        idle()
+
+        val tts = requireNotNull(ShadowTextToSpeech.getLastTextToSpeechInstance())
+        val shadow = Shadow.extract<ShadowTextToSpeech>(tts)
+        assertTrue("the active utterance cannot be flushed by another TTS request",
+            shadow.spokenTextList.isEmpty())
+        assertTrue("the newer reply must remain queued, not reported as spoken",
+            !normalCompleted)
+
+        busy.setBoolean(port!!, false)
+        val drain = AndroidSpeechPort::class.java.getDeclaredMethod("drainDeferredSpeech").apply {
+            isAccessible = true
+        }
+        drain.invoke(port!!)
+        idle()
+
+        assertEquals(listOf("Acknowledged.", "Do not lose this sentence."),
+            shadow.spokenTextList)
+        assertTrue("the deferred normal reply must receive completion", normalCompleted)
+    }
+
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 }
