@@ -114,5 +114,43 @@ class AndroidSpeechPortSpeakTest {
         assertTrue("the deferred normal reply must receive completion", normalCompleted)
     }
 
+    @Test fun wakeDoesNotRestartDuringQueuedSpeechOrRestartTwiceAfterIt() {
+        var wakeStarts = 0
+        port = AndroidSpeechPort(
+            RuntimeEnvironment.getApplication(),
+            object : WakeWordEngine {
+                override fun configure(profiles: List<WakeProfile>) = Unit
+                override fun start(generation: Long, onWake: (WakeHit) -> Unit) {
+                    wakeStarts += 1
+                }
+                override fun stop() = Unit
+                override fun health() = WakeWordHealth(false, "test", "test")
+            },
+            object : WakeProfileProvider {
+                override fun profiles(): List<WakeProfile> = emptyList()
+            }
+        )
+        idle()
+        port!!.onInit(TextToSpeech.SUCCESS)
+        idle()
+
+        val busy = AndroidSpeechPort::class.java.getDeclaredField("speechActive").apply {
+            isAccessible = true
+        }
+        busy.setBoolean(port!!, true)
+        port!!.setListening(SageListeningMode.WAKE_ONLY, 15L, 0L)
+        port!!.speakTransient("Acknowledged.")
+        idle()
+        assertEquals("microphone cannot restart during an active utterance", 0, wakeStarts)
+
+        busy.setBoolean(port!!, false)
+        val drain = AndroidSpeechPort::class.java.getDeclaredMethod("drainDeferredSpeech").apply {
+            isAccessible = true
+        }
+        drain.invoke(port!!)
+        idle()
+        assertEquals("deferred acknowledgement resumes wake exactly once", 1, wakeStarts)
+    }
+
     private fun idle() = shadowOf(Looper.getMainLooper()).idle()
 }
