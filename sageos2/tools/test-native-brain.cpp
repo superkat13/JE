@@ -31,6 +31,23 @@ static void check(bool ok, const char* message) {
 }
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
+    // Verify UTF-8 bridging without relying on the host JNI shim's byte-copy behavior.
+    std::string complete, tail;
+    const std::string pineapple = std::string("\xF0\x9F\x8D\x8D", 4);
+    check(split_complete_utf8(std::string("Sage ") + pineapple.substr(0, 1), complete, tail),
+          "UTF-8 first segment rejected");
+    check(complete == "Sage " && tail == pineapple.substr(0, 1),
+          "first UTF-8 segment exposed a partial codepoint");
+    check(split_complete_utf8(tail + pineapple.substr(1, 2), complete, tail),
+          "UTF-8 middle segment rejected");
+    check(complete.empty() && tail == pineapple.substr(0, 3),
+          "UTF-8 middle segment lost carry bytes");
+    check(split_complete_utf8(tail + pineapple.substr(3) + "!", complete, tail),
+          "UTF-8 final segment rejected");
+    check(complete == pineapple + "!" && tail.empty(),
+          "UTF-8 continuation did not reconstruct the whole character");
+    check(!split_complete_utf8(std::string("\xC0", 1), complete, tail),
+          "invalid UTF-8 overlong lead was accepted");
     JNIEnv env;
     std::string path(argv[1]);
     auto load = [&] { check(Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(&env, nullptr, &path), "fixture load failed"); };
@@ -127,6 +144,8 @@ int main(int argc, char** argv) {
           "fixture did not expose a continuation handoff for cancellation");
     check(g_active_request_id == 0 && g_continuation_available.load(),
           "fixture was not between native continuation segments");
+    // A pending multibyte prefix also must not leak into the next owner request.
+    g_pending_utf8_bytes = std::string("\xF0\x9F", 2);
     Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, id);
     check(g_cancel_requested.load(), "cancellation was lost between segments");
     std::unique_ptr<std::string> cancelled_continuation(
@@ -136,11 +155,12 @@ int main(int argc, char** argv) {
     );
     check(cancelled_continuation->empty(), "cancelled continuation emitted text");
     check(g_last_finish_reason == FINISH_CANCELLED, "cancelled continuation did not report cancellation");
-    check(g_cached_prompt.empty() && !g_continuation_available.load(),
-          "cancelled continuation retained reusable state");
+    check(g_cached_prompt.empty() && !g_continuation_available.load() &&
+          g_pending_utf8_bytes.empty(),
+          "cancelled continuation retained reusable cache or UTF-8 state");
     check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0,
           "post-handoff cancellation contaminated the next owner turn");
     Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(&env,nullptr);
     check(g_cached_prompt.empty(), "unload retained prompt cache");
-    std::cout << "PASS: real native generation, 48-token budget, exact saved-token KV continuation, cache equivalence, context change, chunking, failure, cancellation, unload\n";
+    std::cout << "PASS: real native generation, 48-token budget, two KV continuations, UTF-8 carry, handoff cancellation, cache equivalence, context change, chunking, failure, unload\n";
 }
