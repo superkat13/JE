@@ -7,7 +7,18 @@
 // Only error cases inject a decode failure. All ordinary cases use real llama.cpp.
 static int fail_decode_at = 0;
 static int decode_calls = 0;
+// Check the actual token submitted to llama_decode at the first native continuation
+// boundary. Merely checking that some text came back cannot detect a lost KV token.
+static int expected_resume_token = -1;
+static bool observed_resume_decode = false;
+static bool resume_decode_matched = false;
 static int checked_decode(llama_context* context, llama_batch batch) {
+    if (expected_resume_token >= 0 && !observed_resume_decode) {
+        observed_resume_decode = true;
+        resume_decode_matched = batch.n_tokens == 1 &&
+            batch.token != nullptr && batch.token[0] == expected_resume_token;
+        expected_resume_token = -1;
+    }
     if (fail_decode_at && ++decode_calls == fail_decode_at) return -1;
     return llama_decode(context, batch);
 }
@@ -36,6 +47,19 @@ int main(int argc, char** argv) {
     check(!cold.empty(), "empty cold response");
     check(g_last_generated_token_count == 48, "native bridge truncated requested 48 tokens");
     check(g_last_cached_prompt_tokens == 0, "cold turn reused stale state");
+    check(g_last_finish_reason == FINISH_TOKEN_LIMIT, "fixture did not stop at token ceiling");
+    check(g_continuation_available.load(), "token-limited generation lost continuation lease");
+    const auto saved_resume_token = g_continuation_token.load();
+    check(saved_resume_token != 0, "fixture has an unexpected zero continuation token");
+    expected_resume_token = saved_resume_token;
+    std::unique_ptr<std::string> resumed(Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+        &env, nullptr, id, 4, JNI_TRUE));
+    check(observed_resume_decode, "continuation never decoded a token");
+    check(resume_decode_matched, "continuation decoded the wrong token from the saved KV state");
+    check(g_last_finish_reason != FINISH_DECODE_ERROR &&
+          g_last_finish_reason != FINISH_INVALID_REQUEST, "native continuation failed");
+    check(g_last_generated_token_count > 48 ||
+          g_last_finish_reason == FINISH_END_OF_GENERATION, "continuation made no valid progress");
     const auto cold_ms = g_last_prompt_prefill_duration_ms.load();
     const auto warm = generate(system, user);
     check(warm == cold, "cached reply differs from cold reply");
@@ -81,5 +105,5 @@ int main(int argc, char** argv) {
     check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0, "recovery changed reply");
     Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(&env,nullptr);
     check(g_cached_prompt.empty(), "unload retained prompt cache");
-    std::cout << "PASS: real native generation, 48-token budget, cache equivalence, context change, chunking, failure, cancellation, unload\n";
+    std::cout << "PASS: real native generation, 48-token budget, exact saved-token KV continuation, cache equivalence, context change, chunking, failure, cancellation, unload\n";
 }
