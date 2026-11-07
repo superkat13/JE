@@ -110,6 +110,29 @@ class LocalNativeBrainEngineTest {
         assertTrue(result!!.getOrThrow().provenance.attempts.contains("requested_tokens=7"))
     }
 
+    /**
+     * Failing-first: 48 tokens of output without a native EOS/finish reason
+     * are not proof of a complete answer. Never present clipped prose as done.
+     */
+    @Test fun missingFinishReasonAtTokenCeilingDoesNotBecomeCleanSuccess() {
+        val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
+        val bridge = FakeBridge().apply {
+            answer = "First, examine the request. Second, the result is still"
+            generatedTokens = 48
+        }
+        val engine = LocalNativeBrainEngine(model.absolutePath, bridge = bridge, libraryLoader = {})
+        val latch = CountDownLatch(1)
+        var result: Result<BrainResponse>? = null
+        engine.start(BrainRequest(96L, "give a detailed multi-part answer", twinContextText = "context")) {
+            result = it
+            latch.countDown()
+        }
+        assertTrue(latch.await(2, TimeUnit.SECONDS))
+        val response = result!!.getOrNull()
+        assertTrue("token-limit output without EOS must fail or be explicitly marked incomplete",
+            result!!.isFailure || response?.provenance?.limitation != null)
+    }
+
     @Test fun exactSelfCheckRequiresANativeGeneratedTokenMeasurement() {
         val model = File.createTempFile("sage-test", ".gguf").apply { deleteOnExit() }
         val bridge = FakeBridge().apply {
