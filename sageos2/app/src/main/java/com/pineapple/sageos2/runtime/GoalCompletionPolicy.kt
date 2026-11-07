@@ -30,6 +30,18 @@ object GoalCompletionPolicy {
         "device.screenshot", "device.read_notifications"
     )
 
+    // Temporary explicit finish markers until the native bridge exposes typed
+    // completion reasons. Ordinary provider limitations must not discard a valid answer.
+    private val incompleteGenerationReasons = setOf(
+        "TOKEN_LIMIT", "BYTE_LIMIT", "CONTEXT_EXHAUSTED",
+        "INCOMPLETE_GENERATION", "TRUNCATED_OUTPUT"
+    )
+
+    fun isIncompleteGeneration(limitation: String?): Boolean {
+        val code = limitation?.trim()?.substringBefore(':')?.trim()?.uppercase().orEmpty()
+        return code in incompleteGenerationReasons
+    }
+
     fun assessEvidence(ownerGoal: String, evidence: List<BrainToolExecutionEvidence>): EvidenceAssessment {
         if (evidence.isEmpty()) return EvidenceAssessment(false, "No observed capability result is available.")
         val failure = evidence.firstOrNull { !it.success }
