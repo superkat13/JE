@@ -523,6 +523,35 @@ class SageRuntime(
                     is GoalCompletionPolicy.VerificationResult -> when (verification.status) {
                         GoalCompletionPolicy.VerificationStatus.VERIFIED -> {
                             val rounds = verificationRoundsByTurn[response.turnId] ?: 0
+                            val ownerGoal = ownerGoalByTurn[response.turnId]
+                                ?: taskContinuity?.get(runtimeTaskId(response.turnId))?.metadata?.get("ownerPrompt").orEmpty()
+                            val evidence = executionEvidenceByTurn[response.turnId].orEmpty()
+                            val assessment = GoalCompletionPolicy.assessEvidence(ownerGoal, evidence)
+                            if (!assessment.independentlyVerified) {
+                                observer.onDiagnostic(
+                                    "goal verification rejected ungrounded model assertion: turn=${response.turnId}; ${assessment.reason}"
+                                )
+                                checkpointTurn(
+                                    response.turnId,
+                                    TaskState.WAITING,
+                                    "The Brain claimed goal completion without sufficient observed evidence.",
+                                    "Confirm the actual result with a supported read-only check before declaring the task done.",
+                                    mapOf(
+                                        "phase" to "verification_waiting",
+                                        "verified" to "false",
+                                        "toolCount" to toolCount.toString(),
+                                        "verificationRounds" to rounds.toString()
+                                    )
+                                )
+                                clearGoalRuntimeState(response.turnId)
+                                startupByTurn.remove(response.turnId)
+                                submit(SageEvent.ResponseReady(
+                                    response.turnId,
+                                    assessment.reason + " I saved the unfinished request instead of claiming success.",
+                                    false
+                                ))
+                                return
+                            }
                             checkpointTurn(
                                 response.turnId,
                                 TaskState.COMPLETED,
