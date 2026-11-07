@@ -89,6 +89,9 @@ class AndroidSpeechPort(
             if (diagnosticOwner != null) return@onMain
             stopInput()
             localFallbackAttempted = false
+            // A listening-mode change during speech must not admit a new
+            // microphone while queued TTS still owns playback.
+            if (speechActive || pendingSpeech != null || deferredSpeech.isNotEmpty()) return@onMain
             when (mode) {
                 SageListeningMode.OFF -> Unit
                 SageListeningMode.WAKE_ONLY -> startWake(generation)
@@ -109,7 +112,9 @@ class AndroidSpeechPort(
         main.post {
             if (destroyed) { onComplete(); return@post }
             val pending = PendingSpeech(turnId, text, onComplete)
-            if (diagnosticOwner != null) {
+            // Serialize all TTS through speakNow's single utterance listener.
+            // Never replace the listener or flush the audio queue of an active turn.
+            if (diagnosticOwner != null || speechActive || pendingSpeech != null) {
                 deferredSpeech.addLast(pending)
                 return@post
             }
@@ -122,36 +127,19 @@ class AndroidSpeechPort(
     override fun speakTransient(text: String) {
         main.post {
             if (destroyed || !ttsReady || diagnosticOwner != null) return@post
-            val resumeMode = desiredMode
-            val resumeGeneration = generation
-            stopInput()
-            speechActive = true
-            val id = "transient-${UUID.randomUUID()}"
-            runCatching {
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) = Unit
-                    override fun onError(utteranceId: String?) = onDone(utteranceId)
-                    override fun onDone(utteranceId: String?) {
-                        if (utteranceId != id) return
-                        main.post {
-                            speechActive = false
-                            if (!destroyed && diagnosticOwner == null && desiredMode == resumeMode && generation == resumeGeneration) {
-                                when (resumeMode) {
-                                    SageListeningMode.WAKE_ONLY -> startWake(resumeGeneration)
-                                    SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, resumeGeneration)
-                                    SageListeningMode.OFF -> Unit
-                                }
-                            }
-                        }
-                    }
-                })
-                if (tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) == TextToSpeech.ERROR) {
-                    speechActive = false
-                }
-            }.onFailure {
-                speechActive = false
-                listener?.onSpeechDiagnostic("transient TTS failed: ${it.message ?: it::class.simpleName}")
+            val acknowledgement = PendingSpeech(turnId, text, onComplete = {
+                // Resume the *latest* desired generation exactly once after all
+                // speech finishes, even if the owner changed listening mode
+                // while this acknowledgement was queued or playing.
+                if (!destroyed && diagnosticOwner == null &&
+                    deferredSpeech.isEmpty()) resumeListening()
+            }, isTransient = true)
+            if (speechActive || pendingSpeech != null) {
+                deferredSpeech.addLast(acknowledgement)
+                return@post
             }
+            stopInput()
+            speakNow(acknowledgement)
         }
     }
 
@@ -167,14 +155,27 @@ class AndroidSpeechPort(
                     if (diagnosticOwner == null) pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
                 } else {
                     listener?.onSpeechDiagnostic("TTS initialization failed: $status")
-                    pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+                    completeUnplayableSpeech()
                 }
             }.onFailure { error ->
                 ttsReady = false
                 listener?.onSpeechDiagnostic("TTS init callback failed: ${error.message ?: error::class.simpleName}")
-                pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+                completeUnplayableSpeech()
             }
         }
+    }
+
+    private fun completeUnplayableSpeech() {
+        // Failed TTS initialization cannot leave queued turns pending forever.
+        // Transient speech is never admitted before readiness, so these are
+        // normal turn callbacks, which must all complete exactly once.
+        val failed = ArrayList<PendingSpeech>()
+        pendingSpeech?.also { pendingSpeech = null; failed += it }
+        while (deferredSpeech.isNotEmpty()) failed += deferredSpeech.removeFirst()
+        // Clear queue ownership BEFORE callbacks: the coordinator may respond
+        // synchronously with setListening, which must not see stale queued TTS.
+        // Callbacks themselves choose the next mode, so do not resume twice.
+        failed.forEach { it.onComplete() }
     }
 
     /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
@@ -231,6 +232,7 @@ class AndroidSpeechPort(
                 override fun onError(utteranceId: String?) {
                     if (utteranceId != null && utteranceId in activeIds) {
                         main.post {
+                            listener?.onSpeechDiagnostic("TTS utterance failed or was interrupted: $utteranceId")
                             runCatching { tts?.stop() }
                             completeOnce()
                         }
@@ -686,7 +688,8 @@ class AndroidSpeechPort(
     }
 
     private fun resumeListening() {
-        if (destroyed || diagnosticOwner != null || speechActive || pendingSpeech != null) return
+        if (destroyed || diagnosticOwner != null || speechActive ||
+            pendingSpeech != null || deferredSpeech.isNotEmpty()) return
         when (desiredMode) {
             SageListeningMode.WAKE_ONLY -> startWake(generation)
             SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, generation)
@@ -699,7 +702,9 @@ class AndroidSpeechPort(
         val pending = deferredSpeech.pollFirst() ?: return false
         val resumed = pending.copy(onComplete = {
             pending.onComplete()
-            if (deferredSpeech.isEmpty()) resumeListening()
+            // Transient speech already owns a generation-guarded resume callback.
+            // Invoking a second one starts wake/recognition twice.
+            if (deferredSpeech.isEmpty() && !pending.isTransient) resumeListening()
         })
         stopInput()
         if (ttsReady) speakNow(resumed) else pendingSpeech = resumed
@@ -728,7 +733,12 @@ class AndroidSpeechPort(
         }
     }
 
-    private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
+    private data class PendingSpeech(
+        val turnId: Long,
+        val text: String,
+        val onComplete: () -> Unit,
+        val isTransient: Boolean = false
+    )
 
     override fun resetRecognizer(reason: String) {
         resetRecognizer(reason) {}

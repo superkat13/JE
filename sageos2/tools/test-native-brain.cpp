@@ -7,7 +7,18 @@
 // Only error cases inject a decode failure. All ordinary cases use real llama.cpp.
 static int fail_decode_at = 0;
 static int decode_calls = 0;
+// Check the actual token submitted to llama_decode at the first native continuation
+// boundary. Merely checking that some text came back cannot detect a lost KV token.
+static int expected_resume_token = -1;
+static bool observed_resume_decode = false;
+static bool resume_decode_matched = false;
 static int checked_decode(llama_context* context, llama_batch batch) {
+    if (expected_resume_token >= 0 && !observed_resume_decode) {
+        observed_resume_decode = true;
+        resume_decode_matched = batch.n_tokens == 1 &&
+            batch.token != nullptr && batch.token[0] == expected_resume_token;
+        expected_resume_token = -1;
+    }
     if (fail_decode_at && ++decode_calls == fail_decode_at) return -1;
     return llama_decode(context, batch);
 }
@@ -20,6 +31,23 @@ static void check(bool ok, const char* message) {
 }
 int main(int argc, char** argv) {
     if (argc != 2) return 2;
+    // Verify UTF-8 bridging without relying on the host JNI shim's byte-copy behavior.
+    std::string complete, tail;
+    const std::string pineapple = std::string("\xF0\x9F\x8D\x8D", 4);
+    check(split_complete_utf8(std::string("Sage ") + pineapple.substr(0, 1), complete, tail),
+          "UTF-8 first segment rejected");
+    check(complete == "Sage " && tail == pineapple.substr(0, 1),
+          "first UTF-8 segment exposed a partial codepoint");
+    check(split_complete_utf8(tail + pineapple.substr(1, 2), complete, tail),
+          "UTF-8 middle segment rejected");
+    check(complete.empty() && tail == pineapple.substr(0, 3),
+          "UTF-8 middle segment lost carry bytes");
+    check(split_complete_utf8(tail + pineapple.substr(3) + "!", complete, tail),
+          "UTF-8 final segment rejected");
+    check(complete == pineapple + "!" && tail.empty(),
+          "UTF-8 continuation did not reconstruct the whole character");
+    check(!split_complete_utf8(std::string("\xC0", 1), complete, tail),
+          "invalid UTF-8 overlong lead was accepted");
     JNIEnv env;
     std::string path(argv[1]);
     auto load = [&] { check(Java_com_pineapple_sage_SageBrainManager_nativeLoadModel(&env, nullptr, &path), "fixture load failed"); };
@@ -36,6 +64,36 @@ int main(int argc, char** argv) {
     check(!cold.empty(), "empty cold response");
     check(g_last_generated_token_count == 48, "native bridge truncated requested 48 tokens");
     check(g_last_cached_prompt_tokens == 0, "cold turn reused stale state");
+    check(g_last_finish_reason == FINISH_TOKEN_LIMIT, "fixture did not stop at token ceiling");
+    check(g_continuation_available.load(), "token-limited generation lost continuation lease");
+    const auto saved_resume_token = g_continuation_token.load();
+    check(saved_resume_token != 0, "fixture has an unexpected zero continuation token");
+    expected_resume_token = saved_resume_token;
+    std::unique_ptr<std::string> resumed(Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+        &env, nullptr, id, 4, JNI_TRUE));
+    check(observed_resume_decode, "continuation never decoded a token");
+    check(resume_decode_matched, "continuation decoded the wrong token from the saved KV state");
+    check(g_last_finish_reason != FINISH_DECODE_ERROR &&
+          g_last_finish_reason != FINISH_INVALID_REQUEST, "native continuation failed");
+    check(g_last_generated_token_count > 48 ||
+          g_last_finish_reason == FINISH_END_OF_GENERATION, "continuation made no valid progress");
+    // Repeat across a second segment, not just the first 48-token boundary.
+    // A later pass must preserve its own pending sample token as well.
+    if (g_last_finish_reason == FINISH_TOKEN_LIMIT) {
+        const auto second_resume_token = g_continuation_token.load();
+        expected_resume_token = second_resume_token;
+        observed_resume_decode = false;
+        resume_decode_matched = false;
+        std::unique_ptr<std::string> second_resumed(
+            Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+                &env, nullptr, id, 4, JNI_TRUE
+            )
+        );
+        check(observed_resume_decode, "second continuation never decoded a token");
+        check(resume_decode_matched, "second continuation decoded a stale or cleared token");
+        check(g_last_finish_reason != FINISH_INVALID_REQUEST &&
+              g_last_finish_reason != FINISH_DECODE_ERROR, "second native continuation failed");
+    }
     const auto cold_ms = g_last_prompt_prefill_duration_ms.load();
     const auto warm = generate(system, user);
     check(warm == cold, "cached reply differs from cold reply");
@@ -79,7 +137,44 @@ int main(int argc, char** argv) {
     check(cancelled.empty() && g_last_error.find("cancel") != std::string::npos, "cancellation failed");
     check(g_cached_prompt.empty(), "cancelled state reused");
     check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0, "recovery changed reply");
+    // Cancellation between two native segments must not be discarded just
+    // because g_active_request_id has returned to zero.
+    const auto before_handoff_cancel = generate(system, user);
+    check(!before_handoff_cancel.empty() && g_last_finish_reason == FINISH_TOKEN_LIMIT,
+          "fixture did not expose a continuation handoff for cancellation");
+    check(g_active_request_id == 0 && g_continuation_available.load(),
+          "fixture was not between native continuation segments");
+    // A pending multibyte prefix also must not leak into the next owner request.
+    g_pending_utf8_bytes = std::string("\xF0\x9F", 2);
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, id);
+    check(g_cancel_request_id.load() == id, "cancellation was lost between segments");
+    std::unique_ptr<std::string> cancelled_continuation(
+        Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+            &env, nullptr, id, 4, JNI_TRUE
+        )
+    );
+    check(cancelled_continuation->empty(), "cancelled continuation emitted text");
+    check(g_last_finish_reason == FINISH_CANCELLED, "cancelled continuation did not report cancellation");
+    check(g_cached_prompt.empty() && !g_continuation_available.load() &&
+          g_pending_utf8_bytes.empty(),
+          "cancelled continuation retained reusable cache or UTF-8 state");
+    check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0,
+          "post-handoff cancellation contaminated the next owner turn");
+    // Simulate the narrow activation handoff where active ID and continuation
+    // lease can both be unavailable to separate atomic readers. The matching
+    // logical ID must still retain the cancellation; a stale ID must not.
+    const long long handoff_id = id;
+    g_active_request_id.store(0);
+    g_continuation_available.store(false);
+    g_cancel_request_id.store(0);
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, handoff_id);
+    check(g_cancel_request_id.load() == handoff_id,
+          "cancellation lost when active and lease atomics were both unavailable");
+    g_cancel_request_id.store(0);
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, handoff_id - 1);
+    check(g_cancel_request_id.load() == 0,
+          "stale cancellation was accepted for another owner's request");
     Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(&env,nullptr);
     check(g_cached_prompt.empty(), "unload retained prompt cache");
-    std::cout << "PASS: real native generation, 48-token budget, cache equivalence, context change, chunking, failure, cancellation, unload\n";
+    std::cout << "PASS: real native generation, 48-token budget, two KV continuations, UTF-8 carry, handoff cancellation, cache equivalence, context change, chunking, failure, unload\n";
 }
