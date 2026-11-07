@@ -34,6 +34,7 @@ class PersistentRuntimeObserver(private val traces: SharedPreferencesTraceStore)
                 progress.telemetry?.generatedTokens?.let { put("generated_tokens", it.toString()) }
                 progress.telemetry?.promptPrefillMs?.let { put("prefill_ms", it.toString()) }
                 progress.telemetry?.firstTokenMs?.let { put("first_token_ms", it.toString()) }
+                progress.telemetry?.finishReason?.let { put("finish_reason", it) }
             }
         )
     }

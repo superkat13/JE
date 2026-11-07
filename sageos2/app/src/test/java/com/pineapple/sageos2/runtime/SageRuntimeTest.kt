@@ -297,6 +297,9 @@ class SageRuntimeTest {
         assertFalse(request.twinContextText?.contains("Self restrictions: (none)") == true)
         assertFalse(request.twinContextText?.contains("SAGE TOOL CONTRACT") == true)
         assertFalse(request.twinContextText?.contains("ACTIVE / RECOVERABLE TASKS") == true)
+        assertEquals(40, request.maxOutputTokens)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, request.maxCompletionTokens)
+        assertEquals(120_000L, request.responseTimeoutMs)
     }
 
     @Test fun deepBrainReceivesCoreOwnerMemoryHistoryAndExactCurrentWordingTogether() {
@@ -428,7 +431,11 @@ class SageRuntimeTest {
         assertTrue(f.brain.requests[3].twinContextText.orEmpty().contains("device.tap_label label=Private browsing"))
         f.brain.respond(3, "${GoalCompletionPolicy.VERIFIED_MARKER}\nFirefox is ready.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals("Firefox is ready.", f.observer.textResponses.last().second)
+        val startupOutcome = f.observer.textResponses.last().second
+        assertFalse("launch acknowledgement is not observed foreground state",
+            startupOutcome == "Firefox is ready.")
+        assertTrue(startupOutcome.contains("not independently observed"))
+        assertEquals(2, capability.actions.size)
         f.runtime.submit(SageEvent.TextSubmitted("Tell me something"))
         assertFalse(f.brain.requests.last().twinContextText.orEmpty().contains("OWNER APP STARTUP"))
     }
@@ -553,10 +560,11 @@ class SageRuntimeTest {
 
         f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nRoot is alive and answering through the broker.")
         waitUntil { f.observer.textResponses.isNotEmpty() }
-        assertEquals(
-            "Root is alive and answering through the broker.",
-            f.observer.textResponses.last().second
-        )
+        val execOutcome = f.observer.textResponses.last().second
+        assertFalse("generic root.exec success is not typed postcondition evidence",
+            execOutcome == "Root is alive and answering through the broker.")
+        assertTrue(execOutcome.contains("not independently observed"))
+        assertEquals(1, capability.actions.size)
         assertTrue(f.speech.spoken.isEmpty())
     }
 

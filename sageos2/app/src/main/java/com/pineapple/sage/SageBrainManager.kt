@@ -13,7 +13,13 @@ class SageBrainManager {
         maxTokens: Int,
         deterministic: Boolean
     ): String
+    external fun nativeContinueGeneration(
+        requestId: Long,
+        maxAdditionalTokens: Int,
+        deterministic: Boolean
+    ): String
     external fun nativeCancelGeneration(requestId: Long)
+    external fun nativeLastFinishReason(): String
     external fun nativeLastFirstTokenLatencyMs(): Long
     external fun nativeLastGenerationDurationMs(): Long
     external fun nativeLastPromptPrefillDurationMs(): Long

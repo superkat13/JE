@@ -378,7 +378,8 @@ class SageRuntime(
         val baseProfile = BrainRequestPolicy.forPrompt(prompt, coldStart = coldStart)
         val requestProfile = if (startup == null) baseProfile else baseProfile.copy(outputTokens = 48)
         observer.onDiagnostic(
-            "brain request profile: cold=$coldStart budget=${requestProfile.combinedCharacterBudget} output=${requestProfile.outputTokens}"
+            "brain request profile: cold=$coldStart budget=${requestProfile.combinedCharacterBudget} " +
+                "output=${requestProfile.outputTokens} completion=${requestProfile.completionTokenLimit}"
         )
         val core = sageCore.current()
         val memory = twinMemory.snapshot()
@@ -448,6 +449,8 @@ class SageRuntime(
             mode = mode.takeIf { requestProfile.includeTwinContext },
             twinContextText = context,
             maxOutputTokens = requestProfile.outputTokens,
+            maxCompletionTokens = requestProfile.completionTokenLimit,
+            responseTimeoutMs = brainResponseTimeoutMs,
             deterministic = requestProfile.deterministic,
             expectedLiteral = requestProfile.expectedLiteral,
             onProgress = { onBrainProgress(it, attempt) }

@@ -15,6 +15,7 @@ class BrainRequestPolicyTest {
         assertFalse(profile.includeToolContext)
         assertFalse(profile.includeTaskContext)
         assertTrue(profile.outputTokens in 4..12)
+        assertEquals(profile.outputTokens, profile.completionTokenLimit)
         assertEquals(320, profile.combinedCharacterBudget)
     }
 
@@ -22,6 +23,7 @@ class BrainRequestPolicyTest {
         val ordinary = BrainRequestPolicy.forPrompt("Can you hear me?")
         assertEquals(1_600, ordinary.combinedCharacterBudget)
         assertEquals(40, ordinary.outputTokens)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, ordinary.completionTokenLimit)
         assertTrue(ordinary.deterministic)
         assertTrue(ordinary.includeTwinContext)
         assertFalse(ordinary.includeToolContext)
@@ -36,6 +38,7 @@ class BrainRequestPolicyTest {
         val personal = BrainRequestPolicy.forPrompt("Do you remember what I said earlier?")
         assertEquals(2_000, personal.combinedCharacterBudget)
         assertEquals(48, personal.outputTokens)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, personal.completionTokenLimit)
         assertFalse(personal.deterministic)
         assertFalse(personal.includeToolContext)
         assertFalse(personal.includeTaskContext)
@@ -48,6 +51,7 @@ class BrainRequestPolicyTest {
     @Test fun actionAndContinuationContextAreOptIn() {
         val action = BrainRequestPolicy.forPrompt("Could you open Firefox for me?")
         assertEquals(2_000, action.combinedCharacterBudget)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, action.completionTokenLimit)
         assertTrue(action.includeToolContext)
         assertFalse(action.includeTaskContext)
         assertEquals(1_200, BrainRequestPolicy.forPrompt("Could you open Firefox for me?", coldStart = true).combinedCharacterBudget)
@@ -108,6 +112,7 @@ class BrainRequestPolicyTest {
         assertFalse(warm.deterministic)
         assertEquals(2_200, warm.combinedCharacterBudget)
         assertEquals(48, warm.outputTokens)
+        assertEquals(BrainRequestPolicy.COMPLETION_TOKEN_LIMIT, warm.completionTokenLimit)
 
         val cold = BrainRequestPolicy.forPrompt(prompt, coldStart = true)
         assertEquals(1_400, cold.combinedCharacterBudget)

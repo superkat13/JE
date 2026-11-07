@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicReference
 class LocalNativeBrainEngine(
     private val modelPath: String,
     private val maxTokens: Int = 48,
+    private val maxCompletionTokens: Int = 128,
+    private val completionGuardMs: Long = 5_000L,
     private val bridge: NativeBrainBridge = JniNativeBrainBridge(),
     private val libraryLoader: () -> Unit = { System.loadLibrary("sage-brain") }
 ) : BrainEngine {
@@ -60,6 +62,7 @@ class LocalNativeBrainEngine(
     }
 
     override fun start(request: BrainRequest, callback: (Result<BrainResponse>) -> Unit): BrainJob {
+        val requestStartedAtNs = System.nanoTime()
         val cancelled = AtomicBoolean(false)
         val completionSent = AtomicBoolean(false)
         var future: Future<*>? = null
@@ -112,6 +115,15 @@ class LocalNativeBrainEngine(
                 val systemPrompt = request.twinContextText.orEmpty()
                 val userPrompt = request.prompt
                 val requestedTokens = (request.maxOutputTokens ?: maxTokens).coerceIn(1, maxTokens)
+                val completionTokenLimit = (request.maxCompletionTokens ?: requestedTokens)
+                    .coerceIn(requestedTokens, maxOf(requestedTokens, maxCompletionTokens))
+                val responseWindowMs = (request.responseTimeoutMs ?: DEFAULT_RESPONSE_WINDOW_MS)
+                    .coerceAtLeast(1L)
+                val completionDeadlineNs = requestStartedAtNs +
+                    TimeUnit.MILLISECONDS.toNanos(responseWindowMs) -
+                    TimeUnit.MILLISECONDS.toNanos(completionGuardMs)
+                val expectedLiteral = request.expectedLiteral
+                val allowContinuation = expectedLiteral == null && completionTokenLimit > requestedTokens
                 val lastReported = AtomicReference(BrainProgressStage.READING_CONTEXT)
                 val lastReportedTokens = AtomicLong(-1L)
                 val lastReportedPrefillMs = AtomicLong(-1L)
@@ -133,24 +145,107 @@ class LocalNativeBrainEngine(
                         }
                     }
                 }, 100L, 350L, TimeUnit.MILLISECONDS)
-                val rawText = try {
-                    bridge.generate(
+                var rawText = ""
+                var finishReason = BrainFinishReason.UNKNOWN
+                var continuationPasses = 0
+                var completionTokens = 0
+                var stoppedByTimeGuard = false
+                var stoppedByCompletionLimit = false
+                try {
+                    rawText = bridge.generate(
                         requestId = request.turnId,
                         systemPrompt = systemPrompt,
                         userPrompt = userPrompt,
                         maxTokens = requestedTokens,
                         deterministic = request.deterministic
                     )
+                    finishReason = safeFinishReason()
+                    completionTokens = safeInt { bridge.generatedTokenCount() }.coerceAtLeast(0)
+                    while (!cancelled.get() &&
+                        allowContinuation &&
+                        finishReason == BrainFinishReason.TOKEN_LIMIT &&
+                        completionTokens < completionTokenLimit
+                    ) {
+                        val remainingWindowMs = TimeUnit.NANOSECONDS.toMillis(
+                            completionDeadlineNs - System.nanoTime()
+                        )
+                        val throughput = conservativeTokensPerSecond(completionTokens)
+                        val affordable = affordableCompletionTokens(remainingWindowMs, throughput)
+                        val remainingCompletionTokens = completionTokenLimit - completionTokens
+                        if (affordable <= 0) {
+                            stoppedByTimeGuard = true
+                            break
+                        }
+                        val additionalTokens = minOf(remainingCompletionTokens, affordable)
+                        if (additionalTokens < MIN_CONTINUATION_TOKENS &&
+                            remainingCompletionTokens >= MIN_CONTINUATION_TOKENS
+                        ) {
+                            stoppedByTimeGuard = true
+                            break
+                        }
+                        val priorTokens = completionTokens
+                        rawText += bridge.continueGeneration(
+                            requestId = request.turnId,
+                            maxAdditionalTokens = additionalTokens,
+                            deterministic = request.deterministic
+                        )
+                        continuationPasses += 1
+                        val reportedTokens = safeInt { bridge.generatedTokenCount() }
+                        if (reportedTokens > completionTokens) completionTokens = reportedTokens
+                        finishReason = safeFinishReason()
+                        if (finishReason == BrainFinishReason.TOKEN_LIMIT) {
+                            if (completionTokens <= priorTokens) {
+                                stoppedByTimeGuard = true
+                                break
+                            }
+                            if (completionTokens >= completionTokenLimit) {
+                                stoppedByCompletionLimit = true
+                                break
+                            }
+                        }
+                    }
+                    if (finishReason == BrainFinishReason.TOKEN_LIMIT &&
+                        completionTokens >= completionTokenLimit
+                    ) {
+                        stoppedByCompletionLimit = true
+                    }
                 } finally {
                     progressMonitor.cancel(false)
                 }
-                val text = BrainOutputCleaner.clean(rawText)
+                var text = BrainOutputCleaner.clean(rawText)
                 val elapsed = (System.nanoTime() - started) / 1_000_000L
                 lastLatency.set(elapsed)
                 if (cancelled.get()) return@submit
                 val generatedTokens = safeInt { bridge.generatedTokenCount() }
-                val expectedLiteral = request.expectedLiteral
-                if (expectedLiteral != null && generatedTokens <= 0) {
+                val unknownFinishAtCeiling = finishReason in setOf(
+                    BrainFinishReason.UNKNOWN,
+                    BrainFinishReason.NOT_STARTED
+                ) && requestedTokens > 0 && generatedTokens >= requestedTokens
+                val budgetLimited = finishReason == BrainFinishReason.TOKEN_LIMIT ||
+                    finishReason == BrainFinishReason.OUTPUT_LIMIT ||
+                    finishReason == BrainFinishReason.CONTEXT_LIMIT ||
+                    unknownFinishAtCeiling
+                val naturalCompletion = !unknownFinishAtCeiling && (
+                    finishReason == BrainFinishReason.END_OF_GENERATION ||
+                        finishReason == BrainFinishReason.UNKNOWN ||
+                        finishReason == BrainFinishReason.NOT_STARTED
+                    )
+                val toolResponse = BrainReplyCompletion.startsToolBlock(text)
+                if (finishReason == BrainFinishReason.CANCELLED) {
+                    complete(Result.failure(BrainFailureException(
+                        kind = BrainFailureKind.CANCELLED,
+                        engineName = name,
+                        message = "local Brain request was cancelled ${telemetryDetail()}"
+                    )))
+                } else if (finishReason == BrainFinishReason.DECODE_ERROR ||
+                    finishReason == BrainFinishReason.INVALID_REQUEST
+                ) {
+                    complete(Result.failure(BrainFailureException(
+                        kind = BrainFailureKind.MODEL_ERROR,
+                        engineName = name,
+                        message = "native Brain stopped with finish_reason=$finishReason ${telemetryDetail()}"
+                    )))
+                } else if (expectedLiteral != null && generatedTokens <= 0) {
                     complete(Result.failure(BrainFailureException(
                         kind = BrainFailureKind.MODEL_ERROR,
                         engineName = name,
@@ -172,7 +267,37 @@ class LocalNativeBrainEngine(
                             "native Brain returned only hidden reasoning or model-control text ${telemetryDetail()}"
                         }
                     )))
+                } else if (budgetLimited && toolResponse && !BrainReplyCompletion.isCompleteToolBlock(text)) {
+                    complete(Result.failure(BrainFailureException(
+                        kind = BrainFailureKind.MODEL_ERROR,
+                        engineName = name,
+                        message = "native Brain reached its completion guard before finishing a SAGE_TOOL response; no action was taken ${telemetryDetail()}"
+                    )))
                 } else {
+                    var limitation: String? = null
+                    if (budgetLimited && !toolResponse) {
+                        val completePrefix = BrainReplyCompletion.completePrefix(text)
+                        if (completePrefix == null) {
+                            complete(Result.failure(BrainFailureException(
+                                kind = BrainFailureKind.MODEL_ERROR,
+                                engineName = name,
+                                message = "native Brain reached its completion guard before a complete sentence; no partial reply was shown ${telemetryDetail()}"
+                            )))
+                            return@submit
+                        }
+                        val reasonCode = when {
+                            finishReason == BrainFinishReason.OUTPUT_LIMIT -> "BYTE_LIMIT"
+                            finishReason == BrainFinishReason.CONTEXT_LIMIT -> "CONTEXT_EXHAUSTED"
+                            stoppedByTimeGuard -> "INCOMPLETE_GENERATION"
+                            else -> "TOKEN_LIMIT"
+                        }
+                        if (completePrefix != text) {
+                            text = completePrefix
+                            limitation = "$reasonCode: Reply reached the local completion guard; returned the last complete sentence."
+                        } else {
+                            limitation = "$reasonCode: Reply ended at the local completion guard after a complete sentence."
+                        }
+                    }
                     lastError = null
                     complete(Result.success(BrainResponse(
                         turnId = request.turnId,
@@ -182,8 +307,20 @@ class LocalNativeBrainEngine(
                             engine = name,
                             provider = "on-device",
                             model = File(modelPath).name,
+                            limitation = limitation,
                             attempts = listOf(
                                 "native_stage=${safeStage()}",
+                                "finish_reason=$finishReason",
+                                "natural_completion=$naturalCompletion",
+                                "continuation_passes=$continuationPasses",
+                                "completion_tokens=$completionTokens",
+                                "completion_limit=$completionTokenLimit",
+                                "completion_guard=${when {
+                                    stoppedByCompletionLimit -> "token_limit"
+                                    stoppedByTimeGuard -> "time_guard"
+                                    finishReason == BrainFinishReason.END_OF_GENERATION -> "eog"
+                                    else -> "none"
+                                }}",
                                 "first_token_ms=${safeLong { bridge.firstTokenLatencyMs() }}",
                                 "generation_ms=${safeLong { bridge.generationDurationMs() }}",
                                 "prefill_ms=${safeLong { bridge.promptPrefillDurationMs() }}",
@@ -244,6 +381,13 @@ class LocalNativeBrainEngine(
     }
 
     private fun safeStage() = if (libraryReady.get()) runCatching { bridge.stage().trim() }.getOrDefault("") else "not_loaded"
+    private fun safeFinishReason(): String = if (libraryReady.get()) {
+        runCatching { bridge.finishReason().trim() }
+            .getOrDefault(BrainFinishReason.UNKNOWN)
+            .ifBlank { BrainFinishReason.UNKNOWN }
+    } else {
+        BrainFinishReason.UNKNOWN
+    }
     private inline fun safeLong(block: () -> Long) = if (libraryReady.get()) runCatching(block).getOrDefault(-1L) else -1L
     private inline fun safeInt(block: () -> Int) = if (libraryReady.get()) runCatching(block).getOrDefault(-1) else -1
     private inline fun safeFloat(block: () -> Float) = if (libraryReady.get()) runCatching(block).getOrDefault(-1f) else -1f
@@ -265,15 +409,31 @@ class LocalNativeBrainEngine(
             promptPrefillMs = safeLong { bridge.promptPrefillDurationMs() }.takeIf { it >= 0L },
             firstTokenMs = safeLong { bridge.firstTokenLatencyMs() }.takeIf { it >= 0L },
             generationMs = safeLong { bridge.generationDurationMs() }.takeIf { it >= 0L },
-            promptTokensPerSecond = safeFloat { bridge.promptTokensPerSecond() }.takeIf { it >= 0f }
+            promptTokensPerSecond = safeFloat { bridge.promptTokensPerSecond() }.takeIf { it >= 0f },
+            finishReason = safeFinishReason().takeIf { it != BrainFinishReason.UNKNOWN }
         )
     }
 
     private fun telemetryDetail(): String = telemetry()?.let { telemetry ->
         "[stage=${telemetry.nativeStage ?: "unknown"}, prompt_tokens=${telemetry.promptTokens ?: -1}, " +
             "generated_tokens=${telemetry.generatedTokens ?: -1}, prefill_ms=${telemetry.promptPrefillMs ?: -1}, " +
-            "first_token_ms=${telemetry.firstTokenMs ?: -1}]"
+            "first_token_ms=${telemetry.firstTokenMs ?: -1}, " +
+            "finish_reason=${telemetry.finishReason ?: BrainFinishReason.UNKNOWN}]"
     } ?: "[stage=not_loaded]"
+
+    private fun conservativeTokensPerSecond(generatedTokens: Int): Double {
+        val durationMs = safeLong { bridge.generationDurationMs() }
+        if (generatedTokens <= 0 || durationMs <= 0L) return 0.0
+        val measured = generatedTokens * 1000.0 / durationMs
+        if (!measured.isFinite() || measured <= 0.0) return 0.0
+        return measured.coerceIn(0.1, 20.0) * 0.75
+    }
+
+    private fun affordableCompletionTokens(remainingWindowMs: Long, tokensPerSecond: Double): Int {
+        if (remainingWindowMs <= MIN_CONTINUATION_WINDOW_MS || tokensPerSecond <= 0.0) return 0
+        val seconds = (remainingWindowMs - MIN_CONTINUATION_WINDOW_MS) / 1000.0
+        return (seconds * tokensPerSecond).toInt().coerceAtLeast(0)
+    }
 
     private fun reportProgress(
         request: BrainRequest,
@@ -287,5 +447,11 @@ class LocalNativeBrainEngine(
     private fun completedJob(turnId: Long) = object : BrainJob {
         override val turnId: Long = turnId
         override fun cancel() = Unit
+    }
+
+    private companion object {
+        const val DEFAULT_RESPONSE_WINDOW_MS = 120_000L
+        const val MIN_CONTINUATION_TOKENS = 4
+        const val MIN_CONTINUATION_WINDOW_MS = 2_000L
     }
 }
