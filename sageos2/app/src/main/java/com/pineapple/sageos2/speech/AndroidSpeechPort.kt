@@ -109,7 +109,9 @@ class AndroidSpeechPort(
         main.post {
             if (destroyed) { onComplete(); return@post }
             val pending = PendingSpeech(turnId, text, onComplete)
-            if (diagnosticOwner != null) {
+            // Serialize all TTS through speakNow's single utterance listener.
+            // Never replace the listener or flush the audio queue of an active turn.
+            if (diagnosticOwner != null || speechActive || pendingSpeech != null) {
                 deferredSpeech.addLast(pending)
                 return@post
             }
@@ -124,34 +126,20 @@ class AndroidSpeechPort(
             if (destroyed || !ttsReady || diagnosticOwner != null) return@post
             val resumeMode = desiredMode
             val resumeGeneration = generation
-            stopInput()
-            speechActive = true
-            val id = "transient-${UUID.randomUUID()}"
-            runCatching {
-                tts?.setOnUtteranceProgressListener(object : UtteranceProgressListener() {
-                    override fun onStart(utteranceId: String?) = Unit
-                    override fun onError(utteranceId: String?) = onDone(utteranceId)
-                    override fun onDone(utteranceId: String?) {
-                        if (utteranceId != id) return
-                        main.post {
-                            speechActive = false
-                            if (!destroyed && diagnosticOwner == null && desiredMode == resumeMode && generation == resumeGeneration) {
-                                when (resumeMode) {
-                                    SageListeningMode.WAKE_ONLY -> startWake(resumeGeneration)
-                                    SageListeningMode.COMMAND, SageListeningMode.FOLLOW_UP -> startRecognition(turnId, resumeGeneration)
-                                    SageListeningMode.OFF -> Unit
-                                }
-                            }
-                        }
-                    }
-                })
-                if (tts?.speak(text, TextToSpeech.QUEUE_FLUSH, null, id) == TextToSpeech.ERROR) {
-                    speechActive = false
-                }
-            }.onFailure {
-                speechActive = false
-                listener?.onSpeechDiagnostic("transient TTS failed: ${it.message ?: it::class.simpleName}")
+            val acknowledgement = PendingSpeech(turnId, text) {
+                // Completing an acknowledgement must not resume the microphone
+                // until the entire queued speech sequence has finished.
+                if (!destroyed && diagnosticOwner == null &&
+                    desiredMode == resumeMode && generation == resumeGeneration &&
+                    deferredSpeech.isEmpty()
+                ) resumeListening()
             }
+            if (speechActive || pendingSpeech != null) {
+                deferredSpeech.addLast(acknowledgement)
+                return@post
+            }
+            stopInput()
+            speakNow(acknowledgement)
         }
     }
 
@@ -231,6 +219,7 @@ class AndroidSpeechPort(
                 override fun onError(utteranceId: String?) {
                     if (utteranceId != null && utteranceId in activeIds) {
                         main.post {
+                            listener?.onSpeechDiagnostic("TTS utterance failed or was interrupted: $utteranceId")
                             runCatching { tts?.stop() }
                             completeOnce()
                         }
