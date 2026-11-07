@@ -60,6 +60,23 @@ int main(int argc, char** argv) {
           g_last_finish_reason != FINISH_INVALID_REQUEST, "native continuation failed");
     check(g_last_generated_token_count > 48 ||
           g_last_finish_reason == FINISH_END_OF_GENERATION, "continuation made no valid progress");
+    // Repeat across a second segment, not just the first 48-token boundary.
+    // A later pass must preserve its own pending sample token as well.
+    if (g_last_finish_reason == FINISH_TOKEN_LIMIT) {
+        const auto second_resume_token = g_continuation_token.load();
+        expected_resume_token = second_resume_token;
+        observed_resume_decode = false;
+        resume_decode_matched = false;
+        std::unique_ptr<std::string> second_resumed(
+            Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
+                &env, nullptr, id, 4, JNI_TRUE
+            )
+        );
+        check(observed_resume_decode, "second continuation never decoded a token");
+        check(resume_decode_matched, "second continuation decoded a stale or cleared token");
+        check(g_last_finish_reason != FINISH_INVALID_REQUEST &&
+              g_last_finish_reason != FINISH_DECODE_ERROR, "second native continuation failed");
+    }
     const auto cold_ms = g_last_prompt_prefill_duration_ms.load();
     const auto warm = generate(system, user);
     check(warm == cold, "cached reply differs from cold reply");
