@@ -684,6 +684,12 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
             ))
     );
 
+    // Read the final sampled token BEFORE invalidating the old continuation lease.
+    // That token has not been decoded yet; it must be the first token of the next
+    // batch. Clearing the global first would silently resume from token ID zero.
+    const llama_token resume_token = static_cast<llama_token>(
+            g_continuation_token.load(std::memory_order_acquire)
+    );
     g_last_finish_reason.store(FINISH_NOT_STARTED, std::memory_order_release);
     invalidate_continuation_locked();
     g_last_error.clear();
@@ -702,9 +708,7 @@ Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
         }
     } request_guard;
 
-    llama_token token = static_cast<llama_token>(
-            g_continuation_token.load(std::memory_order_acquire)
-    );
+    llama_token token = resume_token;
     llama_batch batch = llama_batch_get_one(&token, 1);
     llama_sampler * sampler = create_sampler(deterministic == JNI_TRUE);
     const auto continuation_start = std::chrono::steady_clock::now();
