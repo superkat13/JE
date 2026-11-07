@@ -242,12 +242,16 @@ class AndroidSpeechPortSpeakTest {
             }
         )
         idle()
+        AndroidSpeechPort::class.java.getDeclaredField("ttsReady").apply {
+            isAccessible = true
+        }.setBoolean(port!!, false)
         // Simulate the turn coordinator reacting synchronously to a failed
         // wake acknowledgement by requesting wake listening.
         port!!.speak(22L, "Acknowledged.") {
             port!!.setListening(SageListeningMode.WAKE_ONLY, 27L, 22L)
         }
         idle()
+        assertEquals("the callback must wait until initialization fails", 0, wakeStarts)
         port!!.onInit(TextToSpeech.ERROR)
         idle()
         assertEquals("the owner's completion callback already restarted listening", 1, wakeStarts)
