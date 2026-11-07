@@ -169,11 +169,13 @@ class AndroidSpeechPort(
         // Failed TTS initialization cannot leave queued turns pending forever.
         // Transient speech is never admitted before readiness, so these are
         // normal turn callbacks, which must all complete exactly once.
-        pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
-        while (deferredSpeech.isNotEmpty()) deferredSpeech.removeFirst().onComplete()
-        // Owner turn callbacks already drive the coordinator's next listening
-        // state (and may synchronously call setListening). An unconditional
-        // resumeListening here would start a second microphone capture.
+        val failed = ArrayList<PendingSpeech>()
+        pendingSpeech?.also { pendingSpeech = null; failed += it }
+        while (deferredSpeech.isNotEmpty()) failed += deferredSpeech.removeFirst()
+        // Clear queue ownership BEFORE callbacks: the coordinator may respond
+        // synchronously with setListening, which must not see stale queued TTS.
+        // Callbacks themselves choose the next mode, so do not resume twice.
+        failed.forEach { it.onComplete() }
     }
 
     /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
