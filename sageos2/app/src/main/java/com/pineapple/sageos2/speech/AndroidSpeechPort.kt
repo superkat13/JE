@@ -129,14 +129,14 @@ class AndroidSpeechPort(
             if (destroyed || !ttsReady || diagnosticOwner != null) return@post
             val resumeMode = desiredMode
             val resumeGeneration = generation
-            val acknowledgement = PendingSpeech(turnId, text) {
+            val acknowledgement = PendingSpeech(turnId, text, onComplete = {
                 // Completing an acknowledgement must not resume the microphone
                 // until the entire queued speech sequence has finished.
                 if (!destroyed && diagnosticOwner == null &&
                     desiredMode == resumeMode && generation == resumeGeneration &&
                     deferredSpeech.isEmpty()
                 ) resumeListening()
-            }
+            }, isTransient = true)
             if (speechActive || pendingSpeech != null) {
                 deferredSpeech.addLast(acknowledgement)
                 return@post
@@ -692,7 +692,9 @@ class AndroidSpeechPort(
         val pending = deferredSpeech.pollFirst() ?: return false
         val resumed = pending.copy(onComplete = {
             pending.onComplete()
-            if (deferredSpeech.isEmpty()) resumeListening()
+            // Transient speech already owns a generation-guarded resume callback.
+            // Invoking a second one starts wake/recognition twice.
+            if (deferredSpeech.isEmpty() && !pending.isTransient) resumeListening()
         })
         stopInput()
         if (ttsReady) speakNow(resumed) else pendingSpeech = resumed
@@ -721,7 +723,12 @@ class AndroidSpeechPort(
         }
     }
 
-    private data class PendingSpeech(val turnId: Long, val text: String, val onComplete: () -> Unit)
+    private data class PendingSpeech(
+        val turnId: Long,
+        val text: String,
+        val onComplete: () -> Unit,
+        val isTransient: Boolean = false
+    )
 
     override fun resetRecognizer(reason: String) {
         resetRecognizer(reason) {}
