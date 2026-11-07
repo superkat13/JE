@@ -479,6 +479,28 @@ class SageRuntime(
             }
         })
 
+        // A provider can return syntactically valid prose after exhausting its output budget.
+        // Its own explicit limitation means neither that prose nor a partial SAGE_TOOL block
+        // may be reported/executed as a verified completion. Preserve the original owner goal.
+        if (!response.provenance.limitation.isNullOrBlank()) {
+            checkpointTurn(
+                response.turnId,
+                TaskState.WAITING,
+                "Brain returned a limited or incomplete result; the owner goal is not verified.",
+                "Continue from the saved owner request; inspect prior side effects before repeating any.",
+                mapOf("phase" to "brain_output_limited", "verified" to "false")
+            )
+            clearGoalRuntimeState(response.turnId)
+            startupByTurn.remove(response.turnId)
+            submit(SageEvent.ResponseReady(
+                response.turnId,
+                "I couldn't finish this response reliably, so I didn't mark the request complete. " +
+                    "The request is saved for safe continuation.",
+                false
+            ))
+            return
+        }
+
         val directive = try {
             BrainToolDirectiveParser.parse(response.text)
         } catch (t: Throwable) {
