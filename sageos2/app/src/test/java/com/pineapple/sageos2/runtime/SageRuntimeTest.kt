@@ -704,8 +704,10 @@ class SageRuntimeTest {
             f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nVolume successfully lowered.")
             waitUntil { f.observer.textResponses.isNotEmpty() }
 
-            assertTrue("failed action requires an unverified/failed checkpoint, never verified completion",
-                store.recent(10).none { it.state == TaskState.COMPLETED && it.metadata["verified"] == "true" })
+            val checkpoint = store.recent(10).single()
+            assertTrue("failed action must remain recoverable or explicitly failed, not COMPLETED",
+                checkpoint.state == TaskState.WAITING || checkpoint.state == TaskState.FAILED)
+            assertEquals("false", checkpoint.metadata["verified"])
             assertFalse("owner must not receive an unqualified invented success",
                 f.observer.textResponses.last().second == "Volume successfully lowered.")
             assertEquals("verification must not silently replay the failed mutation", 1, calls.get())
@@ -743,11 +745,35 @@ class SageRuntimeTest {
             f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nI confirmed the volume changed.")
             waitUntil { f.observer.textResponses.isNotEmpty() }
 
-            assertTrue("accepted is not applied: require observed postcondition evidence",
-                store.recent(10).none { it.state == TaskState.COMPLETED && it.metadata["verified"] == "true" })
+            val checkpoint = store.recent(10).single()
+            assertTrue("accepted is not applied: task must not be silently COMPLETED",
+                checkpoint.state == TaskState.WAITING || checkpoint.state == TaskState.FAILED)
+            assertEquals("false", checkpoint.metadata["verified"])
             assertFalse("owner must not receive an unqualified fabricated confirmation",
                 f.observer.textResponses.last().second == "I confirmed the volume changed.")
             assertEquals(1, calls.get())
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    @Test fun incompleteBrainReplyWithLimitationMustRemainUnfinishedToOwnerAndTaskStore() {
+        val store = MemoryTaskStore()
+        val f = Fixture(taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("Explain the complete multi-step procedure"))
+            f.brain.respond(0,
+                "First, inspect the current state. Second, the next step is",
+                limitation = "TOKEN_LIMIT: unfinished output; no end-of-generation token")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+            assertTrue("incomplete generation must not be marked completed",
+                store.recent(10).single().state == TaskState.WAITING ||
+                    store.recent(10).single().state == TaskState.FAILED)
+            assertEquals("false", store.recent(10).single().metadata["verified"])
+            assertFalse("owner cannot receive the truncated text as an unqualified success",
+                f.observer.textResponses.last().second ==
+                    "First, inspect the current state. Second, the next step is")
         } finally {
             f.runtime.stop()
         }
@@ -1300,10 +1326,13 @@ class SageRuntimeTest {
             requests += request; callbacks += callback
             return object:BrainJob{override val turnId=request.turnId;override fun cancel()=Unit}
         }
-        fun respond(index:Int,text:String) {
+        fun respond(index:Int,text:String,limitation:String?=null) {
             val request=requests[index]
             successfulLatencyMs=1L
-            callbacks[index](Result.success(BrainResponse(request.turnId,text,name)))
+            callbacks[index](Result.success(BrainResponse(
+                request.turnId, text, name,
+                BrainProvenance(engine = name, limitation = limitation)
+            )))
         }
         fun progress(index:Int,stage:BrainProgressStage,generatedTokens:Int?=null) {
             val request=requests[index]
