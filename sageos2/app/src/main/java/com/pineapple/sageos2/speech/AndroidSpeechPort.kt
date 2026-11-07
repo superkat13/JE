@@ -127,15 +127,12 @@ class AndroidSpeechPort(
     override fun speakTransient(text: String) {
         main.post {
             if (destroyed || !ttsReady || diagnosticOwner != null) return@post
-            val resumeMode = desiredMode
-            val resumeGeneration = generation
             val acknowledgement = PendingSpeech(turnId, text, onComplete = {
-                // Completing an acknowledgement must not resume the microphone
-                // until the entire queued speech sequence has finished.
+                // Resume the *latest* desired generation exactly once after all
+                // speech finishes, even if the owner changed listening mode
+                // while this acknowledgement was queued or playing.
                 if (!destroyed && diagnosticOwner == null &&
-                    desiredMode == resumeMode && generation == resumeGeneration &&
-                    deferredSpeech.isEmpty()
-                ) resumeListening()
+                    deferredSpeech.isEmpty()) resumeListening()
             }, isTransient = true)
             if (speechActive || pendingSpeech != null) {
                 deferredSpeech.addLast(acknowledgement)
@@ -158,14 +155,23 @@ class AndroidSpeechPort(
                     if (diagnosticOwner == null) pendingSpeech?.also { pendingSpeech = null; speakNow(it) }
                 } else {
                     listener?.onSpeechDiagnostic("TTS initialization failed: $status")
-                    pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+                    completeUnplayableSpeech()
                 }
             }.onFailure { error ->
                 ttsReady = false
                 listener?.onSpeechDiagnostic("TTS init callback failed: ${error.message ?: error::class.simpleName}")
-                pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+                completeUnplayableSpeech()
             }
         }
+    }
+
+    private fun completeUnplayableSpeech() {
+        // Failed TTS initialization cannot leave queued turns pending forever.
+        // Transient speech is never admitted before readiness, so these are
+        // normal turn callbacks, which must all complete exactly once.
+        pendingSpeech?.also { pendingSpeech = null; it.onComplete() }
+        while (deferredSpeech.isNotEmpty()) deferredSpeech.removeFirst().onComplete()
+        resumeListening()
     }
 
     /** Preserve the owner-selected 1.33.3 Android voice/rate/pitch on an in-place upgrade. */
