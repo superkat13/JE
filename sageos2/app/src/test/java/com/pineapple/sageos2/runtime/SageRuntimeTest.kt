@@ -674,6 +674,85 @@ class SageRuntimeTest {
         f.runtime.stop()
     }
 
+    /**
+     * Failing-first safety regression: the native model's VERIFIED marker is not
+     * independent proof that a requested device mutation happened.
+     */
+    @Test fun failedToolExecutionCannotBePromotedToVerifiedByModelAssertion() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(
+                mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE)
+            )
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                return CapabilityResult(false, "permission denied; volume unchanged")
+            }
+        }
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("reduce the device volume and verify the result"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { calls.get() == 1 && f.brain.requests.size == 2 }
+            f.brain.respond(1, "I lowered the volume.")
+            waitUntil { f.brain.requests.size == 3 }
+            assertTrue(f.brain.requests[2].prompt.contains("success=false"))
+
+            // Simulate an unreliable model disregarding the failed tool evidence.
+            f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nVolume successfully lowered.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            assertTrue("failed action requires an unverified/failed checkpoint, never verified completion",
+                store.recent(10).none { it.state == TaskState.COMPLETED && it.metadata["verified"] == "true" })
+            assertFalse("owner must not receive an unqualified invented success",
+                f.observer.textResponses.last().second == "Volume successfully lowered.")
+            assertEquals("verification must not silently replay the failed mutation", 1, calls.get())
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
+    /**
+     * Tool-API acceptance of an asynchronous operation is not the observed
+     * postcondition. A self-reported VERIFIED string must not fill this gap.
+     */
+    @Test fun acknowledgedButUnobservedMutationCannotBePromotedToVerified() {
+        val calls = java.util.concurrent.atomic.AtomicInteger()
+        val capability = object : CapabilityBroker {
+            override fun snapshot() = CapabilitySnapshot(
+                mapOf(Capability.SAGEOS_ROOT_BROKER to CapabilityStatus.ACTIVE)
+            )
+            override fun execute(action: DeviceAction): CapabilityResult {
+                calls.incrementAndGet()
+                return CapabilityResult(true, "change request accepted; current value unknown")
+            }
+        }
+        val store = MemoryTaskStore()
+        val f = Fixture(capability = capability, taskContinuity = store)
+        try {
+            f.runtime.start()
+            f.runtime.submit(SageEvent.TextSubmitted("lower volume one step and confirm it actually changed"))
+            f.brain.respond(0, "<SAGE_TOOL>\nname=device.volume\ndirection=DOWN\n</SAGE_TOOL>")
+            waitUntil { calls.get() == 1 && f.brain.requests.size == 2 }
+            f.brain.respond(1, "Request accepted.")
+            waitUntil { f.brain.requests.size == 3 }
+            assertTrue(f.brain.requests[2].prompt.contains("current value unknown"))
+
+            f.brain.respond(2, "${GoalCompletionPolicy.VERIFIED_MARKER}\nI confirmed the volume changed.")
+            waitUntil { f.observer.textResponses.isNotEmpty() }
+
+            assertTrue("accepted is not applied: require observed postcondition evidence",
+                store.recent(10).none { it.state == TaskState.COMPLETED && it.metadata["verified"] == "true" })
+            assertFalse("owner must not receive an unqualified fabricated confirmation",
+                f.observer.textResponses.last().second == "I confirmed the volume changed.")
+            assertEquals(1, calls.get())
+        } finally {
+            f.runtime.stop()
+        }
+    }
+
     @Test fun unverifiedGoalDoesNotPretendSuccess() {
         val capability = FakeCapabilityBroker(rootActive = true)
         val f = Fixture(capability)
