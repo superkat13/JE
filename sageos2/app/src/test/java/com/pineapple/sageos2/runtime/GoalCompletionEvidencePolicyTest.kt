@@ -41,6 +41,14 @@ class GoalCompletionEvidencePolicyTest {
         assertFalse(result.independentlyVerified)
     }
 
+    @Test fun runningForgeJobIsNotCompletedJustBecauseStatusRequestSucceeded() {
+        val result = GoalCompletionPolicy.assessEvidence(
+            "check whether the forge job has completed",
+            listOf(evidence("forge.job", true, "status=RUNNING; result unavailable"))
+        )
+        assertFalse(result.independentlyVerified)
+    }
+
     @Test fun explicitGenerationLimitDiffersFromProviderUnavailability() {
         assertTrue(GoalCompletionPolicy.isIncompleteGeneration("TOKEN_LIMIT: no EOS"))
         assertTrue(GoalCompletionPolicy.isIncompleteGeneration("BYTE_LIMIT: exhausted"))
