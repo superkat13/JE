@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
     // A pending multibyte prefix also must not leak into the next owner request.
     g_pending_utf8_bytes = std::string("\xF0\x9F", 2);
     Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, id);
-    check(g_cancel_requested.load(), "cancellation was lost between segments");
+    check(g_cancel_request_id.load() == id, "cancellation was lost between segments");
     std::unique_ptr<std::string> cancelled_continuation(
         Java_com_pineapple_sage_SageBrainManager_nativeContinueGeneration(
             &env, nullptr, id, 4, JNI_TRUE
@@ -160,6 +160,20 @@ int main(int argc, char** argv) {
           "cancelled continuation retained reusable cache or UTF-8 state");
     check(generate(system, user) == cold && g_last_cached_prompt_tokens == 0,
           "post-handoff cancellation contaminated the next owner turn");
+    // Simulate the narrow activation handoff where active ID and continuation
+    // lease can both be unavailable to separate atomic readers. The matching
+    // logical ID must still retain the cancellation; a stale ID must not.
+    const long long handoff_id = id;
+    g_active_request_id.store(0);
+    g_continuation_available.store(false);
+    g_cancel_request_id.store(0);
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, handoff_id);
+    check(g_cancel_request_id.load() == handoff_id,
+          "cancellation lost when active and lease atomics were both unavailable");
+    g_cancel_request_id.store(0);
+    Java_com_pineapple_sage_SageBrainManager_nativeCancelGeneration(&env, nullptr, handoff_id - 1);
+    check(g_cancel_request_id.load() == 0,
+          "stale cancellation was accepted for another owner's request");
     Java_com_pineapple_sage_SageBrainManager_nativeUnloadModel(&env,nullptr);
     check(g_cached_prompt.empty(), "unload retained prompt cache");
     std::cout << "PASS: real native generation, 48-token budget, two KV continuations, UTF-8 carry, handoff cancellation, cache equivalence, context change, chunking, failure, unload\n";
