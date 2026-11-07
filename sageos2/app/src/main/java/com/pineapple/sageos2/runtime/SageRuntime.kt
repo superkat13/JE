@@ -482,7 +482,7 @@ class SageRuntime(
         // A provider can return syntactically valid prose after exhausting its output budget.
         // Its own explicit limitation means neither that prose nor a partial SAGE_TOOL block
         // may be reported/executed as a verified completion. Preserve the original owner goal.
-        if (!response.provenance.limitation.isNullOrBlank()) {
+        if (GoalCompletionPolicy.isIncompleteGeneration(response.provenance.limitation)) {
             checkpointTurn(
                 response.turnId,
                 TaskState.WAITING,
